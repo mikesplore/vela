@@ -1,6 +1,6 @@
 host: 0.0.0.0
 port: 8765
-secret_key: 3xpakjkCQh3yiPVEzac14jIM_Qvj1CtxA0hu9BdcStE
+secret_key: 49G_1IjsWxjmtJbFGYo1BKDiT33BCQEIorb1AlbxJxs
 token_expire_minutes: 1440
 allowed_origins: []
 allowed_ips: []
@@ -26,5 +26,5 @@ feature_flags:
   media: true
   clipboard: true
 username: mike
-password_hash: "$2b$12$yAVqW2LPOWcR0H/X66QGPuIl0elqAjekTTNisJ9dYVPmVApxyGhPW"
+password_hash: "$2b$12$kV5xWrki3qNLax.p13NqBe.Y9B5PKEnaTwzd0gMNTm59pRnekKPXK"
 log_level: INFO

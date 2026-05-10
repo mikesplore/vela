@@ -16,3 +16,6 @@ python-multipart>=0.0.6
 APScheduler>=3.11.0
 SQLAlchemy>=2.0.0
 slowapi>=0.1.9
+python-dotenv>=1.0.0
+websockets
+requests

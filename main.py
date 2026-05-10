@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from typing import List
@@ -10,18 +12,12 @@ from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
+from agent import start_agent_loop
 from auth import router as auth_router, config as auth_config
 from config import Config
 from dependencies import get_current_user
 from middleware import IPAllowlistMiddleware, RequestLoggerMiddleware
 from rate_limiter import limiter, limit_route
-from routers import all_routers
-from routers import scheduler as scheduler_module
-
-from auth import router as auth_router, config as auth_config
-from config import Config
-from dependencies import get_current_user
-from middleware import IPAllowlistMiddleware, RequestLoggerMiddleware
 from routers import all_routers
 from routers import scheduler as scheduler_module
 
@@ -40,11 +36,26 @@ async def lifespan(app: FastAPI):
         scheduler_module.scheduler.start()
     except Exception:
         logger.warning("Scheduler failed to start or was already running")
-    yield
+
+    app.state.agent_task = None
+    if os.getenv("START_AGENT", "true").lower() in ("1", "true", "yes"):
+        logger.info("Starting local tunnel agent in background")
+        app.state.agent_task = asyncio.create_task(start_agent_loop())
+
     try:
-        scheduler_module.scheduler.shutdown(wait=False)
-    except Exception:
-        logger.warning("Scheduler failed to shut down cleanly")
+        yield
+    finally:
+        try:
+            scheduler_module.scheduler.shutdown(wait=False)
+        except Exception:
+            logger.warning("Scheduler failed to shut down cleanly")
+
+        if getattr(app.state, "agent_task", None) is not None:
+            app.state.agent_task.cancel()
+            try:
+                await app.state.agent_task
+            except asyncio.CancelledError:
+                logger.info("Agent task cancelled")
 
 app = FastAPI(title=API_NAME, version=API_VERSION, lifespan=lifespan)
 app.add_middleware(RequestLoggerMiddleware, log_level=config.log_level)
