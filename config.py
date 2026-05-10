@@ -12,8 +12,11 @@ class Config(BaseSettings):
     token_expire_minutes: int = 1440
     allowed_origins: List[str] = []
     allowed_ips: List[str] = []
+    allowed_base_dirs: List[str] = []
     feature_flags: Dict[str, bool] = {}
     log_level: str = "INFO"
+    rate_limit_default: str = "100/minute"
+    route_rate_limits: Dict[str, str] = {}
     username: str = "admin"
     password_hash: str
 

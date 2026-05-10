@@ -3,12 +3,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import BaseModel
 
 from config import Config
+from rate_limiter import limit_route
 
 config = Config()
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -94,15 +95,16 @@ async def verify_websocket_token(websocket: WebSocket) -> TokenData:
 
 
 @router.post("/token", response_model=TokenResponse)
-async def token(request: LoginRequest):
-    if not authenticate_user(request.username, request.password):
+@limit_route("/auth/token")
+async def token(request: Request, body: LoginRequest):
+    if not authenticate_user(body.username, body.password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    access_token = create_access_token(data={"sub": request.username})
+    access_token = create_access_token(data={"sub": body.username})
     return TokenResponse(
         access_token=access_token,
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=config.token_expire_minutes),
