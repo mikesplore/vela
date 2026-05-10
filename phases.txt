@@ -1,0 +1,441 @@
+# Remote PC Agent — Coding Agent Master Prompt
+
+## Project Overview
+
+You are building **RemotePC Agent**: a secure, production-grade Python daemon that runs on a Linux PC and exposes a comprehensive REST API. A mobile app (or any HTTP client) can call this API to remotely monitor and control the PC over a local network or secure tunnel (e.g. Tailscale, Cloudflare, or ngrok).
+
+**Stack:**
+- Language: Python 3.11+
+- API Framework: FastAPI + Uvicorn
+- Auth: JWT (Bearer tokens) with a configurable secret
+- System integration: `subprocess`, `psutil`, `pydbus`, `pynput`, `Pillow`, `python-xlib`, `dbus-python`
+- Packaging: runs as a `systemd` user service
+- Config: single `config.yaml` file
+
+---
+
+## Ground Rules for Every Phase
+
+1. **Always write production-quality code** — no stubs, no placeholders, no `# TODO` unless explicitly told to defer something.
+2. **Every endpoint must have** proper HTTP status codes, typed request/response Pydantic models, and a docstring.
+3. **Error handling is mandatory** — every system call must be wrapped in try/except and return a structured `{"success": false, "error": "..."}` response on failure. Never let an uncaught exception crash the server.
+4. **Security is non-negotiable** — every endpoint (except `/health` and `/auth/token`) must require a valid JWT Bearer token. Validate on every request via a FastAPI dependency.
+5. **Cross-cutting concerns first** — do not implement features before the project skeleton, auth, and middleware are in place.
+6. **File structure must be modular** — one Python module per feature group (see structure below), all routers registered in `main.py`.
+7. **Each phase ends with** a `requirements.txt` update listing every new dependency introduced, and a short `CHANGELOG.md` entry.
+8. **Test file per module** — write a `tests/test_<module>.py` using `pytest` and `httpx` for every router. Mock all system calls so tests run without root or a real desktop.
+9. **No hardcoded values** — secrets, ports, allowed IPs, and paths come from `config.yaml` or environment variables.
+10. **All subprocess calls** must use `subprocess.run([...], capture_output=True, text=True, timeout=10)` — never `shell=True` unless absolutely unavoidable, and if so, sanitize all inputs.
+
+---
+
+## Project File Structure
+
+```
+remotepc-agent/
+├── main.py                   # FastAPI app, router registration, startup/shutdown
+├── config.yaml               # Port, secret, allowed origins, feature flags
+├── config.py                 # Pydantic Settings loader
+├── auth.py                   # JWT token creation, verification, /auth/token endpoint
+├── middleware.py             # Logging middleware, IP allowlist middleware
+├── dependencies.py           # Shared FastAPI dependencies (get_current_user, etc.)
+├── requirements.txt
+├── CHANGELOG.md
+├── remotepc.service          # systemd unit file
+├── routers/
+│   ├── __init__.py
+│   ├── display.py            # Screen, brightness, resolution, night light
+│   ├── audio.py              # Volume, mute, devices, mic
+│   ├── power.py              # Shutdown, restart, sleep, hibernate, schedule
+│   ├── notifications.py      # Send, clear, read notifications
+│   ├── network.py            # IP, WiFi, Bluetooth, hotspot, ping, speed
+│   ├── filesystem.py         # Browse, upload, download, delete, search, zip
+│   ├── input_control.py      # Mouse, keyboard, key combos
+│   ├── system_info.py        # CPU, RAM, GPU, disk, OS, uptime, USB, monitors
+│   ├── monitoring.py         # Live CPU%, RAM%, temps, fan, network throughput
+│   ├── processes.py          # List, kill, launch, active window
+│   ├── security.py           # Lock, logout, webcam, mic, SSH sessions
+│   ├── scheduler.py          # Schedule commands, list, cancel, recurring tasks
+│   ├── maintenance.py        # Clear cache, logs, updates, services, NTP
+│   ├── media.py              # Play/pause, next/prev, seek, now playing
+│   └── clipboard.py          # Read, write, clear clipboard
+└── tests/
+    ├── conftest.py
+    ├── test_auth.py
+    ├── test_display.py
+    ├── test_audio.py
+    ├── test_power.py
+    ├── test_notifications.py
+    ├── test_network.py
+    ├── test_filesystem.py
+    ├── test_input_control.py
+    ├── test_system_info.py
+    ├── test_monitoring.py
+    ├── test_processes.py
+    ├── test_security.py
+    ├── test_scheduler.py
+    ├── test_maintenance.py
+    ├── test_media.py
+    └── test_clipboard.py
+```
+
+---
+
+## Development Phases
+
+---
+
+### PHASE 1 — Project Skeleton, Config, Auth & Middleware
+
+**Goal:** A running FastAPI server with authentication, logging, and security middleware. No feature endpoints yet.
+
+**Deliverables:**
+
+1. **`config.yaml`** with fields:
+   - `host`: bind address (default `0.0.0.0`)
+   - `port`: default `8765`
+   - `secret_key`: JWT signing secret (warn if default is used)
+   - `token_expire_minutes`: default `1440` (24h)
+   - `allowed_origins`: list of allowed CORS origins
+   - `allowed_ips`: optional IP allowlist (empty = allow all)
+   - `feature_flags`: dict of `module_name: true/false` to enable/disable routers
+   - `log_level`: default `INFO`
+
+2. **`config.py`** — Pydantic `BaseSettings` class that loads `config.yaml` and allows env var overrides.
+
+3. **`auth.py`** — Implements:
+   - `POST /auth/token` — accepts `{ "username": ..., "password": ... }`, validates against a bcrypt-hashed password stored in `config.yaml`, returns a signed JWT access token
+   - `verify_token(token)` — dependency function that decodes and validates the JWT, raises HTTP 401 on failure
+   - Token payload includes: `sub` (username), `exp`, `iat`
+
+4. **`middleware.py`** — Implements:
+   - **Request logger**: logs method, path, status code, and response time for every request
+   - **IP allowlist**: if `allowed_ips` is configured, reject all requests not from those IPs with HTTP 403
+
+5. **`dependencies.py`** — Shared dependency `get_current_user` that extracts and verifies JWT from the `Authorization: Bearer <token>` header.
+
+6. **`main.py`** — FastAPI app that:
+   - Loads config
+   - Registers all middleware
+   - Mounts all routers (even if they have no routes yet)
+   - Has `GET /health` (no auth) returning `{ "status": "ok", "uptime_seconds": ... }`
+   - Has `GET /` (no auth) returning API name, version, and list of enabled modules
+   - Starts with Uvicorn via `if __name__ == "__main__"`
+
+7. **`remotepc.service`** — A systemd user-level unit file that:
+   - Runs the agent on login
+   - Restarts on failure
+   - Logs to journald
+
+8. **`tests/test_auth.py`** — Tests for token issuance, invalid credentials, expired tokens, and protected route rejection without token.
+
+---
+
+### PHASE 2 — System Info & Live Monitoring
+
+**Modules:** `routers/system_info.py`, `routers/monitoring.py`
+
+**`system_info.py` endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/system/info` | Full snapshot: CPU model, cores, freq, RAM total, GPU, disk partitions, OS, kernel, hostname, user |
+| GET | `/system/cpu` | CPU model, physical/logical cores, base freq, architecture |
+| GET | `/system/ram` | Total, available, used, swap |
+| GET | `/system/gpu` | GPU name, VRAM, driver (via `lspci` + optional `nvidia-smi` / `rocm-smi`) |
+| GET | `/system/disk` | All partitions: mountpoint, total, used, free, filesystem type |
+| GET | `/system/os` | OS name, version, kernel, hostname, logged-in user, uptime |
+| GET | `/system/usb` | List of connected USB devices (via `lsusb`) |
+| GET | `/system/monitors` | Connected monitors, resolutions, refresh rates (via `xrandr`) |
+| GET | `/system/bios` | Motherboard and BIOS info (via `dmidecode`, may need sudo) |
+
+**`monitoring.py` endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/monitor/snapshot` | Single snapshot of all live metrics |
+| GET | `/monitor/cpu` | Current CPU usage % per core + overall |
+| GET | `/monitor/ram` | Current RAM used/available in real time |
+| GET | `/monitor/gpu` | GPU usage % and VRAM used (nvidia-smi / radeontop) |
+| GET | `/monitor/disk-io` | Disk read/write bytes per second |
+| GET | `/monitor/network-io` | Network sent/received bytes per second per interface |
+| GET | `/monitor/temperatures` | All sensor temps (via `psutil.sensors_temperatures()`) |
+| GET | `/monitor/fans` | Fan RPMs (via `psutil.sensors_fans()`) |
+| GET | `/monitor/battery` | Charge %, plugged in status, estimated time remaining |
+| GET | `/monitor/processes` | Top 20 processes by CPU and RAM usage |
+| WS  | `/monitor/stream` | WebSocket that streams all metrics as JSON every N seconds (configurable) |
+
+---
+
+### PHASE 3 — Display, Audio & Power
+
+**Modules:** `routers/display.py`, `routers/audio.py`, `routers/power.py`
+
+**`display.py` endpoints:**
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| GET | `/display/screenshot` | — | Capture screen, return as base64 PNG |
+| POST | `/display/record` | `{ "duration_seconds": 10 }` | Record screen clip, return as base64 MP4 |
+| POST | `/display/monitor/off` | — | Turn off monitor (DPMS) |
+| POST | `/display/monitor/on` | — | Turn monitor back on |
+| GET | `/display/brightness` | — | Get current brightness (0–100) |
+| POST | `/display/brightness` | `{ "value": 70 }` | Set brightness |
+| GET | `/display/resolution` | — | Get current resolution and refresh rate |
+| POST | `/display/resolution` | `{ "width": 1920, "height": 1080, "refresh": 60 }` | Set resolution |
+| POST | `/display/rotate` | `{ "orientation": "normal\|left\|right\|inverted" }` | Rotate screen |
+| POST | `/display/lock` | — | Lock the screen |
+| POST | `/display/night-light` | `{ "enabled": true, "temperature": 4000 }` | Toggle/set night light |
+
+**`audio.py` endpoints:**
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| GET | `/audio/volume` | — | Get current master volume |
+| POST | `/audio/volume` | `{ "value": 60 }` | Set master volume (0–100) |
+| POST | `/audio/volume/up` | `{ "step": 5 }` | Increase volume by step |
+| POST | `/audio/volume/down` | `{ "step": 5 }` | Decrease volume by step |
+| POST | `/audio/mute` | `{ "muted": true }` | Mute or unmute |
+| GET | `/audio/devices` | — | List all output + input audio devices |
+| POST | `/audio/output-device` | `{ "device_id": "..." }` | Switch active output device |
+| POST | `/audio/input-device` | `{ "device_id": "..." }` | Switch active input device |
+| POST | `/audio/mic/mute` | `{ "muted": true }` | Mute/unmute microphone |
+| POST | `/audio/beep` | — | Play a test alert sound |
+
+**`power.py` endpoints:**
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| POST | `/power/shutdown` | `{ "delay_seconds": 0 }` | Shutdown the PC |
+| POST | `/power/restart` | `{ "delay_seconds": 0 }` | Restart the PC |
+| POST | `/power/sleep` | — | Suspend to RAM |
+| POST | `/power/hibernate` | — | Hibernate |
+| POST | `/power/cancel-shutdown` | — | Cancel a pending scheduled shutdown |
+| POST | `/power/schedule-shutdown` | `{ "at": "2025-12-01T23:00:00" }` | Schedule shutdown at datetime |
+| GET | `/power/profile` | — | Get current power profile |
+| POST | `/power/profile` | `{ "profile": "performance\|balanced\|power-saver" }` | Set power profile |
+
+---
+
+### PHASE 4 — Notifications, Clipboard & Media
+
+**Modules:** `routers/notifications.py`, `routers/clipboard.py`, `routers/media.py`
+
+**`notifications.py` endpoints:**
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| POST | `/notifications/send` | `{ "title": "...", "body": "...", "urgency": "low\|normal\|critical", "sound": true }` | Send desktop notification |
+| GET | `/notifications/list` | — | List active notifications (via D-Bus) |
+| DELETE | `/notifications/clear` | — | Dismiss all notifications |
+
+**`clipboard.py` endpoints:**
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| GET | `/clipboard` | — | Read current clipboard text |
+| POST | `/clipboard` | `{ "text": "..." }` | Set clipboard content |
+| DELETE | `/clipboard` | — | Clear clipboard |
+
+**`media.py` endpoints:**
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| GET | `/media/status` | — | Now playing: app, title, artist, status, position |
+| POST | `/media/play-pause` | — | Toggle play/pause |
+| POST | `/media/next` | — | Skip to next track |
+| POST | `/media/previous` | — | Previous track |
+| POST | `/media/seek` | `{ "position_seconds": 90 }` | Seek to position |
+| POST | `/media/stop` | — | Stop playback |
+
+---
+
+### PHASE 5 — Processes, Input Control & Security
+
+**Modules:** `routers/processes.py`, `routers/input_control.py`, `routers/security.py`
+
+**`processes.py` endpoints:**
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| GET | `/processes` | — | List all running processes (pid, name, cpu%, mem%) |
+| DELETE | `/processes/{pid}` | — | Kill process by PID |
+| DELETE | `/processes/name/{name}` | — | Kill all processes matching name |
+| POST | `/processes/launch` | `{ "command": "...", "args": [...] }` | Launch an application |
+| GET | `/processes/active-window` | — | Get currently focused window title |
+| POST | `/processes/window/minimize` | `{ "window_id": "..." }` | Minimize a window |
+| POST | `/processes/window/close` | `{ "window_id": "..." }` | Close a window |
+
+**`input_control.py` endpoints:**
+
+> ⚠️ **Security note:** These endpoints must require a second confirmation header `X-Confirm-Input: true` in addition to JWT, to prevent accidental triggering.
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| POST | `/input/mouse/move` | `{ "x": 500, "y": 300 }` | Move mouse to coordinates |
+| POST | `/input/mouse/click` | `{ "x": 500, "y": 300, "button": "left\|right\|middle" }` | Click at position |
+| POST | `/input/mouse/double-click` | `{ "x": 500, "y": 300 }` | Double-click at position |
+| POST | `/input/mouse/scroll` | `{ "direction": "up\|down", "amount": 3 }` | Scroll |
+| POST | `/input/keyboard/type` | `{ "text": "..." }` | Type a string |
+| POST | `/input/keyboard/key` | `{ "keys": ["ctrl", "c"] }` | Press a key combo |
+
+**`security.py` endpoints:**
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| POST | `/security/lock` | — | Lock the screen |
+| POST | `/security/logout` | — | Log out current user |
+| POST | `/security/webcam/disable` | — | Disable webcam (unload kernel module) |
+| POST | `/security/webcam/enable` | — | Re-enable webcam |
+| POST | `/security/webcam/snapshot` | — | Capture webcam image, return base64 |
+| POST | `/security/mic/disable` | — | Hardware-level mic mute |
+| POST | `/security/mic/enable` | — | Re-enable mic |
+| GET | `/security/login-history` | — | Last N login events from auth logs |
+| GET | `/security/ssh-sessions` | — | List active SSH sessions |
+
+---
+
+### PHASE 6 — Filesystem & Network
+
+**Modules:** `routers/filesystem.py`, `routers/network.py`
+
+**`filesystem.py` endpoints:**
+
+> ⚠️ **Security note:** All paths must be validated against a configurable `allowed_base_dirs` list in `config.yaml`. Reject any path traversal attempts with HTTP 403.
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| GET | `/fs/list` | `?path=/home/user` | List directory contents (name, type, size, modified) |
+| GET | `/fs/download` | `?path=/home/user/file.txt` | Download a file |
+| POST | `/fs/upload` | `multipart/form-data` | Upload a file to a given path |
+| DELETE | `/fs/delete` | `{ "path": "..." }` | Delete a file or folder |
+| POST | `/fs/mkdir` | `{ "path": "..." }` | Create a directory |
+| POST | `/fs/rename` | `{ "from": "...", "to": "..." }` | Rename/move a file |
+| GET | `/fs/search` | `?query=report&path=/home` | Search files by name |
+| GET | `/fs/disk-usage` | — | Disk usage per partition |
+| POST | `/fs/zip` | `{ "paths": [...], "output": "..." }` | Zip files |
+| POST | `/fs/unzip` | `{ "path": "...", "destination": "..." }` | Unzip archive |
+| POST | `/fs/open` | `{ "path": "..." }` | Open file with default app (`xdg-open`) |
+
+**`network.py` endpoints:**
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| GET | `/network/ip` | — | Local and public IP address |
+| GET | `/network/wifi/status` | — | SSID, signal strength, frequency |
+| GET | `/network/wifi/list` | — | Scan for available WiFi networks |
+| POST | `/network/wifi/connect` | `{ "ssid": "...", "password": "..." }` | Connect to WiFi |
+| POST | `/network/wifi/disconnect` | — | Disconnect from WiFi |
+| POST | `/network/wifi/toggle` | `{ "enabled": true }` | Enable/disable WiFi |
+| POST | `/network/bluetooth/toggle` | `{ "enabled": true }` | Enable/disable Bluetooth |
+| GET | `/network/bluetooth/devices` | — | List paired/connected BT devices |
+| POST | `/network/ping` | `{ "host": "8.8.8.8", "count": 4 }` | Ping a host, return RTT stats |
+| GET | `/network/speed-test` | — | Run a speed test, return up/down Mbps |
+
+---
+
+### PHASE 7 — Scheduler & Maintenance
+
+**Modules:** `routers/scheduler.py`, `routers/maintenance.py`
+
+**`scheduler.py` endpoints:**
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| POST | `/scheduler/create` | `{ "command": "...", "run_at": "ISO datetime", "recurring": "cron expression or null" }` | Schedule a task |
+| GET | `/scheduler/list` | — | List all scheduled tasks |
+| DELETE | `/scheduler/cancel/{task_id}` | — | Cancel a task |
+| POST | `/scheduler/run-now/{task_id}` | — | Trigger a task immediately |
+
+> Use APScheduler with a SQLite job store for persistence across restarts.
+
+**`maintenance.py` endpoints:**
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| POST | `/maintenance/clear-cache` | — | Clear `/tmp` and user cache dirs |
+| GET | `/maintenance/logs` | `?service=nginx&lines=100` | Get last N lines of a systemd service log |
+| GET | `/maintenance/updates` | — | Check for available system updates (apt/dnf/pacman) |
+| POST | `/maintenance/update` | — | Run system update (with confirmation flag) |
+| POST | `/maintenance/sync-time` | — | Sync system clock via NTP |
+| GET | `/maintenance/services` | — | List all systemd services and their status |
+| POST | `/maintenance/service/restart` | `{ "name": "..." }` | Restart a systemd service |
+| POST | `/maintenance/service/stop` | `{ "name": "..." }` | Stop a systemd service |
+| POST | `/maintenance/service/start` | `{ "name": "..." }` | Start a systemd service |
+
+---
+
+### PHASE 8 — Polish, Hardening & Documentation
+
+**Goal:** Make it production-deployable and usable by a mobile client.
+
+**Deliverables:**
+
+1. **Rate limiting** — integrate `slowapi` to rate-limit endpoints. Configurable per-route limits in `config.yaml`.
+
+2. **HTTPS support** — document how to run behind an Nginx reverse proxy with a self-signed cert, OR use `uvicorn` with `--ssl-certfile` / `--ssl-keyfile`.
+
+3. **Auto-generated API docs** — ensure all endpoints have complete OpenAPI descriptions, examples, and response schemas. Accessible at `/docs` (disable in production config if desired).
+
+4. **CLI setup script** (`setup.sh`) that:
+   - Installs all `requirements.txt` dependencies
+   - Prompts for username and password, hashes it, writes to `config.yaml`
+   - Generates a random `secret_key`
+   - Installs and enables the `systemd` user service
+   - Prints the local IP and access URL
+
+5. **Connection test endpoint** `GET /ping` (no auth) — returns `{ "pong": true }` for quick reachability checks.
+
+6. **`README.md`** covering:
+   - Prerequisites (Python version, Linux distro targets, required system packages)
+   - Installation via `setup.sh`
+   - Manual configuration reference for `config.yaml`
+   - How to connect your phone (local network vs Tailscale)
+   - Security recommendations
+   - How to add a new feature module
+
+7. **Full test run** — all tests must pass with `pytest --tb=short -q`. Aim for >80% coverage.
+
+8. **Final review** — check every endpoint against the security checklist:
+   - JWT verified ✓
+   - Input sanitized ✓
+   - Path traversal prevented ✓
+   - Subprocess inputs never interpolated unsanitized ✓
+   - Sensitive data never logged ✓
+
+---
+
+## How to Prompt Per Phase
+
+When starting each phase, use this format:
+
+```
+Implement Phase N of the RemotePC Agent as defined in the master prompt.
+Follow all ground rules. The current project state is: [paste any relevant
+existing files or describe what's already done]. Begin with [specific
+module or file if needed].
+```
+
+---
+
+## Dependency Reference
+
+```
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-jose[cryptography]
+passlib[bcrypt]
+psutil
+pillow
+pydbus
+pynput
+python-xlib
+apscheduler
+slowapi
+httpx
+pytest
+pytest-asyncio
+pyyaml
+```

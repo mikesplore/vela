@@ -1,0 +1,25 @@
+host: 0.0.0.0
+port: 8765
+secret_key: change-me
+token_expire_minutes: 1440
+allowed_origins: []
+allowed_ips: []
+feature_flags:
+  display: false
+  audio: false
+  power: false
+  notifications: false
+  network: false
+  filesystem: false
+  input_control: false
+  system_info: false
+  monitoring: false
+  processes: false
+  security: false
+  scheduler: false
+  maintenance: false
+  media: false
+  clipboard: false
+log_level: INFO
+username: admin
+password_hash: "$2b$12$h7I8hRebVWI6clsYfpTyHuCWjAfFdrRFBCie9jSQff353RQvpUfFO"
