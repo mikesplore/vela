@@ -12,8 +12,8 @@ feature_flags:
   network: false
   filesystem: false
   input_control: false
-  system_info: false
-  monitoring: false
+  system_info: true
+  monitoring: true
   processes: false
   security: false
   scheduler: false

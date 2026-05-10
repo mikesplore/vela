@@ -21,7 +21,7 @@ logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INF
 logger = logging.getLogger("vela.main")
 
 @asynccontextmanager
-def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI):
     app.state.start_time = time.time()
     logger.info("Vela starting on %s:%s", config.host, config.port)
     yield

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import BaseModel
@@ -58,7 +58,7 @@ def authenticate_user(username: str, password: str) -> bool:
         return False
 
 
-def verify_token(token: str = Depends(oauth2_scheme)) -> TokenData:
+def verify_token_string(token: str) -> TokenData:
     try:
         payload = jwt.decode(token, config.secret_key, algorithms=[ALGORITHM])
         subject = payload.get("sub")
@@ -75,6 +75,22 @@ def verify_token(token: str = Depends(oauth2_scheme)) -> TokenData:
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+def verify_token(token: str = Depends(oauth2_scheme)) -> TokenData:
+    return verify_token_string(token)
+
+
+async def verify_websocket_token(websocket: WebSocket) -> TokenData:
+    auth_header = websocket.headers.get("authorization")
+    if not auth_header or not auth_header.lower().startswith("bearer "):
+        raise WebSocketException(code=1008, reason="Could not validate credentials")
+
+    token = auth_header.split(" ", 1)[1]
+    try:
+        return verify_token_string(token)
+    except HTTPException:
+        raise WebSocketException(code=1008, reason="Could not validate credentials")
 
 
 @router.post("/token", response_model=TokenResponse)
