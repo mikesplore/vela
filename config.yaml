@@ -5,9 +5,9 @@ token_expire_minutes: 1440
 allowed_origins: []
 allowed_ips: []
 feature_flags:
-  display: false
-  audio: false
-  power: false
+  display: true
+  audio: true
+  power: true
   notifications: false
   network: false
   filesystem: false
