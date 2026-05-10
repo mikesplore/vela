@@ -53,12 +53,11 @@ def get_local_auth_token() -> str:
             timeout=10,
         )
         print(f"Local auth response status: {resp.status_code}")
-        print(f"Local auth response body: {resp.text}")
         resp.raise_for_status()
     except Exception as exc:
         print(f"Local auth token request failed: {exc}")
         if resp is not None:
-            print(f"Local auth failure response: status={resp.status_code} body={resp.text}")
+            print(f"Local auth failure response: status={resp.status_code}")
         raise
 
     data = resp.json()
@@ -77,13 +76,9 @@ def register():
         f"{VPS_URL}/register",
         json={"agent_id": AGENT_ID, "secret": SECRET},
     )
-    print(f"Status Code: {resp.status_code}")
-    print(f"Response Body: {resp.text}") # Add this line
-    
+    print(f"VPS register status: {resp.status_code}")
     if resp.status_code == 200:
-        data = resp.json()
-        print(f"Parsed JSON: {data}") # Add this line
-        return data.get("ws_token")
+        return resp.json().get("ws_token")
     raise Exception(f"Registration failed: {resp.text}")
 
 async def tunnel(token):
@@ -94,7 +89,6 @@ async def tunnel(token):
         async for message in websocket:
             try:
                 req_data = json.loads(message)
-                print(f"Received tunnel request: {json.dumps(req_data, indent=2)}")
                 request_id = req_data.get("request_id") or req_data.get("id")
                 method = req_data.get("method", "GET")
                 path = req_data.get("path", "/")
@@ -107,14 +101,15 @@ async def tunnel(token):
                     except Exception as auth_exc:
                         print(f"Local auth failed while processing request: {auth_exc}")
                         await websocket.send(json.dumps({
-                            "status": 500,
+                            "type": "forward_response",
+                            "status_code": 500,
                             "body": f"Local auth failed: {auth_exc}",
                             "request_id": request_id,
                         }))
                         continue
 
                 local_url = f"{LOCAL_SERVICE_URL}{path}"
-                print(f"Forwarding local request: {method} {local_url} headers={headers} body={body}")
+                print(f"Forwarding local request: {method} {local_url}")
                 resp = await asyncio.to_thread(
                     requests.request,
                     method,
@@ -144,13 +139,16 @@ async def tunnel(token):
                     "headers": dict(resp.headers),
                     "body": resp.text,
                 }
-                print(f"Sending response payload: {json.dumps(response_payload, indent=2)}")
+                print(f"Sending response payload for request_id={request_id}, status_code={resp.status_code}")
                 await websocket.send(json.dumps(response_payload))
             except Exception as e:
                 print(f"Error processing request: {e}")
-                if 'message' in locals():
-                    print(f"Request data causing error: {message}")
-                await websocket.send(json.dumps({"status": 500, "body": str(e), "request_id": request_id if 'request_id' in locals() else None}))
+                await websocket.send(json.dumps({
+                    "type": "forward_response",
+                    "status_code": 500,
+                    "body": str(e),
+                    "request_id": request_id if 'request_id' in locals() else None,
+                }))
 
 
 async def start_agent_loop() -> None:
