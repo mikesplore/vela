@@ -35,7 +35,7 @@ It's powered by an LLM (DashScope's Qwen) that uses **tool-calling** to map natu
 
 **Key differentiators:**
 - **Conversational, not imperative** — ask, don't command
-- **Mobile-friendly** — control from your phone on the same LAN
+- **Mobile-friendly** — control from your phone on the same or different network
 - **Designed for voice** — currently chat-based, but built to support voice commands soon
 - **Lightweight** — no remote desktop overhead, pure intent execution
 - **Intelligent** — understands context and delegates to the right system layer

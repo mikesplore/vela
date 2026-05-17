@@ -184,11 +184,15 @@ async def seek_media(request: SeekRequest) -> Any:
 async def now_playing() -> Any:
     """Return current media metadata and playback position."""
     player = _choose_player()
+    art_url = _query_metadata("mpris:artUrl", player=player)
+    # Filter out local file URLs; only return remote HTTP(S) URLs
+    if art_url and art_url.startswith("file://"):
+        art_url = None
     return NowPlayingInfo(
         title=_query_metadata("xesam:title", player=player),
         artist=_query_metadata("xesam:artist", player=player),
         album=_query_metadata("xesam:album", player=player),
-        art_url=_query_metadata("mpris:artUrl", player=player),
+        art_url=art_url,
         status=_query_status(player=player),
         position_seconds=_query_position(player=player),
         length_seconds=_query_length(player=player),

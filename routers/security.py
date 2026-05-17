@@ -47,9 +47,24 @@ def _lock_session(session_id: str) -> tuple[bool, str]:
 
 
 def _lock_screen_with_fallback() -> tuple[bool, str]:
-    _, stderr, returncode = _run_command(["loginctl", "lock-sessions"])
+    # Try screensaver commands first (no permission dialog)
+    screensaver_commands = [
+        ["gnome-screensaver-command", "-l"],
+        ["xdg-screensaver", "lock"],
+        ["dm-tool", "lock"],
+    ]
+    stderr = ""
+    for cmd in screensaver_commands:
+        _, stderr2, rc = _run_command(cmd)
+        if rc == 0:
+            return True, " ".join(cmd)
+        stderr = stderr or stderr2
+
+    # Fallback to loginctl (may show permission dialog after system updates)
+    _, stderr2, returncode = _run_command(["loginctl", "lock-sessions"])
     if returncode == 0:
         return True, "loginctl lock-sessions"
+    stderr = stderr or stderr2
 
     username = getpass.getuser()
     for session_id in _get_user_session_ids(username):
@@ -64,17 +79,6 @@ def _lock_screen_with_fallback() -> tuple[bool, str]:
         if success:
             return True, f"loginctl lock-session {session_id}"
         stderr = stderr or session_err
-
-    fallback_commands = [
-        ["xdg-screensaver", "lock"],
-        ["gnome-screensaver-command", "-l"],
-        ["dm-tool", "lock"],
-    ]
-    for cmd in fallback_commands:
-        _, stderr2, rc2 = _run_command(cmd)
-        if rc2 == 0:
-            return True, " ".join(cmd)
-        stderr = stderr or stderr2
 
     return False, stderr or "Could not lock screen"
 
