@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import logging
@@ -26,11 +27,6 @@ MAX_HISTORY_CHARS = 4000  # Token-budget-aware trimming instead of message count
 
 # ---------------------------------------------------------------------------
 # Tool definitions — single source of truth.
-# Duplicates removed: get_network_ip, toggle_bluetooth, list_bluetooth_devices,
-# get_snapshot/monitor_snapshot, get_battery/monitor_battery,
-# toggle_play_pause/play_pause, next_track, previous_track.
-# GET-variant aliases removed: volume_up_get, volume_down_get, mute_audio_get,
-# rotate_display_get, set_output_device_get.
 # "response" key kept here for internal docs but NOT sent to the model.
 # ---------------------------------------------------------------------------
 TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
@@ -652,39 +648,32 @@ INPUT_CONFIRM_TOOLS = {
 }
 
 # ---------------------------------------------------------------------------
-# Prompts — built once at module load, not on every request.
-# Response shapes are intentionally excluded from the tool list to save tokens.
+# Prompts — built once at module load.
+# Response shapes intentionally excluded from the tool list to save tokens.
 # ---------------------------------------------------------------------------
 _TOOL_LIST = "\n".join(
     "- " + name + ": " + t["description"] + (f" | input: {t['input']}" if "input" in t else "")
     for name, t in TOOL_DEFINITIONS.items()
 )
 
-SYSTEM_TOOL_PROMPT = f"""You are Vela, a friendly Linux PC assistant focused on PC control and system management. Always reply with valid JSON only — no extra text. Use emoji where appropriate to keep the tone light and engaging. Be concise in your responses.
+# The model ALWAYS returns a JSON array — even for a single tool or a
+# conversational reply. This is what enables multi-tool parallel execution.
+SYSTEM_TOOL_PROMPT = f"""You are Vela, a friendly Linux PC assistant focused on PC control and system management. Always reply with valid JSON only — no extra text. Use emoji where appropriate. Be concise.
 
-For a system action or query (files, network, audio, display, processes, power, security, etc.), return:
-{{"tool":"<tool_name>","tool_input":{{...}}}}
+Always return a JSON ARRAY of tool calls, even for a single action:
+[{{"tool":"<tool_name>","tool_input":{{...}}}}, ...]
 
-For casual conversation (greetings, questions about your capabilities, small talk), return:
-{{"tool":"none","tool_input":{{}},"conversational_reply":"<your friendly reply>"}}
+For multiple simultaneous actions, include all of them in the array:
+[{{"tool":"set_volume","tool_input":{{"value":40}}}},{{"tool":"lock_session","tool_input":{{}}}}]
 
-IMPORTANT — DO NOT answer general knowledge questions (history, people, current events, facts unrelated to PC control).
-Examples of out-of-scope questions:
-  - "Who is Uhuru Kenyatta?" → Politely decline and redirect
-  - "What is the capital of France?" → Politely decline and redirect
+For casual conversation or out-of-scope questions, return a single-item array:
+[{{"tool":"none","tool_input":{{}},"conversational_reply":"<your reply>"}}]
 
-For out-of-scope questions, return:
-{{"tool":"none","tool_input":{{}},"conversational_reply":"I only manage your Linux PC! Let's stick to files, volume, processes, or system stats. What's next? 🐧"}}
+IMPORTANT — DO NOT answer general knowledge questions unrelated to PC control. For those, return:
+[{{"tool":"none","tool_input":{{}},"conversational_reply":"I only manage your Linux PC! Ask me about files, volume, processes, or system stats 🐧"}}]
 
 Available tools:
 {_TOOL_LIST}"""
-
-CONVERSATIONAL_RESPONSE_PROMPT = (
-    "You are Vela, a friendly Linux PC assistant. The user sent a conversational message — no tool is needed. "
-    "Reply warmly and concisely. If asked what you can do, mention: system monitoring, display control, "
-    "audio/volume, power management, notifications, media playback, clipboard, filesystem, network, "
-    "process management, input control, security, scheduling, and maintenance."
-)
 
 
 # ---------------------------------------------------------------------------
@@ -771,21 +760,42 @@ def _set_dashscope_base_url() -> None:
 _set_dashscope_base_url()
 
 
-def _extract_json_object(text: str) -> dict[str, Any] | None:
+def _extract_json_array(text: str) -> list[dict[str, Any]] | None:
+    """
+    Extract a JSON array from the model's response.
+    Falls back to wrapping a single object in a list for robustness.
+    """
     cleaned = _clean_text(text)
-    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
-    if not match:
-        return None
-    candidate = match.group(0)
-    try:
-        return json.loads(candidate)
-    except json.JSONDecodeError:
+
+    # Primary: look for an array
+    match = re.search(r"\[.*\]", cleaned, flags=re.DOTALL)
+    if match:
+        candidate = match.group(0)
         try:
-            candidate = re.sub(r",\s*}\s*$", "}", candidate)
-            candidate = re.sub(r",\s*\]\s*$", "]", candidate)
-            return json.loads(candidate)
+            result = json.loads(candidate)
+            if isinstance(result, list):
+                return result
         except json.JSONDecodeError:
-            return None
+            try:
+                candidate = re.sub(r",\s*\]\s*$", "]", candidate)
+                candidate = re.sub(r",\s*}\s*]", "}]", candidate)
+                result = json.loads(candidate)
+                if isinstance(result, list):
+                    return result
+            except json.JSONDecodeError:
+                pass
+
+    # Fallback: single object → wrap in list
+    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+    if match:
+        try:
+            obj = json.loads(match.group(0))
+            if isinstance(obj, dict) and "tool" in obj:
+                return [obj]
+        except json.JSONDecodeError:
+            pass
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -812,12 +822,11 @@ def _trim_history(history: list[dict[str, str]], max_chars: int = MAX_HISTORY_CH
 # ---------------------------------------------------------------------------
 # LLM calls
 # ---------------------------------------------------------------------------
-def _plan_tool_call(user_message: str, history: list[dict[str, str]] | None = None) -> dict[str, Any]:
+def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
     """
-    Single LLM call that:
-      - selects the right tool (or returns "none" for conversational replies), AND
-      - for "none" responses, includes the conversational reply inline.
-    This avoids a separate _generate_conversational_reply call in most cases.
+    Single LLM call → list of tool calls to execute in parallel.
+    For conversational replies returns a single-item list with tool="none".
+    Token cost is the same whether the user asks for 1 or 5 simultaneous actions.
     """
     messages = [{"role": "system", "content": SYSTEM_TOOL_PROMPT}]
     if history:
@@ -835,30 +844,33 @@ def _plan_tool_call(user_message: str, history: list[dict[str, str]] | None = No
         max_tokens=512,
     )
     text = _get_response_text(response)
-    parsed = _extract_json_object(text)
-    if not parsed or "tool" not in parsed or "tool_input" not in parsed:
+    parsed = _extract_json_array(text)
+    if not parsed:
         raise ValueError(f"Could not parse tool selection from model output: {text}")
     return parsed
 
 
-def _compose_final_reply(user_message: str, tool_name: str, tool_response: dict[str, Any]) -> str:
-    """Second LLM call — only made when a tool was actually executed."""
+def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> str:
+    """
+    Second LLM call — summarises ALL tool results into one clean Markdown reply.
+    Called only when at least one real tool was executed.
+    """
     system = (
-        "You are Vela. Use the tool response data to answer the user's request "
-        "in concise Markdown. Do not return raw JSON."
+        "You are Vela. The user asked for one or more actions. "
+        "Use the tool results below to write a single concise Markdown reply. "
+        "Do not return raw JSON. If any action failed, say so clearly."
     )
-    content = (
-        f"User request: {user_message}\n\n"
-        f"Tool: {tool_name}\n"
-        f"Tool response: {json.dumps(tool_response, separators=(',', ':'))}\n"
-        "Answer in clean Markdown."
+    results_text = "\n".join(
+        f"Tool: {r['tool']}\nResult: {json.dumps(r['result'], separators=(',', ':'))}"
+        + (f"\nError: {r['error']}" if r.get("error") else "")
+        for r in results
     )
     response = Generation.call(
         api_key=_get_api_key(),
         model=config.dashscope_model,
         messages=[
             {"role": "system", "content": system},
-            {"role": "user", "content": content},
+            {"role": "user", "content": f"User request: {user_message}\n\n{results_text}\n\nAnswer in clean Markdown."},
         ],
         result_format="message",
         stream=False,
@@ -942,6 +954,21 @@ async def _execute_tool(
     return data
 
 
+async def _execute_tool_safe(
+    app: FastAPI,
+    tool_name: str,
+    tool_input: dict[str, Any],
+    auth_header: str | None,
+) -> dict[str, Any]:
+    """Wrapper that catches errors so one failing tool doesn't abort the others."""
+    try:
+        result = await _execute_tool(app, tool_name, tool_input, auth_header)
+        return {"tool": tool_name, "result": result, "error": None}
+    except Exception as exc:
+        logger.error("Tool %s failed: %s", tool_name, exc, exc_info=True)
+        return {"tool": tool_name, "result": {}, "error": str(exc)}
+
+
 # ---------------------------------------------------------------------------
 # Route
 # ---------------------------------------------------------------------------
@@ -954,38 +981,41 @@ async def chat(
     auth_header = request.headers.get("authorization")
     history = _get_or_init_session(current_user)
 
-    # Append user message and trim before the LLM call.
     history.append({"role": "user", "content": body.message})
     history = _trim_history(history)
 
-    # --- Step 1: tool planning (also handles conversational replies inline) ---
+    # --- Step 1: one LLM call → list of tool calls (1 or many) --------------
     try:
-        tool_call = _plan_tool_call(body.message, history[:-1])
+        tool_calls = _plan_tool_calls(body.message, history[:-1])
     except Exception as exc:
         logger.error("Tool planning failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=str(exc))
 
-    tool_name: str = tool_call.get("tool", "none")
-    tool_input: dict[str, Any] = tool_call.get("tool_input") or {}
-
-    # --- Step 2: execute tool + compose reply, OR use inline conversational reply ---
-    if tool_name == "none":
-        # The planning call already produced the reply — no extra LLM call needed.
-        reply_text: str = tool_call.get("conversational_reply") or "Hello! How can I help you today?"
+    # --- Step 2: dispatch ----------------------------------------------------
+    if len(tool_calls) == 1 and tool_calls[0].get("tool") == "none":
+        # Conversational reply — already inline, zero extra LLM calls.
+        reply_text: str = tool_calls[0].get("conversational_reply") or "Hello! How can I help you today?"
     else:
-        try:
-            tool_response = await _execute_tool(request.app, tool_name, tool_input, auth_header)
-        except Exception as exc:
-            logger.error("Tool execution failed: %s", exc, exc_info=True)
-            raise HTTPException(status_code=502, detail=str(exc))
+        # Execute all real tools concurrently — one asyncio round-trip,
+        # regardless of how many tools were requested.
+        tasks = [
+            _execute_tool_safe(request.app, tc["tool"], tc.get("tool_input") or {}, auth_header)
+            for tc in tool_calls
+            if tc.get("tool") and tc["tool"] != "none"
+        ]
+        tool_results = list(await asyncio.gather(*tasks))
 
         try:
-            reply_text = _compose_final_reply(body.message, tool_name, tool_response)
+            reply_text = _compose_final_reply(body.message, tool_results)
         except Exception as exc:
             logger.error("Final response composition failed: %s", exc, exc_info=True)
-            reply_text = json.dumps(tool_response, separators=(",", ":"))
+            # Graceful fallback: plain bullet list of raw results
+            reply_text = "\n".join(
+                f"- **{r['tool']}**: {r['error'] or json.dumps(r['result'], separators=(',', ':'))}"
+                for r in tool_results
+            )
 
-    # --- Persist updated history ---
+    # --- Persist updated history ---------------------------------------------
     reply_text = reply_text.strip()
     history.append({"role": "assistant", "content": reply_text})
     SESSION_STORE[current_user] = _trim_history(history)
