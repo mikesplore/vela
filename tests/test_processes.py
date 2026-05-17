@@ -123,6 +123,44 @@ async def test_launch_process(monkeypatch, async_client):
 
 
 @pytest.mark.anyio
+async def test_open_application(monkeypatch, async_client):
+    token = create_access_token({"sub": "admin"})
+    monkeypatch.setattr(subprocess, "Popen", lambda args: FakePopen(pid=555))
+
+    response = await async_client.post(
+        "/processes/app/open",
+        json={"name": "spotify", "args": ["--no-zygote"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["pid"] == 555
+
+
+@pytest.mark.anyio
+async def test_close_application(monkeypatch, async_client):
+    token = create_access_token({"sub": "admin"})
+
+    class FakeProc(FakeProcess):
+        def __init__(self, pid, name):
+            super().__init__(pid, name)
+
+    def fake_iter(attrs):
+        return [FakeProc(20, "spotify"), FakeProc(21, "Spotify"), FakeProc(22, "chrome")]
+
+    monkeypatch.setattr(processes_module.psutil, "process_iter", fake_iter)
+
+    response = await async_client.post(
+        "/processes/app/close",
+        json={"name": "spotify"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["killed_count"] == 2
+
+
+@pytest.mark.anyio
 async def test_window_actions_use_xdotool(monkeypatch, async_client):
     token = create_access_token({"sub": "admin"})
 

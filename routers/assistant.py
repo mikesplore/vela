@@ -455,6 +455,18 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": "Launch a new process with optional arguments.",
         "input": {"command": "string", "args": "array of strings"},
     },
+    "open_application": {
+        "method": "POST",
+        "path": "/processes/app/open",
+        "description": "Open an application by name with optional arguments.",
+        "input": {"name": "string", "args": "array of strings"},
+    },
+    "close_application": {
+        "method": "POST",
+        "path": "/processes/app/close",
+        "description": "Close an application by name.",
+        "input": {"name": "string"},
+    },
     "active_window": {
         "method": "GET",
         "path": "/processes/active-window",

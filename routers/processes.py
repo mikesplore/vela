@@ -37,6 +37,28 @@ class LaunchRequest(BaseModel):
     args: List[str] = Field(default_factory=list)
 
 
+class ApplicationRequest(BaseModel):
+    name: str
+    args: List[str] = Field(default_factory=list)
+
+
+class ApplicationCloseRequest(BaseModel):
+    name: str
+
+
+def _kill_processes_by_name(name: str) -> int:
+    killed_count = 0
+    for proc in psutil.process_iter(["name"]):
+        try:
+            if proc.info.get("name") and proc.info["name"].lower() == name.lower():
+                proc.terminate()
+                proc.wait(timeout=3)
+                killed_count += 1
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+            continue
+    return killed_count
+
+
 class ActionResponse(BaseModel):
     success: bool
     message: Optional[str] = None
@@ -87,15 +109,7 @@ async def kill_process(pid: int) -> Any:
 @router.delete("/name/{name}", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
 async def kill_processes_by_name(name: str) -> Any:
     """Terminate all processes matching a name."""
-    killed_count = 0
-    for proc in psutil.process_iter(["name"]):
-        try:
-            if proc.info.get("name") and proc.info["name"].lower() == name.lower():
-                proc.terminate()
-                proc.wait(timeout=3)
-                killed_count += 1
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
-            continue
+    killed_count = _kill_processes_by_name(name)
     if killed_count == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No matching processes found")
     return ActionResponse(success=True, message=f"Killed {killed_count} process(es).", killed_count=killed_count)
@@ -111,6 +125,27 @@ async def launch_process(request: LaunchRequest) -> Any:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Command not found")
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+
+
+@router.post("/app/open", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
+async def open_application(request: ApplicationRequest) -> Any:
+    """Open an application by name with optional arguments."""
+    try:
+        proc = subprocess.Popen([request.name, *request.args])
+        return ActionResponse(success=True, message="Application launched.", pid=proc.pid)
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+
+
+@router.post("/app/close", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
+async def close_application(request: ApplicationCloseRequest) -> Any:
+    """Close an application by process name."""
+    killed_count = _kill_processes_by_name(request.name)
+    if killed_count == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No matching application processes found")
+    return ActionResponse(success=True, message=f"Closed {killed_count} process(es).", killed_count=killed_count)
 
 
 class WindowActionRequest(BaseModel):
