@@ -1,8 +1,8 @@
 # Vela RemotePC Agent
 
-Vela is a secure remote-control agent for Linux PCs that exposes system-level operations over a JWT-protected FastAPI server. It lets you manage files, processes, media playback, clipboard, display settings, network, and maintenance tasks from a remote client.
+Vela is a secure remote-control agent for Linux desktops that turns a Linux PC into a controllable, API-driven companion. It exposes system-level operations over a JWT-protected FastAPI server so remote clients can manage files, processes, media playback, clipboard contents, display settings, network state, and maintenance tasks.
 
-The app supports launching and closing applications, inspecting running processes, and controlling media players like Spotify through standardized API endpoints. A DashScope-powered assistant endpoint can translate natural language instructions into these actions when configured.
+Instead of a full remote-desktop stream, Vela focuses on command-level access and automation for everyday tasks like launching Spotify, closing applications, or checking system health. When configured with DashScope, it also supports natural language instructions so voice or chat prompts can be routed into concrete system actions.
 
 ## Prerequisites
 
