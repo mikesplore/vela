@@ -18,7 +18,8 @@ router = APIRouter(prefix="/fs", tags=["filesystem"])
 
 
 def _resolve_path(path_str: str) -> Path:
-    path = Path(path_str)
+    # Expand user (~) first, then treat relative paths as relative to cwd
+    path = Path(path_str).expanduser()
     if not path.is_absolute():
         path = Path.cwd() / path
     return path.resolve()
