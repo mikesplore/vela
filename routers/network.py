@@ -1,8 +1,9 @@
+import json
 import re
 import socket
 import subprocess
 import urllib.request
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -47,6 +48,59 @@ def _public_ip() -> str:
 class IPResponse(BaseModel):
     local_ip: str
     public_ip: Optional[str]
+
+
+class GeoLocation(BaseModel):
+    status: str
+    query: Optional[str]
+    country: Optional[str]
+    region: Optional[str]
+    city: Optional[str]
+    zip: Optional[str]
+    timezone: Optional[str]
+    isp: Optional[str]
+    org: Optional[str]
+    lat: Optional[float]
+    lon: Optional[float]
+    message: Optional[str]
+
+
+class LocationResponse(BaseModel):
+    local_ip: str
+    public_ip: Optional[str]
+    location: Optional[GeoLocation]
+
+
+def _geolocate_ip(ip: str) -> Optional[Dict[str, Any]]:
+    if not ip:
+        return None
+
+    try:
+        url = (
+            f"http://ip-api.com/json/{ip}?fields=status,country,regionName,city,zip,timezone,isp,org,lat,lon,query,message"
+        )
+        with urllib.request.urlopen(url, timeout=5) as response:
+            raw = response.read().decode().strip()
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return None
+
+        return {
+            "status": data.get("status", "fail"),
+            "query": data.get("query"),
+            "country": data.get("country"),
+            "region": data.get("regionName") or data.get("region"),
+            "city": data.get("city"),
+            "zip": data.get("zip"),
+            "timezone": data.get("timezone"),
+            "isp": data.get("isp"),
+            "org": data.get("org"),
+            "lat": data.get("lat"),
+            "lon": data.get("lon"),
+            "message": data.get("message"),
+        }
+    except Exception:
+        return None
 
 
 class WifiNetwork(BaseModel):
@@ -105,6 +159,18 @@ class SpeedTestResponse(BaseModel):
 async def network_ip() -> Any:
     """Return local and public IP addresses."""
     return IPResponse(local_ip=_local_ip(), public_ip=_public_ip() or None)
+
+
+@router.get("/location", response_model=LocationResponse, dependencies=[Depends(get_current_user)])
+async def network_location() -> Any:
+    """Return local and public IP addresses with geo-location information."""
+    public_ip = _public_ip()
+    location_data = _geolocate_ip(public_ip) if public_ip else None
+    return LocationResponse(
+        local_ip=_local_ip(),
+        public_ip=public_ip or None,
+        location=GeoLocation(**location_data) if location_data else None,
+    )
 
 
 def _parse_nmcli_wifi_list(raw: str) -> List[WifiNetwork]:

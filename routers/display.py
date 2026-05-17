@@ -3,18 +3,12 @@ import os
 import re
 import subprocess
 import tempfile
-from io import BytesIO
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from dependencies import get_current_user
-
-try:
-    from PIL import ImageGrab
-except ImportError:
-    ImageGrab = None
 
 router = APIRouter(prefix="/display", tags=["display"])
 
@@ -161,13 +155,45 @@ def _run_night_light(enabled: bool, temperature: Optional[int]) -> tuple[bool, s
     return True, "night light updated"
 
 
-def _capture_screenshot_with_grim() -> bytes:
+def _capture_screenshot_with_gnome_screenshot() -> bytes:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
         tmp_path = tmp.name
     try:
-        stdout, stderr, code = _run_command(["grim", tmp_path])
+        stdout, stderr, code = _run_command(["gnome-screenshot", "-f", tmp_path], timeout=30)
         if code != 0:
-            raise RuntimeError(stderr or stdout or "grim failed")
+            raise RuntimeError(stderr or stdout or "gnome-screenshot failed")
+        with open(tmp_path, "rb") as fh:
+            return fh.read()
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def _capture_screenshot_with_scrot() -> bytes:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+        tmp_path = tmp.name
+    try:
+        stdout, stderr, code = _run_command(["scrot", tmp_path])
+        if code != 0:
+            raise RuntimeError(stderr or stdout or "scrot failed")
+        with open(tmp_path, "rb") as fh:
+            return fh.read()
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def _capture_screenshot_with_x11() -> bytes:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+        tmp_path = tmp.name
+    try:
+        stdout, stderr, code = _run_command(["import", "-window", "root", tmp_path])
+        if code != 0:
+            raise RuntimeError(stderr or stdout or "import screenshot failed")
         with open(tmp_path, "rb") as fh:
             return fh.read()
     finally:
@@ -181,21 +207,17 @@ def _capture_screenshot_with_grim() -> bytes:
 async def display_screenshot() -> Any:
     """Capture the current screen and return it as a base64 PNG."""
     try:
-        if ImageGrab is not None:
-            image = ImageGrab.grab()
-            buffer = BytesIO()
-            image.save(buffer, format="PNG")
-            encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
-            return ScreenshotResponse(image_base64=encoded)
-    except Exception:
-        pass
-
-    try:
-        data = _capture_screenshot_with_grim()
-        encoded = base64.b64encode(data).decode("utf-8")
-        return ScreenshotResponse(image_base64=encoded)
+        data = _capture_screenshot_with_gnome_screenshot()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Screenshot capture failed using gnome-screenshot. Install gnome-screenshot and ensure it is available in PATH. "
+                "Error: " + str(exc)
+            ),
+        )
+    encoded = base64.b64encode(data).decode("utf-8")
+    return ScreenshotResponse(image_base64=encoded)
 
 
 @router.post("/record", response_model=ScreenshotResponse, dependencies=[Depends(get_current_user)])

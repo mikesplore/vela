@@ -1,10 +1,13 @@
 host: 0.0.0.0
 port: 8765
-secret_key: 49G_1IjsWxjmtJbFGYo1BKDiT33BCQEIorb1AlbxJxs
+secret_key: dIZIsnLVZ0vOysYm7K79VvdDZ-Rj5KuEI4QWqhPmGjg
 token_expire_minutes: 1440
 allowed_origins: []
 allowed_ips: []
 allowed_base_dirs: []
+dashscope_api_url: https://dashscope-intl.aliyuncs.com/api/v1
+dashscope_api_key: ""
+dashscope_model: qwen-plus
 rate_limit_default: 100/minute
 route_rate_limits:
   /auth/token: 10/minute
@@ -25,6 +28,7 @@ feature_flags:
   maintenance: true
   media: true
   clipboard: true
+  assistant: true
 username: mike
-password_hash: "$2b$12$kV5xWrki3qNLax.p13NqBe.Y9B5PKEnaTwzd0gMNTm59pRnekKPXK"
+password_hash: "$2b$12$b977rvFHCOkXEIS7DGmgne5Pqy3beu/GV8vzushq8ODcGG9X3QdTW"
 log_level: INFO

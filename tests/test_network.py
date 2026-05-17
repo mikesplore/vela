@@ -54,6 +54,20 @@ async def test_network_wifi_bluetooth_and_ping(monkeypatch, async_client):
     monkeypatch.setattr(network_module, "_run_command", fake_run_command)
     monkeypatch.setattr(network_module, "_local_ip", lambda: "192.168.1.10")
     monkeypatch.setattr(network_module, "_public_ip", lambda: "1.2.3.4")
+    monkeypatch.setattr(network_module, "_geolocate_ip", lambda ip: {
+        "status": "success",
+        "query": ip,
+        "country": "United States",
+        "region": "California",
+        "city": "San Francisco",
+        "zip": "94107",
+        "timezone": "America/Los_Angeles",
+        "isp": "Test ISP",
+        "org": "Test Org",
+        "lat": 37.78,
+        "lon": -122.39,
+        "message": None,
+    })
     monkeypatch.setattr(network_module, "speedtest", None)
 
     status_response = await async_client.get(
@@ -84,12 +98,27 @@ async def test_network_wifi_bluetooth_and_ping(monkeypatch, async_client):
     )
     assert toggle_response.status_code == 200
 
+    location_response = await async_client.get(
+        "/network/location",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert location_response.status_code == 200
+    assert location_response.json()["location"]["city"] == "San Francisco"
+
     bt_response = await async_client.get(
         "/network/bluetooth/devices",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert bt_response.status_code == 200
     assert bt_response.json()["devices"][0]["name"] == "Test Device"
+
+    bt_toggle_response = await async_client.post(
+        "/network/bluetooth/toggle",
+        json={"enabled": False},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert bt_toggle_response.status_code == 200
+    assert bt_toggle_response.json()["local_ip"] == "192.168.1.10"
 
     ping_response = await async_client.post(
         "/network/ping",

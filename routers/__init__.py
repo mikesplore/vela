@@ -13,6 +13,7 @@ from .processes import router as processes_router
 from .scheduler import router as scheduler_router
 from .security import router as security_router
 from .system_info import router as system_info_router
+from .assistant import router as assistant_router
 
 all_routers = [
     display_router,
@@ -30,4 +31,5 @@ all_routers = [
     maintenance_router,
     media_router,
     clipboard_router,
+    assistant_router,
 ]

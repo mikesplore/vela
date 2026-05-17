@@ -1,6 +1,7 @@
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
 from dotenv import load_dotenv
 import requests
@@ -17,6 +18,7 @@ LOCAL_SERVICE_USERNAME = os.getenv("LOCAL_SERVICE_USERNAME", os.getenv("USERNAME
 LOCAL_SERVICE_PASSWORD = os.getenv("LOCAL_SERVICE_PASSWORD", os.getenv("PASSWORD", ""))
 LOCAL_SERVICE_TOKEN_PATH = os.getenv("LOCAL_SERVICE_TOKEN_PATH", "/auth/token")
 LOCAL_SERVICE_AUTH_TOKEN = os.getenv("LOCAL_SERVICE_AUTH_TOKEN")
+LOCAL_SERVICE_TIMEOUT = int(os.getenv("LOCAL_SERVICE_TIMEOUT", "10"))
 
 _local_token: str | None = None
 _local_token_expires = datetime.min.replace(tzinfo=timezone.utc)
@@ -50,7 +52,7 @@ def get_local_auth_token() -> str:
         resp = requests.post(
             token_url,
             json={"username": LOCAL_SERVICE_USERNAME, "password": LOCAL_SERVICE_PASSWORD},
-            timeout=10,
+            timeout=LOCAL_SERVICE_TIMEOUT,
         )
         print(f"Local auth response status: {resp.status_code}")
         resp.raise_for_status()
@@ -95,6 +97,19 @@ async def tunnel(token):
                 body = req_data.get("body", None)
                 headers = {k: v for k, v in (req_data.get("headers") or {}).items()}
 
+                query_params = req_data.get("query") or req_data.get("query_params")
+                if query_params:
+                    if isinstance(query_params, dict):
+                        query_string = urlencode(query_params, doseq=True)
+                    else:
+                        query_string = str(query_params).lstrip("?")
+                else:
+                    query_string = ""
+
+                local_url = f"{LOCAL_SERVICE_URL}{path}"
+                if query_string and "?" not in local_url:
+                    local_url = f"{local_url}?{query_string}"
+
                 if "authorization" not in {k.lower() for k in headers}:
                     try:
                         headers["Authorization"] = f"Bearer {await async_get_local_auth_token()}"
@@ -108,15 +123,25 @@ async def tunnel(token):
                         }))
                         continue
 
-                local_url = f"{LOCAL_SERVICE_URL}{path}"
-                print(f"Forwarding local request: {method} {local_url}")
+                request_kwargs = {"headers": headers, "timeout": LOCAL_SERVICE_TIMEOUT}
+                if body is not None:
+                    if isinstance(body, str):
+                        content_type = headers.get("content-type", "")
+                        if content_type.startswith("application/json"):
+                            try:
+                                body = json.loads(body)
+                            except json.JSONDecodeError:
+                                pass
+                    if isinstance(body, (dict, list)):
+                        request_kwargs["json"] = body
+                    else:
+                        request_kwargs["data"] = body
+
                 resp = await asyncio.to_thread(
                     requests.request,
                     method,
                     local_url,
-                    headers=headers,
-                    json=body,
-                    timeout=10,
+                    **request_kwargs,
                 )
 
                 if resp.status_code == 401 and not LOCAL_SERVICE_AUTH_TOKEN:
@@ -127,9 +152,7 @@ async def tunnel(token):
                         requests.request,
                         method,
                         local_url,
-                        headers=headers,
-                        json=body,
-                        timeout=10,
+                        **request_kwargs,
                     )
 
                 response_payload = {
@@ -141,6 +164,14 @@ async def tunnel(token):
                 }
                 print(f"Sending response payload for request_id={request_id}, status_code={resp.status_code}")
                 await websocket.send(json.dumps(response_payload))
+            except requests.exceptions.Timeout as exc:
+                print(f"Local request timed out after {LOCAL_SERVICE_TIMEOUT}s: {local_url}")
+                await websocket.send(json.dumps({
+                    "type": "forward_response",
+                    "status_code": 504,
+                    "body": f"Local service did not respond within {LOCAL_SERVICE_TIMEOUT}s: {exc}",
+                    "request_id": request_id,
+                }))
             except Exception as e:
                 print(f"Error processing request: {e}")
                 await websocket.send(json.dumps({

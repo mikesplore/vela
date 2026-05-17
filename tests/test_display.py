@@ -2,7 +2,6 @@ import base64
 
 import pytest
 from auth import create_access_token
-from PIL import Image
 from routers import display as display_module
 
 
@@ -10,10 +9,7 @@ from routers import display as display_module
 async def test_display_screenshot_returns_base64(monkeypatch, async_client):
     token = create_access_token({"sub": "admin"})
 
-    def grab():
-        return Image.new("RGB", (1, 1), "red")
-
-    monkeypatch.setattr(display_module, "ImageGrab", type("G", (), {"grab": staticmethod(grab)}))
+    monkeypatch.setattr(display_module, "_capture_screenshot_with_gnome_screenshot", lambda: b"\x89PNG\r\n\x1a\n")
 
     response = await async_client.get(
         "/display/screenshot",
@@ -25,6 +21,22 @@ async def test_display_screenshot_returns_base64(monkeypatch, async_client):
     assert "image_base64" in payload
     decoded = base64.b64decode(payload["image_base64"])
     assert decoded.startswith(b"\x89PNG")
+
+
+@pytest.mark.anyio
+async def test_display_screenshot_requires_gnome_screenshot(monkeypatch, async_client):
+    token = create_access_token({"sub": "admin"})
+
+    monkeypatch.setattr(display_module, "_capture_screenshot_with_gnome_screenshot", lambda: (_ for _ in ()).throw(RuntimeError("gnome-screenshot failed")))
+
+    response = await async_client.get(
+        "/display/screenshot",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 500
+    payload = response.json()
+    assert "gnome-screenshot" in payload["detail"].lower()
 
 
 @pytest.mark.anyio
