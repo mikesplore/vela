@@ -404,13 +404,13 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     },
     "type_keyboard": {
         "method": "POST",
-        "path": "/input/type",
+        "path": "/input/keyboard/type",
         "description": "Type text at the current focused input.",
         "input": {"text": "string"},
     },
     "press_keyboard_keys": {
         "method": "POST",
-        "path": "/input/keys",
+        "path": "/input/keyboard/key",
         "description": "Press one or more keyboard keys or shortcuts.",
         "input": {"keys": "array of strings"},
     },

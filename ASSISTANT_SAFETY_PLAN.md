@@ -95,6 +95,17 @@ Use a backend pipeline like this:
 
 Do not allow direct LLM-to-execution paths.
 
+## Pending Action Flow
+
+When a medium- or high-risk tool is selected:
+
+1. The assistant returns a pending action response.
+2. The backend stores the tool call and expiry server-side.
+3. The user replies with confirmation or a PIN.
+4. The backend validates the reply.
+5. The backend executes the queued tool call only after approval.
+6. Pending actions expire automatically if not confirmed in time.
+
 ## Rollout Plan
 
 1. Add tool metadata for risk and permission requirements.

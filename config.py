@@ -81,6 +81,8 @@ class Config(BaseSettings):
     route_rate_limits: Dict[str, str] = {}
     username: str = "admin"
     password_hash: str
+    assistant_action_pin: str | None = None
+    assistant_action_timeout_seconds: int = 120
     dashscope_api_url: str = "https://dashscope-intl.aliyuncs.com/api/v1"
     dashscope_api_key: str | None = None
     dashscope_model: str = "qwen-plus"

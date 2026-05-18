@@ -241,6 +241,7 @@ async def _execute_tool(
     tool_name: str,
     tool_input: dict[str, Any],
     auth_header: str | None,
+    confirmed: bool = False,
 ) -> dict[str, Any]:
     if tool_name not in TOOL_DEFINITIONS:
         raise ValueError(f"Unknown tool: {tool_name}")
@@ -258,7 +259,7 @@ async def _execute_tool(
     headers: dict[str, str] = {}
     if tool_name != "upload_file":
         headers["Content-Type"] = "application/json"
-    if tool_name in INPUT_CONFIRM_TOOLS:
+    if confirmed and tool_name in INPUT_CONFIRM_TOOLS:
         headers["X-Confirm-Input"] = "true"
     if auth_header:
         headers["Authorization"] = auth_header
@@ -311,10 +312,11 @@ async def _execute_tool_safe(
     tool_name: str,
     tool_input: dict[str, Any],
     auth_header: str | None,
+    confirmed: bool = False,
 ) -> dict[str, Any]:
     """Wrapper that catches errors so one failing tool doesn't abort the others."""
     try:
-        result = await _execute_tool(app, tool_name, tool_input, auth_header)
+        result = await _execute_tool(app, tool_name, tool_input, auth_header, confirmed=confirmed)
         return {"tool": tool_name, "result": result, "error": None}
     except Exception as exc:
         logger.error("Tool %s failed: %s", tool_name, exc, exc_info=True)
