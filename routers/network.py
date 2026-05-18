@@ -130,6 +130,17 @@ class BluetoothDevice(BaseModel):
 
 class BluetoothDevicesResponse(BaseModel):
     devices: List[BluetoothDevice]
+    available_devices: List[BluetoothDevice]
+
+
+class BluetoothActionRequest(BaseModel):
+    address: str
+
+
+class BluetoothActionResponse(BaseModel):
+    address: str
+    action: str
+    message: str
 
 
 class ToggleRequest(BaseModel):
@@ -261,16 +272,46 @@ async def bluetooth_toggle(request: ToggleRequest) -> Any:
 
 @router.get("/bluetooth/devices", response_model=BluetoothDevicesResponse, dependencies=[Depends(get_current_user)])
 async def bluetooth_devices() -> Any:
-    """List paired and available Bluetooth devices."""
-    stdout, stderr, rc = _run_command(["bluetoothctl", "devices"])
+    """List connected Bluetooth devices and paired devices available to connect."""
+    connected_stdout, connected_stderr, connected_rc = _run_command(["bluetoothctl", "devices", "Connected"])
+    if connected_rc != 0:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=connected_stderr or connected_stdout or "Could not list connected Bluetooth devices")
+
+    available_stdout, available_stderr, available_rc = _run_command(["bluetoothctl", "devices", "Paired"])
+    if available_rc != 0:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=available_stderr or available_stdout or "Could not list available Bluetooth devices")
+
+    def _parse_bluetooth_devices(raw: str) -> List[BluetoothDevice]:
+        devices: List[BluetoothDevice] = []
+        for line in raw.splitlines():
+            match = re.match(r"^Device\s+([0-9A-F:]+)\s+(.+)$", line)
+            if match:
+                devices.append(BluetoothDevice(address=match.group(1), name=match.group(2)))
+        return devices
+
+    return BluetoothDevicesResponse(
+        devices=_parse_bluetooth_devices(connected_stdout),
+        available_devices=_parse_bluetooth_devices(available_stdout),
+    )
+
+
+def _bluetoothctl_device_action(action: str, address: str) -> BluetoothActionResponse:
+    stdout, stderr, rc = _run_command(["bluetoothctl", action, address], timeout=20)
     if rc != 0:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=stderr or stdout or "Could not list Bluetooth devices")
-    devices: List[BluetoothDevice] = []
-    for line in stdout.splitlines():
-        match = re.match(r"^Device\s+([0-9A-F:]+)\s+(.+)$", line)
-        if match:
-            devices.append(BluetoothDevice(address=match.group(1), name=match.group(2)))
-    return BluetoothDevicesResponse(devices=devices)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=stderr or stdout or f"Could not {action} Bluetooth device")
+    return BluetoothActionResponse(address=address, action=action, message=stdout or f"Bluetooth device {action}ed successfully")
+
+
+@router.post("/bluetooth/pair", response_model=BluetoothActionResponse, dependencies=[Depends(get_current_user)])
+async def bluetooth_pair(request: BluetoothActionRequest) -> Any:
+    """Pair with a Bluetooth device."""
+    return _bluetoothctl_device_action("pair", request.address)
+
+
+@router.post("/bluetooth/unpair", response_model=BluetoothActionResponse, dependencies=[Depends(get_current_user)])
+async def bluetooth_unpair(request: BluetoothActionRequest) -> Any:
+    """Unpair a Bluetooth device."""
+    return _bluetoothctl_device_action("remove", request.address)
 
 
 @router.post("/ping", response_model=PingResponse, dependencies=[Depends(get_current_user)])

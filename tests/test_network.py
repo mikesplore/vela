@@ -45,8 +45,14 @@ async def test_network_wifi_bluetooth_and_ping(monkeypatch, async_client):
             return "", "", 0
         if cmd[:2] == ["rfkill", "block"]:
             return "", "", 0
-        if cmd[:2] == ["bluetoothctl", "devices"]:
+        if cmd[:3] == ["bluetoothctl", "devices", "Connected"]:
             return "Device AA:BB:CC:DD:EE:FF Test Device", "", 0
+        if cmd[:3] == ["bluetoothctl", "devices", "Paired"]:
+            return "Device 11:22:33:44:55:66 Spare Speaker", "", 0
+        if cmd[:3] == ["bluetoothctl", "pair", "AA:BB:CC:DD:EE:FF"]:
+            return "Pairing successful", "", 0
+        if cmd[:3] == ["bluetoothctl", "remove", "AA:BB:CC:DD:EE:FF"]:
+            return "Device has been removed", "", 0
         if cmd[:2] == ["ping", "-c"]:
             return "4 packets transmitted, 4 received, 0% packet loss\nrtt min/avg/max/mdev = 10.0/15.0/20.0/1.0 ms", "", 0
         return "", "", 0
@@ -111,6 +117,23 @@ async def test_network_wifi_bluetooth_and_ping(monkeypatch, async_client):
     )
     assert bt_response.status_code == 200
     assert bt_response.json()["devices"][0]["name"] == "Test Device"
+    assert bt_response.json()["available_devices"][0]["name"] == "Spare Speaker"
+
+    bt_pair_response = await async_client.post(
+        "/network/bluetooth/pair",
+        json={"address": "AA:BB:CC:DD:EE:FF"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert bt_pair_response.status_code == 200
+    assert bt_pair_response.json()["action"] == "pair"
+
+    bt_unpair_response = await async_client.post(
+        "/network/bluetooth/unpair",
+        json={"address": "AA:BB:CC:DD:EE:FF"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert bt_unpair_response.status_code == 200
+    assert bt_unpair_response.json()["action"] == "remove"
 
     bt_toggle_response = await async_client.post(
         "/network/bluetooth/toggle",
