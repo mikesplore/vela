@@ -174,9 +174,10 @@ def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = N
     return parsed
 
 
-def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> str:
+def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tuple[str, str | None]:
     """
     Second LLM call — summarises ALL tool results into one clean Markdown reply.
+    Returns (reply_text, art_url) where art_url is present for media status queries.
     Called only when at least one real tool was executed.
     """
     if len(results) == 1 and results[0].get("tool") == "get_media_status":
@@ -186,6 +187,7 @@ def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> st
         status = (media.get("status") or "unknown").lower()
         position_seconds = media.get("position_seconds")
         length_seconds = media.get("length_seconds")
+        art_url = media.get("art_url")
 
         def _format_time(seconds: Any) -> str | None:
             if seconds is None:
@@ -208,7 +210,7 @@ def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> st
             parts.append(f"Elapsed: {elapsed_text}.")
         if length_text:
             parts.append(f"Length: {length_text}.")
-        return " ".join(parts)
+        return " ".join(parts), art_url
 
     system = (
         "You are Vela. The user asked for one or more actions. "
@@ -233,7 +235,7 @@ def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> st
         temperature=0.2,
         max_tokens=512,
     )
-    return _get_response_text(response)
+    return _get_response_text(response), None
 
 
 async def _execute_tool(

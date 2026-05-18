@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 from uuid import uuid4
 
+from pydantic import BaseModel
+
 from config import Config
 
 config = Config()
@@ -19,16 +21,31 @@ class ToolPolicy:
     requires_auth: bool = False
 
 
+class ConfirmationCard(BaseModel):
+    """Structured confirmation data for rendering a UI card."""
+    title: str
+    description: str
+    action_type: str
+    tool_count: int
+    requires_auth: bool
+    action_details: list[str]
+    prompt_text: str
+    pin_attempts_remaining: int | None = None
+    pin_max_attempts: int | None = None
+
+
 @dataclass
 class PendingAction:
     action_id: str
     user_id: str
+    session_id: str
     user_message: str
     tool_calls: list[dict[str, Any]]
     prompt: str
     requires_auth: bool
     created_at: datetime
     expires_at: datetime
+    pin_attempts: int = 0
 
 
 LOW_RISK_TOOLS = {
@@ -94,6 +111,7 @@ LOW_RISK_TOOLS = {
 
 MEDIUM_RISK_TOOLS = {
     "connect_wifi",
+    "disconnect_wifi",
     "toggle_wifi",
     "toggle_bluetooth",
     "pair_bluetooth_device",
@@ -126,6 +144,12 @@ HIGH_RISK_TOOLS = {
 }
 
 PENDING_ACTIONS: dict[str, PendingAction] = {}
+PIN_MAX_ATTEMPTS = 3
+
+
+def _pending_action_key(user_id: str, session_id: str) -> str:
+    """Generate a unique key for storing pending actions per user per session/device."""
+    return f"{user_id}|{session_id}"
 
 
 def get_tool_policy(tool_name: str) -> ToolPolicy:
@@ -197,6 +221,58 @@ def _tool_summary(tool_name: str, tool_input: dict[str, Any]) -> str:
     return tool_name.replace("_", " ")
 
 
+def build_confirmation_card(tool_calls: list[dict[str, Any]], requires_auth: bool, pin_attempts: int = 0) -> ConfirmationCard:
+    """Build a structured confirmation card for UI rendering."""
+    if not tool_calls:
+        return ConfirmationCard(
+            title="No Action",
+            description="No pending action is available.",
+            action_type="none",
+            tool_count=0,
+            requires_auth=False,
+            action_details=[],
+            prompt_text="No pending action is available.",
+            pin_attempts_remaining=None,
+            pin_max_attempts=None,
+        )
+
+    action_details = []
+    for call in tool_calls:
+        tool_name = call.get("tool", "unknown")
+        tool_input = call.get("tool_input") or {}
+        summary = _tool_summary(tool_name, tool_input)
+        action_details.append(summary)
+
+    first_call = tool_calls[0]
+    first_tool = first_call.get("tool", "unknown")
+    first_summary = action_details[0] if action_details else "unknown action"
+
+    if requires_auth:
+        title = "High-Risk Action Confirmation"
+        prompt_text = f"High-risk action pending: {first_summary}"
+        if len(tool_calls) > 1:
+            prompt_text += f" and {len(tool_calls) - 1} additional action(s)"
+        prompt_text += ". Enter your PIN to continue, or say cancel."
+    else:
+        title = "Action Confirmation"
+        prompt_text = f"Confirmation required: {first_summary}"
+        if len(tool_calls) > 1:
+            prompt_text += f" and {len(tool_calls) - 1} additional action(s)"
+        prompt_text += ". Reply yes to continue or cancel to stop."
+
+    return ConfirmationCard(
+        title=title,
+        description=first_summary,
+        action_type=first_tool,
+        tool_count=len(tool_calls),
+        requires_auth=requires_auth,
+        action_details=action_details,
+        prompt_text=prompt_text,
+        pin_attempts_remaining=(max(0, PIN_MAX_ATTEMPTS - pin_attempts) if requires_auth else None),
+        pin_max_attempts=(PIN_MAX_ATTEMPTS if requires_auth else None),
+    )
+
+
 def build_pending_prompt(tool_calls: list[dict[str, Any]], requires_auth: bool) -> str:
     if not tool_calls:
         return "No pending action is available."
@@ -211,11 +287,12 @@ def build_pending_prompt(tool_calls: list[dict[str, Any]], requires_auth: bool) 
     return f"Confirmation required: {summary}. Reply yes to continue or cancel to stop."
 
 
-def register_pending_action(user_id: str, user_message: str, tool_calls: list[dict[str, Any]], requires_auth: bool) -> PendingAction:
+def register_pending_action(user_id: str, session_id: str, user_message: str, tool_calls: list[dict[str, Any]], requires_auth: bool) -> PendingAction:
     now = datetime.now(timezone.utc)
     pending = PendingAction(
         action_id=uuid4().hex,
         user_id=user_id,
+        session_id=session_id,
         user_message=user_message,
         tool_calls=tool_calls,
         prompt=build_pending_prompt(tool_calls, requires_auth),
@@ -223,22 +300,25 @@ def register_pending_action(user_id: str, user_message: str, tool_calls: list[di
         created_at=now,
         expires_at=now + timedelta(seconds=config.assistant_action_timeout_seconds),
     )
-    PENDING_ACTIONS[user_id] = pending
+    key = _pending_action_key(user_id, session_id)
+    PENDING_ACTIONS[key] = pending
     return pending
 
 
-def get_pending_action(user_id: str) -> PendingAction | None:
-    pending = PENDING_ACTIONS.get(user_id)
+def get_pending_action(user_id: str, session_id: str) -> PendingAction | None:
+    key = _pending_action_key(user_id, session_id)
+    pending = PENDING_ACTIONS.get(key)
     if not pending:
         return None
     if pending.expires_at <= datetime.now(timezone.utc):
-        clear_pending_action(user_id)
+        clear_pending_action(user_id, session_id)
         return None
     return pending
 
 
-def clear_pending_action(user_id: str) -> None:
-    PENDING_ACTIONS.pop(user_id, None)
+def clear_pending_action(user_id: str, session_id: str) -> None:
+    key = _pending_action_key(user_id, session_id)
+    PENDING_ACTIONS.pop(key, None)
 
 
 def is_affirmative(message: str) -> bool:
@@ -265,3 +345,12 @@ def requires_gate(tool_name: str) -> bool:
 
 def requires_auth(tool_name: str) -> bool:
     return get_tool_policy(tool_name).requires_auth
+
+
+def pin_attempts_remaining(pending: PendingAction) -> int:
+    return max(0, PIN_MAX_ATTEMPTS - pending.pin_attempts)
+
+
+def register_pin_rejection(pending: PendingAction) -> int:
+    pending.pin_attempts += 1
+    return pin_attempts_remaining(pending)

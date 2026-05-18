@@ -45,12 +45,49 @@ _next_notification_id = 1
 
 
 def _send_notification(request: NotificationRequest) -> None:
+    # Try notify-send first (standard CLI notification helper)
     args = ["notify-send", request.title, request.message]
     if request.app_name:
         args.extend(["-a", request.app_name])
     if request.urgency:
         args.extend(["-u", request.urgency])
-    _run_command(args)
+
+    stdout, stderr, returncode = _run_command(args)
+    if returncode == 0:
+        return
+
+    # CLI failed — try Python notification libraries as a fallback.
+    # First try notify2 (dbus bindings common on Linux)
+    try:
+        import notify2
+
+        notify2.init(request.app_name or "Vela")
+        n = notify2.Notification(request.title, request.message)
+        # Map urgency if provided
+        if request.urgency == "low":
+            n.set_urgency(notify2.URGENCY_LOW)
+        elif request.urgency == "critical":
+            n.set_urgency(notify2.URGENCY_CRITICAL)
+        else:
+            n.set_urgency(notify2.URGENCY_NORMAL)
+        n.show()
+        return
+    except Exception:
+        pass
+
+    # Next try GObject Introspection Notify (pygobject)
+    try:
+        from gi.repository import Notify
+
+        Notify.init(request.app_name or "Vela")
+        n = Notify.Notification.new(request.title, request.message)
+        n.show()
+        return
+    except Exception:
+        pass
+
+    # All attempts failed — raise to allow caller to handle reporting
+    raise RuntimeError(f"Failed to send notification: {stderr or 'unknown error'}")
 
 
 def _clear_notifications() -> None:
@@ -106,7 +143,11 @@ def _list_system_notifications() -> List[NotificationRecord]:
 async def send_notification(request: NotificationRequest) -> Any:
     """Send a desktop notification and retain it in the agent history."""
     global _next_notification_id
-    _send_notification(request)
+    try:
+        _send_notification(request)
+    except Exception as exc:
+        # Surface a clear error to the client when notifications can't be delivered
+        raise HTTPException(status_code=500, detail=f"Notification failed: {exc}")
     record = NotificationRecord(
         id=_next_notification_id,
         title=request.title,

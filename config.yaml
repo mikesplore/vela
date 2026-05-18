@@ -8,6 +8,8 @@ allowed_base_dirs: []
 dashscope_api_url: https://dashscope-intl.aliyuncs.com/api/v1
 dashscope_api_key: ""
 dashscope_model: qwen-plus
+assistant_action_pin: "2468"
+assistant_action_timeout_seconds: 120
 rate_limit_default: 100/minute
 route_rate_limits:
   /auth/token: 10/minute

@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 import tempfile
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -43,6 +44,16 @@ class NightLightRequest(BaseModel):
 class ValueResponse(BaseModel):
     success: bool
     message: Optional[str] = None
+
+
+MUTTER_POWER_SAVE_MODE_ON = 0
+MUTTER_POWER_SAVE_MODE_OFF = 1
+
+
+class PowerSaveState(BaseModel):
+    power_save_mode: int
+    is_on: bool
+    message: str
 
 
 class BrightnessInfo(BaseModel):
@@ -155,20 +166,58 @@ def _run_night_light(enabled: bool, temperature: Optional[int]) -> tuple[bool, s
     return True, "night light updated"
 
 
-def _capture_screenshot_with_gnome_screenshot() -> bytes:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-        tmp_path = tmp.name
-    try:
-        stdout, stderr, code = _run_command(["gnome-screenshot", "-f", tmp_path], timeout=30)
-        if code != 0:
-            raise RuntimeError(stderr or stdout or "gnome-screenshot failed")
-        with open(tmp_path, "rb") as fh:
-            return fh.read()
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+def _set_mutter_power_save_mode(mode: int) -> tuple[bool, str]:
+    stdout, stderr, code = _run_command([
+        "busctl",
+        "--user",
+        "set-property",
+        "org.gnome.Mutter.DisplayConfig",
+        "/org/gnome/Mutter/DisplayConfig",
+        "org.gnome.Mutter.DisplayConfig",
+        "PowerSaveMode",
+        "i",
+        str(mode),
+    ])
+    if code == 0:
+        return True, "mutter power save updated"
+    return False, stderr or stdout or "failed to set Mutter power save mode"
+
+
+def _get_mutter_power_save_mode() -> tuple[Optional[int], str]:
+    stdout, stderr, code = _run_command([
+        "busctl",
+        "--user",
+        "get-property",
+        "org.gnome.Mutter.DisplayConfig",
+        "/org/gnome/Mutter/DisplayConfig",
+        "org.gnome.Mutter.DisplayConfig",
+        "PowerSaveMode",
+    ])
+    if code != 0 or not stdout:
+        return None, stderr or stdout or "failed to read Mutter power save mode"
+
+    match = re.search(r"(-?\d+)", stdout)
+    if not match:
+        return None, f"unexpected Mutter power save output: {stdout}"
+    return int(match.group(1)), "mutter power save state read"
+
+
+def _capture_screenshot_with_flameshot() -> bytes:
+    pictures_dir = Path(os.path.expanduser("~/Pictures"))
+    pictures_dir.mkdir(parents=True, exist_ok=True)
+    before = {path.resolve() for path in pictures_dir.glob("*.png")}
+    stdout, stderr, code = _run_command(["flameshot", "full", "-p", str(pictures_dir)], timeout=30)
+    if code != 0:
+        raise RuntimeError(stderr or stdout or "flameshot failed")
+
+    candidates = [path for path in pictures_dir.glob("*.png") if path.resolve() not in before]
+    if not candidates:
+        candidates = list(pictures_dir.glob("*.png"))
+    if not candidates:
+        raise RuntimeError("flameshot did not produce a PNG file")
+
+    newest = max(candidates, key=lambda path: path.stat().st_mtime)
+    return newest.read_bytes()
 
 
 def _capture_screenshot_with_scrot() -> bytes:
@@ -207,12 +256,12 @@ def _capture_screenshot_with_x11() -> bytes:
 async def display_screenshot() -> Any:
     """Capture the current screen and return it as a base64 PNG."""
     try:
-        data = _capture_screenshot_with_gnome_screenshot()
+        data = _capture_screenshot_with_flameshot()
     except Exception as exc:
         raise HTTPException(
             status_code=500,
             detail=(
-                "Screenshot capture failed using gnome-screenshot. Install gnome-screenshot and ensure it is available in PATH. "
+                "Screenshot capture failed using flameshot. Install flameshot and ensure it is available in PATH. "
                 "Error: " + str(exc)
             ),
         )
@@ -259,20 +308,81 @@ async def display_record(request: RecordRequest) -> Any:
 
 @router.post("/monitor/off", response_model=ValueResponse, dependencies=[Depends(get_current_user)])
 async def monitor_off() -> Any:
-    """Turn the monitor off using DPMS."""
+    """Turn the monitor off using Mutter power save mode, with fallbacks."""
+    success, message = _set_mutter_power_save_mode(MUTTER_POWER_SAVE_MODE_OFF)
+    if success:
+        return ValueResponse(success=True, message="monitor off (mutter)")
+
+    # Try xset DPMS as a fallback (X11)
     stdout, stderr, code = _run_command(["xset", "dpms", "force", "off"])
-    if code != 0:
-        raise HTTPException(status_code=500, detail=stderr or stdout or "failed to turn off monitor")
-    return ValueResponse(success=True, message="monitor off")
+    if code == 0:
+        return ValueResponse(success=True, message="monitor off (xset)")
+
+    # Fallback: try turning off each connected output via xrandr
+    display_info = _get_display_info()
+    if display_info:
+        output = display_info.output
+        stdout2, stderr2, code2 = _run_command(["xrandr", "--output", output, "--off"])
+        if code2 == 0:
+            return ValueResponse(success=True, message=f"monitor off (xrandr:{output})")
+
+    # Fallback: try swaymsg (Wayland compositor using wlroots)
+    stdout3, stderr3, code3 = _run_command(["swaymsg", "output", "*", "disable"])
+    if code3 == 0:
+        return ValueResponse(success=True, message="monitor off (swaymsg)")
+
+    # If all attempts failed, return aggregated error for debugging
+    details = "; ".join(
+        filter(
+            None,
+            [message, stderr, stderr2 if 'stderr2' in locals() else None, stderr3 if 'stderr3' in locals() else None],
+        )
+    )
+    raise HTTPException(status_code=500, detail=details or stdout or "failed to turn off monitor")
 
 
 @router.post("/monitor/on", response_model=ValueResponse, dependencies=[Depends(get_current_user)])
 async def monitor_on() -> Any:
-    """Turn the monitor on using DPMS."""
+    """Turn the monitor on using Mutter power save mode, with fallbacks."""
+    success, message = _set_mutter_power_save_mode(MUTTER_POWER_SAVE_MODE_ON)
+    if success:
+        return ValueResponse(success=True, message="monitor on (mutter)")
+
     stdout, stderr, code = _run_command(["xset", "dpms", "force", "on"])
-    if code != 0:
-        raise HTTPException(status_code=500, detail=stderr or stdout or "failed to turn on monitor")
-    return ValueResponse(success=True, message="monitor on")
+    if code == 0:
+        return ValueResponse(success=True, message="monitor on (xset)")
+
+    # If Mutter/xset failed, attempt a generic xrandr re-enable of the first output.
+    display_info = _get_display_info()
+    if display_info:
+        stdout2, stderr2, code2 = _run_command(["xrandr", "--output", display_info.output, "--auto"])
+        if code2 == 0:
+            return ValueResponse(success=True, message=f"monitor on (xrandr:{display_info.output})")
+
+    stdout3, stderr3, code3 = _run_command(["swaymsg", "output", "*", "enable"])
+    if code3 == 0:
+        return ValueResponse(success=True, message="monitor on (swaymsg)")
+
+    details = "; ".join(
+        filter(
+            None,
+            [message, stderr, stderr2 if 'stderr2' in locals() else None, stderr3 if 'stderr3' in locals() else None],
+        )
+    )
+    raise HTTPException(status_code=500, detail=details or stdout or "failed to turn on monitor")
+
+
+@router.get("/monitor/state", response_model=PowerSaveState, dependencies=[Depends(get_current_user)])
+async def monitor_state() -> Any:
+    """Read the current Mutter power-save state so the agent can see whether the screen is on."""
+    mode, message = _get_mutter_power_save_mode()
+    if mode is None:
+        raise HTTPException(status_code=500, detail=message)
+    return PowerSaveState(
+        power_save_mode=mode,
+        is_on=mode == MUTTER_POWER_SAVE_MODE_ON,
+        message=message,
+    )
 
 
 @router.get("/brightness", response_model=BrightnessInfo, dependencies=[Depends(get_current_user)])

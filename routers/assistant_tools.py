@@ -125,6 +125,11 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "path": "/monitor/cpu",
         "description": "CPU usage percentages overall and per core.",
     },
+    "get_monitor_state": {
+        "method": "GET",
+        "path": "/display/monitor/state",
+        "description": "Read GNOME Mutter PowerSaveMode so the agent can see whether the monitor is on or off.",
+    },
     "monitor_ram": {
         "method": "GET",
         "path": "/monitor/ram",
@@ -210,7 +215,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "get_media_status": {
         "method": "GET",
         "path": "/media/now-playing",
-        "description": "Current playback status, title, artist, album, and position.",
+        "description": "Current playback status, title, artist, album, album art URL, and position.",
     },
     "toggle_play_pause": {
         "method": "POST",
@@ -254,7 +259,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "display_screenshot": {
         "method": "GET",
         "path": "/display/screenshot",
-        "description": "Capture the current screen and return a PNG as base64.",
+        "description": "Capture the current screen with flameshot and return the PNG as base64.",
     },
     "display_record": {
         "method": "POST",
@@ -265,12 +270,17 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "monitor_off": {
         "method": "POST",
         "path": "/display/monitor/off",
-        "description": "Turn the monitor off.",
+        "description": "Turn the monitor off using GNOME Mutter PowerSaveMode (with fallbacks).",
     },
     "monitor_on": {
         "method": "POST",
         "path": "/display/monitor/on",
-        "description": "Turn the monitor on.",
+        "description": "Turn the monitor on using GNOME Mutter PowerSaveMode (with fallbacks).",
+    },
+    "get_monitor_state": {
+        "method": "GET",
+        "path": "/display/monitor/state",
+        "description": "Read the current GNOME Mutter PowerSaveMode so the agent can see whether the screen is on or off.",
     },
     "get_display_brightness": {
         "method": "GET",
