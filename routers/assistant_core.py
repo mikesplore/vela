@@ -5,6 +5,8 @@ import logging
 import os
 import re
 from typing import Any
+from pathlib import Path
+from dotenv import dotenv_values
 from urllib.parse import quote_plus
 
 import dashscope
@@ -40,11 +42,32 @@ def _clean_text(text: str) -> str:
 
 
 def _get_api_key() -> str | None:
-    return (
-        config.dashscope_api_key
-        or os.getenv("DASHSCOPE_API_KEY")
-        or os.getenv("VELA_DASHSCOPE_API_KEY")
-    )
+    """Read DASHSCOPE_API_KEY strictly from dotfiles only.
+
+    Search order (first match wins):
+    1. ./ .env
+    2. ~/.config/vela/.env
+    3. package_dir/.env
+
+    Do NOT read from process environment or config.yaml.
+    """
+    candidate_paths = [
+        Path.cwd() / ".env",
+        Path.home() / ".config" / "vela" / ".env",
+        Path(__file__).resolve().parent / ".env",
+    ]
+
+    for p in candidate_paths:
+        try:
+            if not p.exists():
+                continue
+            vals = dotenv_values(p)
+        except Exception:
+            continue
+        key = vals.get("DASHSCOPE_API_KEY")
+        if key:
+            return str(key)
+    return None
 
 
 def _get_response_text(response_data: Any) -> str:

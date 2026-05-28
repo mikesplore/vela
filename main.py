@@ -112,7 +112,7 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     )
 
 
-if __name__ == "__main__":
+def main() -> None:
     uvicorn.run(
         "main:app",
         host=config.host,
@@ -120,3 +120,7 @@ if __name__ == "__main__":
         log_level=config.log_level.lower(),
         reload=False,
     )
+
+
+if __name__ == "__main__":
+    main()

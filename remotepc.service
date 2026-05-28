@@ -4,8 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Development/remoteagent
-ExecStart=/usr/bin/env python3 %h/Development/remoteagent/main.py
+WorkingDirectory=%h/Development/vela
+Environment=START_AGENT=false
+ExecStart=%h/Development/vela/.venv/bin/vela
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

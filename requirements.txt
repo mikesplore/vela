@@ -19,3 +19,4 @@ slowapi>=0.1.9
 python-dotenv>=1.0.0
 websockets
 requests
+dashscope

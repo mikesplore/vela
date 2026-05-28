@@ -8,7 +8,10 @@ from pydantic_settings import BaseSettings
 
 
 BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(BASE_DIR / ".env")
+DEFAULT_CONFIG_DIR = Path.home() / ".config" / "vela"
+
+for dotenv_path in (Path.cwd() / ".env", DEFAULT_CONFIG_DIR / ".env", BASE_DIR / ".env"):
+    load_dotenv(dotenv_path)
 
 DEFAULT_ASSISTANT_SYSTEM_PROMPT = """Identity & Voice
 You are Vela, a sophisticated, calm, and highly capable AI assistant designed to control a Linux PC through a remote relay.
@@ -110,8 +113,16 @@ class Config(BaseSettings):
 
     @staticmethod
     def yaml_config_settings_source():
-        config_path = os.getenv("REMOTEAGENT_CONFIG_PATH", "config.yaml")
-        if not os.path.exists(config_path):
-            return {}
-        with open(config_path, "r", encoding="utf-8") as config_file:
-            return yaml.safe_load(config_file) or {}
+        config_override = os.getenv("REMOTEAGENT_CONFIG_PATH")
+        candidate_paths = (
+            [Path(config_override)]
+            if config_override
+            else [Path.cwd() / "config.yaml", DEFAULT_CONFIG_DIR / "config.yaml", BASE_DIR / "config.yaml"]
+        )
+
+        for config_path in candidate_paths:
+            if config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as config_file:
+                    return yaml.safe_load(config_file) or {}
+
+        return {}

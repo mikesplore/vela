@@ -266,7 +266,16 @@ cd ~/Development/vela
 ```bash
 ./setup.sh
 ```
-3. The script will install dependencies, generate `config.yaml`, hash your password, and optionally install the systemd user service.
+3. For distribution to another machine, build a wheel and give them the wheel instead of the repo:
+```bash
+python -m pip install build
+python -m build
+```
+4. On the target machine, install the wheel and bootstrap the config:
+```bash
+python -m pip install dist/vela-1.0.0-py3-none-any.whl
+vela-init
+```
 
 ## Configuration
 
@@ -324,14 +333,16 @@ route_rate_limits:
 Start locally:
 ```bash
 source .venv/bin/activate
-python main.py
+vela
 ```
+
+After `vela-init`, the packaged install stores config in `~/.config/vela/` and creates `vela.service` plus `vela-agent.service` in the user systemd directory.
 
 OpenAPI docs are available at `http://<host>:<port>/docs`.
 
 ## Systemd service
 
-The service file can be installed for the current user via `./setup.sh`. The service will run the agent on login and restart on failure.
+The user services can be installed via `./setup.sh`. The main API runs as `vela.service`, and the tunnel process runs as `vela-agent.service`; both restart on failure.
 
 ## Connecting from a phone
 

@@ -26,7 +26,7 @@ fi
 
 source "$VENV_DIR/bin/activate"
 python -m pip install --upgrade pip
-python -m pip install -r "$ROOT_DIR/requirements.txt"
+python -m pip install -e "$ROOT_DIR"
 
 USERNAME="${USERNAME:-admin}"
 PASSWORD="${PASSWORD:-}"
@@ -116,7 +116,8 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=$ROOT_DIR
-ExecStart=$VENV_DIR/bin/python $ROOT_DIR/main.py
+Environment=START_AGENT=false
+ExecStart=$VENV_DIR/bin/vela
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -135,7 +136,7 @@ After=network.target
 Type=simple
 WorkingDirectory=$ROOT_DIR
 EnvironmentFile=$ENV_FILE
-ExecStart=$VENV_DIR/bin/python $ROOT_DIR/agent.py
+ExecStart=$VENV_DIR/bin/vela-agent
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

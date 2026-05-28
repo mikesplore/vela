@@ -193,5 +193,9 @@ async def start_agent_loop() -> None:
             await asyncio.sleep(5)
 
 
-if __name__ == "__main__":
+def main() -> None:
     asyncio.run(start_agent_loop())
+
+
+if __name__ == "__main__":
+    main()
