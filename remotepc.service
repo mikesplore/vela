@@ -6,6 +6,7 @@ After=network.target
 Type=simple
 WorkingDirectory=%h/Development/vela
 Environment=START_AGENT=false
+EnvironmentFile=%h/.config/vela/desktop.env
 ExecStart=%h/Development/vela/.venv/bin/vela
 Restart=on-failure
 RestartSec=5

@@ -220,38 +220,6 @@ def _capture_screenshot_with_flameshot() -> bytes:
     return newest.read_bytes()
 
 
-def _capture_screenshot_with_scrot() -> bytes:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-        tmp_path = tmp.name
-    try:
-        stdout, stderr, code = _run_command(["scrot", tmp_path])
-        if code != 0:
-            raise RuntimeError(stderr or stdout or "scrot failed")
-        with open(tmp_path, "rb") as fh:
-            return fh.read()
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-
-
-def _capture_screenshot_with_x11() -> bytes:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-        tmp_path = tmp.name
-    try:
-        stdout, stderr, code = _run_command(["import", "-window", "root", tmp_path])
-        if code != 0:
-            raise RuntimeError(stderr or stdout or "import screenshot failed")
-        with open(tmp_path, "rb") as fh:
-            return fh.read()
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-
-
 @router.get("/screenshot", response_model=ScreenshotResponse, dependencies=[Depends(get_current_user)])
 async def display_screenshot() -> Any:
     """Capture the current screen and return it as a base64 PNG."""
@@ -261,8 +229,9 @@ async def display_screenshot() -> Any:
         raise HTTPException(
             status_code=500,
             detail=(
-                "Screenshot capture failed using flameshot. Install flameshot and ensure it is available in PATH. "
-                "Error: " + str(exc)
+                "Screenshot capture failed using flameshot. "
+                "Make sure the backend is started from the graphical desktop session so DISPLAY/WAYLAND_DISPLAY, XAUTHORITY, and DBUS_SESSION_BUS_ADDRESS are available. "
+                + str(exc)
             ),
         )
     encoded = base64.b64encode(data).decode("utf-8")

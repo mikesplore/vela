@@ -95,6 +95,43 @@ def _get_response_text(response_data: Any) -> str:
     return _clean_text(str(response_data))
 
 
+def _explain_dashscope_issue(info: Any) -> str:
+    """Return a concise, user-facing explanation for DashScope errors.
+
+    Accepts either an Exception or a response-like dict/object.
+    """
+    try:
+        if isinstance(info, Exception):
+            msg = str(info)
+            lower = msg.lower()
+            if "401" in msg or "unauthorized" in lower or "api key" in lower:
+                return "Authentication failed: missing or invalid DASHSCOPE_API_KEY in your .env file."
+            if "429" in msg or "rate limit" in lower:
+                return "Rate limited: too many requests to DashScope. Try again later."
+            if "timeout" in lower:
+                return "Request timed out contacting the DashScope API. Check network connectivity."
+            return f"Error contacting DashScope: {msg}"
+
+        if isinstance(info, dict):
+            # Common error shapes: {'error': {'code': 401, 'message': '...'}} or {'error': '...'}
+            err = info.get("error") or info.get("message") or info
+            if isinstance(err, dict):
+                code = err.get("code") or err.get("status")
+                message = err.get("message") or err.get("detail") or str(err)
+                code_str = str(code) if code is not None else ""
+                if "401" in code_str or "401" in message:
+                    return "Authentication failed: invalid DASHSCOPE_API_KEY in your .env file."
+                if "429" in code_str or "rate" in message.lower():
+                    return "Rate limited: too many requests to DashScope. Try again later."
+                if code and int(code) >= 500:
+                    return "DashScope service error: the remote service is unavailable. Try again later."
+                return f"DashScope API error: {message}"
+            return f"DashScope error: {err}"
+    except Exception:
+        pass
+    return "An unknown error occurred while contacting DashScope."
+
+
 def _set_dashscope_base_url() -> None:
     """Resolve and set the DashScope base URL. Called once at startup."""
     api_url = (
@@ -180,20 +217,28 @@ def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = N
         messages.extend(history)
     messages.append({"role": "user", "content": user_message})
 
-    response = Generation.call(
-        api_key=_get_api_key(),
-        model=config.dashscope_model,
-        messages=messages,
-        result_format="message",
-        stream=False,
-        incremental_output=False,
-        temperature=0.0,
-        max_tokens=512,
-    )
+    try:
+        response = Generation.call(
+            api_key=_get_api_key(),
+            model=config.dashscope_model,
+            messages=messages,
+            result_format="message",
+            stream=False,
+            incremental_output=False,
+            temperature=0.0,
+            max_tokens=512,
+        )
+    except Exception as exc:
+        logger.error("DashScope Generation.call failed: %s", exc, exc_info=True)
+        raise ValueError(_explain_dashscope_issue(exc)) from exc
     text = _get_response_text(response)
     parsed = _extract_json_array(text)
     if not parsed:
-        raise ValueError(f"Could not parse tool selection from model output: {text}")
+        suggestion = (
+            "Could not parse tool selection from model output. "
+            "Raw output follows; possible causes: model returned non-JSON, unexpected formatting, or a missing system prompt."
+        )
+        raise ValueError(f"{suggestion} Output: {text}")
     return parsed
 
 
@@ -245,19 +290,23 @@ def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tu
         + (f"\nError: {r['error']}" if r.get("error") else "")
         for r in results
     )
-    response = Generation.call(
-        api_key=_get_api_key(),
-        model=config.dashscope_model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": f"User request: {user_message}\n\n{results_text}\n\nAnswer in clean Markdown."},
-        ],
-        result_format="message",
-        stream=False,
-        incremental_output=False,
-        temperature=0.2,
-        max_tokens=512,
-    )
+    try:
+        response = Generation.call(
+            api_key=_get_api_key(),
+            model=config.dashscope_model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": f"User request: {user_message}\n\n{results_text}\n\nAnswer in clean Markdown."},
+            ],
+            result_format="message",
+            stream=False,
+            incremental_output=False,
+            temperature=0.2,
+            max_tokens=512,
+        )
+    except Exception as exc:
+        logger.error("DashScope Generation.call failed: %s", exc, exc_info=True)
+        raise ValueError(_explain_dashscope_issue(exc)) from exc
     return _get_response_text(response), None
 
 
