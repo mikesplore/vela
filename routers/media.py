@@ -24,6 +24,7 @@ class NowPlayingInfo(BaseModel):
     album: Optional[str] = None
     art_url: Optional[str] = None
     status: Optional[str] = None
+    playing: Optional[bool] = None
     position_seconds: Optional[float] = None
     length_seconds: Optional[float] = None
 
@@ -188,12 +189,14 @@ async def now_playing() -> Any:
     # Filter out local file URLs; only return remote HTTP(S) URLs
     if art_url and art_url.startswith("file://"):
         art_url = None
+    status = _query_status(player=player)
     return NowPlayingInfo(
         title=_query_metadata("xesam:title", player=player),
         artist=_query_metadata("xesam:artist", player=player),
         album=_query_metadata("xesam:album", player=player),
         art_url=art_url,
-        status=_query_status(player=player),
+        status=status,
+        playing=status.lower() == "playing" if status else None,
         position_seconds=_query_position(player=player),
         length_seconds=_query_length(player=player),
     )

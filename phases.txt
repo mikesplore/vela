@@ -233,9 +233,9 @@ remotepc-agent/
 
 | Method | Path | Body | Description |
 |--------|------|------|-------------|
-| GET | `/clipboard` | — | Read current clipboard text |
-| POST | `/clipboard` | `{ "text": "..." }` | Set clipboard content |
-| DELETE | `/clipboard` | — | Clear clipboard |
+| GET | `/clipboard/read` | — | Read current clipboard text |
+| POST | `/clipboard/write` | `{ "text": "..." }` | Set clipboard content |
+| DELETE | `/clipboard/clear` | — | Clear clipboard |
 
 **`media.py` endpoints:**
 

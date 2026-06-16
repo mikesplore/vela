@@ -126,6 +126,20 @@ def _get_display_info() -> Optional[ResolutionInfo]:
 
 
 def _get_brightness() -> Optional[float]:
+    backlight_dir = Path("/sys/class/backlight")
+    if backlight_dir.exists():
+        for device in sorted(backlight_dir.glob("*")):
+            brightness_path = device / "brightness"
+            max_brightness_path = device / "max_brightness"
+            if brightness_path.exists() and max_brightness_path.exists():
+                try:
+                    current = int(brightness_path.read_text().strip())
+                    maximum = int(max_brightness_path.read_text().strip())
+                    if maximum > 0:
+                        return (current / maximum) * 100.0
+                except (OSError, ValueError):
+                    continue
+
     stdout, stderr, code = _run_command(["xrandr", "--verbose"])
     if code != 0 or not stdout:
         return None
@@ -133,6 +147,18 @@ def _get_brightness() -> Optional[float]:
     if not match:
         return None
     return float(match.group(1)) * 100.0
+
+
+def _set_brightness_with_backlight(value: int) -> tuple[bool, str]:
+    for cmd in (
+        ["brightnessctl", "set", f"{value}%"],
+        ["light", "-S", str(value)],
+        ["xbacklight", "-set", str(value)],
+    ):
+        stdout, stderr, code = _run_command(cmd)
+        if code == 0:
+            return True, f"brightness set to {value}"
+    return False, stderr or stdout or "failed to set brightness"
 
 
 def _run_lock() -> tuple[bool, str]:
@@ -363,15 +389,22 @@ async def display_brightness() -> Any:
 
 @router.post("/brightness", response_model=ValueResponse, dependencies=[Depends(get_current_user)])
 async def set_brightness(request: BrightnessRequest) -> Any:
-    """Set screen brightness using xrandr."""
+    """Set screen brightness using the first available backlight controller or XRandR fallback."""
+    success, message = _set_brightness_with_backlight(request.value)
+    if success:
+        return ValueResponse(success=True, message=message)
+
     output = _first_connected_output()
-    if not output:
-        raise HTTPException(status_code=500, detail="No connected display found")
-    value = request.value / 100.0
-    stdout, stderr, code = _run_command(["xrandr", "--output", output, "--brightness", str(value)])
-    if code != 0:
-        raise HTTPException(status_code=500, detail=stderr or stdout or "failed to set brightness")
-    return ValueResponse(success=True, message=f"brightness set to {request.value}")
+    if output:
+        value = request.value / 100.0
+        stdout, stderr, code = _run_command(["xrandr", "--output", output, "--brightness", str(value)])
+        if code == 0:
+            return ValueResponse(success=True, message=f"brightness set to {request.value}")
+        last_error = stderr or stdout or "failed to set brightness"
+    else:
+        last_error = "No connected display found"
+
+    raise HTTPException(status_code=500, detail=last_error)
 
 
 @router.get("/resolution", response_model=ResolutionInfo, dependencies=[Depends(get_current_user)])

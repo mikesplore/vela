@@ -78,6 +78,7 @@ async def test_media_now_playing(monkeypatch, async_client):
     assert payload["artist"] == "Test Artist"
     assert payload["art_url"] == "https://i.scdn.co/image/test"
     assert payload["status"] == "Playing"
+    assert payload["playing"] is True
     assert payload["position_seconds"] == 42.0
     assert payload["length_seconds"] == 120.0
 

@@ -121,6 +121,69 @@ async def test_display_monitor_state_reads_mutter_power_save(monkeypatch, async_
 
 
 @pytest.mark.anyio
+async def test_display_brightness_uses_backlight_fallback(monkeypatch, async_client):
+    token = create_access_token({"sub": "admin"})
+
+    calls = []
+
+    def fake_run_command(cmd, timeout=10):
+        calls.append(cmd)
+        if cmd[:2] == ["brightnessctl", "set"]:
+            return "", "", 0
+        return "", "", 1
+
+    monkeypatch.setattr(display_module, "_run_command", fake_run_command)
+    monkeypatch.setattr(display_module, "_first_connected_output", lambda: None)
+
+    response = await async_client.post(
+        "/display/brightness",
+        json={"value": 40},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert calls and calls[0][:2] == ["brightnessctl", "set"]
+
+
+@pytest.mark.anyio
+async def test_display_brightness_uses_xrandr_fallback_when_backlight_command_fails(monkeypatch, async_client):
+    token = create_access_token({"sub": "admin"})
+
+    def fake_run_command(cmd, timeout=10):
+        if cmd[:2] == ["xrandr", "--output"]:
+            return "", "", 0
+        return "", "", 1
+
+    monkeypatch.setattr(display_module, "_run_command", fake_run_command)
+    monkeypatch.setattr(display_module, "_first_connected_output", lambda: "HDMI-1")
+
+    response = await async_client.post(
+        "/display/brightness",
+        json={"value": 10},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+
+
+@pytest.mark.anyio
+async def test_display_brightness_reads_sysfs_value(monkeypatch, async_client):
+    token = create_access_token({"sub": "admin"})
+
+    monkeypatch.setattr(display_module, "_get_brightness", lambda: 55.0)
+
+    response = await async_client.get(
+        "/display/brightness",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"brightness": 55.0}
+
+
+@pytest.mark.anyio
 async def test_display_rotate_get_alias(monkeypatch, async_client):
     token = create_access_token({"sub": "admin"})
 
