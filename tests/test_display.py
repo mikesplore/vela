@@ -202,3 +202,25 @@ async def test_display_rotate_get_alias(monkeypatch, async_client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["success"] is True
+
+
+@pytest.mark.anyio
+async def test_display_night_light(monkeypatch, async_client):
+    token = create_access_token({"sub": "admin"})
+
+    def fake_run_command(cmd, timeout=10):
+        if "night-light-enabled" in cmd or "night-light-temperature" in cmd:
+            return "", "", 0
+        return "", "", 0
+
+    monkeypatch.setattr(display_module, "_run_command", fake_run_command)
+
+    response = await async_client.post(
+        "/display/night-light",
+        json={"enabled": True, "temperature": 4000},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True

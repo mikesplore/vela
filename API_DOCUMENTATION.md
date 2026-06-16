@@ -73,7 +73,7 @@ This file documents the implemented HTTP endpoints in this repository, the expec
   - Response: { "success": true, "message": "screen locked" }
 
 - POST /display/night-light
-  - Request JSON: { "enabled": true, "temperature": 4000 }
+  - Request JSON: { "enabled": true, "temperature": 4000 } (temperature: 1000–10000 Kelvin; omit for no change)
   - Response: { "success": true, "message": "night light updated" }
 
 ---
