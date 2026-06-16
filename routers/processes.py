@@ -1,5 +1,7 @@
 import getpass
+import re
 import subprocess
+from pathlib import Path
 from typing import Any, List, Optional
 
 import psutil
@@ -168,6 +170,17 @@ def _parse_xprop_title(raw: str) -> str:
     return ""
 
 
+def _parse_xprop_class(raw: str) -> str:
+    for line in raw.splitlines():
+        if "WM_CLASS" in line or "_NET_WM_CLASS" in line:
+            values = re.findall(r'"([^"]+)"', line)
+            if values:
+                class_name = values[-1].strip()
+                if class_name and class_name.lower() != "(null)":
+                    return class_name
+    return ""
+
+
 def _get_window_title(window_id: str) -> str:
     title, stderr, returncode = _run_command(["xdotool", "getwindowname", window_id])
     if returncode == 0 and title:
@@ -183,15 +196,65 @@ def _get_window_title(window_id: str) -> str:
     return "Untitled window"
 
 
+def _get_window_app_path() -> str:
+    """Get the absolute executable path of the active window's process."""
+    stdout, stderr, returncode = _run_command(["xprop", "-root", "_NET_CLIENT_LIST_STACKING"])
+    if returncode != 0 or not stdout:
+        return ""
+    
+    window_ids = re.findall(r'0x[0-9a-fA-F]+', stdout)
+    if not window_ids:
+        return ""
+    
+    window_ids.reverse()
+    
+    for wid in window_ids:
+        xwininfo_out, _, xwininfo_rc = _run_command(["xwininfo", "-id", wid])
+        if xwininfo_rc != 0:
+            continue
+        
+        if "Map State: IsViewable" not in xwininfo_out:
+            continue
+        
+        if "Width: 1" in xwininfo_out or "Height: 1" in xwininfo_out:
+            continue
+        
+        pid_out, _, pid_rc = _run_command(["xprop", "-id", wid, "_NET_WM_PID"])
+        if pid_rc != 0:
+            continue
+        
+        pid_match = re.search(r'\d+', pid_out)
+        if not pid_match:
+            continue
+        
+        pid = pid_match.group()
+        proc_path = f"/proc/{pid}/exe"
+        
+        try:
+            if Path(proc_path).exists():
+                return str(Path(proc_path).resolve())
+        except (OSError, Exception):
+            continue
+    
+    return ""
+
+
+class ActiveWindowResponse(BaseModel):
+    window_id: str
+    title: str
+    app_name: Optional[str] = None
+
+
 @router.get("/active-window", response_model=ActiveWindowResponse, dependencies=[Depends(get_current_user)])
 async def active_window() -> Any:
-    """Return the currently focused window title."""
+    """Return the currently focused window title and app executable path."""
     stdout, stderr, returncode = _run_command(["xdotool", "getwindowfocus"])
     if returncode != 0 or not stdout:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=stderr or "Could not determine active window")
     window_id = stdout.strip()
     title = _get_window_title(window_id)
-    return ActiveWindowResponse(window_id=window_id, title=title)
+    app_path = _get_window_app_path()
+    return ActiveWindowResponse(window_id=window_id, title=title, app_name=app_path or title)
 
 
 @router.post("/window/minimize", response_model=ActionResponse, dependencies=[Depends(get_current_user)])

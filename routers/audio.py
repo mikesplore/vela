@@ -1,5 +1,6 @@
 import re
 import subprocess
+from pathlib import Path
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -31,6 +32,11 @@ class AudioDevice(BaseModel):
     id: str
     name: str
     type: str
+
+
+class ActionResponse(BaseModel):
+    success: bool
+    message: str
 
 
 class OutputDeviceRequest(BaseModel):
@@ -65,7 +71,36 @@ def _get_volume() -> VolumeInfo:
     return _parse_volume(stdout)
 
 
-def _list_devices(command: List[str], dev_type: str) -> List[AudioDevice]:
+def _get_device_descriptions(command: List[str]) -> Dict[str, str]:
+    stdout, stderr, code = _run_command(command)
+    if code != 0 or not stdout:
+        return {}
+
+    descriptions: Dict[str, str] = {}
+    current_name: str | None = None
+    for line in stdout.splitlines():
+        raw_line = line.strip()
+        if raw_line.startswith("Name:"):
+            current_name = raw_line.split(":", 1)[1].strip()
+        elif raw_line.startswith("Description:") and current_name:
+            descriptions[current_name] = raw_line.split(":", 1)[1].strip()
+            current_name = None
+    return descriptions
+
+
+def _friendly_device_name(raw_name: str, description: str = "") -> str:
+    if description:
+        return description
+    cleaned = raw_name
+    if "." in cleaned:
+        cleaned = cleaned.split(".", 1)[-1]
+    cleaned = cleaned.replace("__", " ").replace("_", " ")
+    cleaned = cleaned.replace("sink", "").replace("source", "").strip()
+    return cleaned or raw_name
+
+
+def _list_devices(command: List[str], desc_command: List[str], dev_type: str) -> List[AudioDevice]:
+    descriptions = _get_device_descriptions(desc_command)
     stdout, stderr, code = _run_command(command)
     if code != 0 or not stdout:
         return []
@@ -73,8 +108,26 @@ def _list_devices(command: List[str], dev_type: str) -> List[AudioDevice]:
     for line in stdout.splitlines():
         parts = line.split("\t")
         if len(parts) >= 2:
-            devices.append(AudioDevice(id=parts[0], name=parts[1], type=dev_type))
+            raw_name = parts[1]
+            friendly_name = _friendly_device_name(raw_name, descriptions.get(raw_name, ""))
+            devices.append(AudioDevice(id=parts[0], name=friendly_name, type=dev_type))
     return devices
+
+
+def _play_beep() -> None:
+    if Path("/usr/share/sounds/freedesktop/stereo/bell.oga").exists():
+        _audio_command(["paplay", "/usr/share/sounds/freedesktop/stereo/bell.oga"])
+        return
+
+    stdout, stderr, code = _run_command(["canberra-gtk-play", "--id", "bell"])
+    if code == 0:
+        return
+
+    if Path("/usr/share/sounds/alsa/Front_Center.wav").exists():
+        _audio_command(["aplay", "/usr/share/sounds/alsa/Front_Center.wav"])
+        return
+
+    _audio_command(["bash", "-lc", "printf '\\a'"])
 
 
 @router.get("/volume", response_model=VolumeInfo, dependencies=[Depends(get_current_user)])
@@ -133,8 +186,8 @@ async def mute_audio_get(muted: bool) -> Any:
 @router.get("/devices", response_model=List[AudioDevice], dependencies=[Depends(get_current_user)])
 async def audio_devices() -> Any:
     """List available output and input audio devices."""
-    sinks = _list_devices(["pactl", "list", "short", "sinks"], "sink")
-    sources = _list_devices(["pactl", "list", "short", "sources"], "source")
+    sinks = _list_devices(["pactl", "list", "short", "sinks"], ["pactl", "list", "sinks"], "sink")
+    sources = _list_devices(["pactl", "list", "short", "sources"], ["pactl", "list", "sources"], "source")
     return sinks + sources
 
 
@@ -142,6 +195,13 @@ async def audio_devices() -> Any:
 async def audio_output_devices_alias() -> Any:
     """Alias for /audio/devices."""
     return await audio_devices()
+
+
+@router.post("/beep", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
+async def beep_audio() -> Any:
+    """Play a simple notification beep."""
+    _play_beep()
+    return ActionResponse(success=True, message="beep played")
 
 
 @router.post("/output-device", response_model=VolumeInfo, dependencies=[Depends(get_current_user)])

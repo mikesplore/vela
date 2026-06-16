@@ -111,7 +111,10 @@ This file documents the implemented HTTP endpoints in this repository, the expec
 
 - GET /audio/output-device?device_id=alsa_output.pci-... (alias)
 
-Note: `/audio/input-device` and `/audio/beep` are not implemented; microphone mute is in `/security`.
+- POST /audio/beep
+  - Response: { "success": true, "message": "beep played" }
+
+Note: `/audio/input-device` is not implemented; microphone mute is in `/security`.
 
 ---
 
@@ -130,7 +133,19 @@ Note: `/audio/input-device` and `/audio/beep` are not implemented; microphone mu
 - POST /power/hibernate
   - Response: { "success": true, "message": "hibernate initiated" }
 
-Note: scheduling and cancel endpoints from phases are not implemented (`/power/schedule-shutdown`, `/power/cancel-shutdown`, `/power/profile`).
+- POST /power/schedule-shutdown
+  - Request JSON: { "at": "2025-12-01T23:00:00" }
+  - Response: { "success": true, "message": "shutdown scheduled for 2025-12-01 23:00" }
+
+- POST /power/cancel-shutdown
+  - Response: { "success": true, "message": "shutdown canceled" }
+
+- GET /power/profile
+  - Response: { "success": true, "message": "current power profile retrieved", "profile": "balanced" }
+
+- POST /power/profile
+  - Request JSON: { "profile": "performance" }
+  - Response: { "success": true, "message": "profile set to performance", "profile": "performance" }
 
 ---
 
@@ -282,7 +297,7 @@ Note: `/media/stop` not implemented.
   - Response: { "success": true, "message": "launched" }
 
 - GET /processes/active-window
-  - Response: { "title": "Focus Window Title" }
+  - Response: { "window_id": "1234", "title": "Window Title", "app_name": "/path/to/executable" }
 
 - POST /processes/window/minimize and /processes/window/close
   - Request JSON: { "window_id": "..." }

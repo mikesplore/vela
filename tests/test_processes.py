@@ -1,4 +1,6 @@
 import subprocess
+from pathlib import Path
+from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 from auth import create_access_token
@@ -172,6 +174,7 @@ async def test_window_actions_use_xdotool(monkeypatch, async_client):
         return "", "", 0
 
     monkeypatch.setattr(processes_module, "_run_command", fake_run_command)
+    monkeypatch.setattr(processes_module, "_get_window_app_path", lambda: "/usr/bin/testapp")
 
     active_response = await async_client.get(
         "/processes/active-window",
@@ -181,6 +184,7 @@ async def test_window_actions_use_xdotool(monkeypatch, async_client):
     active_payload = active_response.json()
     assert active_payload["window_id"] == "1234"
     assert active_payload["title"] == "Test Window"
+    assert active_payload["app_name"] == "/usr/bin/testapp"
 
     minimize_response = await async_client.post(
         "/processes/window/minimize",
