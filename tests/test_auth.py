@@ -32,7 +32,7 @@ async def test_token_issuance_invalid_credentials():
         )
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid username or password"
+    assert response.json()["message"] == "Invalid username or password"
 
 
 @pytest.mark.anyio
@@ -42,7 +42,7 @@ async def test_protected_route_rejects_without_token():
         response = await client.get("/auth/me")
 
     assert response.status_code == 401
-    assert response.json()["detail"] in {"Not authenticated", "Could not validate credentials"}
+    assert response.json()["message"] in {"Not authenticated", "Could not validate credentials"}
 
 
 @pytest.mark.anyio

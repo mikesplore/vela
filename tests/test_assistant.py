@@ -26,7 +26,7 @@ async def test_assistant_chat_requires_api_key(async_client):
             headers=_auth_headers(),
         )
         assert response.status_code == 503
-        assert "DashScope API key" in response.json()["detail"]
+        assert "DashScope API key" in response.json()["message"]
     finally:
         monkeypatch.undo()
 

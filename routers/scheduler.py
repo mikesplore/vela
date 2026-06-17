@@ -74,17 +74,12 @@ def _serialize_job(job) -> SchedulerJobInfo:
 async def create_job(request: SchedulerCreateRequest) -> Any:
     """Schedule a command to run at a specific time or on a cron schedule."""
     try:
-        job_kwargs = {
-            "command": request.command,
-            "args": request.args,
-            "recurring": request.recurring,
-        }
         if request.recurring:
             trigger = CronTrigger.from_crontab(request.recurring)
             job = scheduler.add_job(
                 _command_runner,
                 trigger=trigger,
-                kwargs={"command": request.command, "args": request.args, "recurring": request.recurring},
+                kwargs={"command": request.command, "args": request.args},
                 replace_existing=False,
             )
         else:
