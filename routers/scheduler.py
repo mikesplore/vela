@@ -18,6 +18,25 @@ scheduler = AsyncIOScheduler(jobstores=jobstore, job_defaults={"coalesce": False
 router = APIRouter(prefix="/scheduler", tags=["scheduler"])
 
 
+def get_scheduler():
+    """Call scheduler.start() inside your app's lifespan, e.g.:
+
+    from contextlib import asynccontextmanager
+    from fastapi import FastAPI
+    from scheduler import scheduler
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        scheduler.start()
+        yield
+        scheduler.shutdown()
+
+    app = FastAPI(lifespan=lifespan)
+    app.include_router(router)
+    """
+    return scheduler
+
+
 def _run_command(command: list[str]) -> tuple[str, str, int]:
     import subprocess
 
@@ -119,16 +138,10 @@ async def run_job_now(task_id: str) -> Any:
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     try:
-        scheduler.add_job(
-            _command_runner,
-            trigger="date",
-            run_date=datetime.now(timezone.utc),
-            kwargs={
-                "command": job.kwargs.get("command", ""),
-                "args": job.kwargs.get("args", []),
-            },
-            replace_existing=False,
-        )
+        # Directly invoke the job's function instead of spawning a new scheduled job.
+        # This avoids orphaned one-off jobs piling up in the job store and works
+        # regardless of whether the scheduler is running.
+        job.func(**job.kwargs)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
     return SchedulerActionResponse(success=True, message=f"Triggered task {task_id} immediately")

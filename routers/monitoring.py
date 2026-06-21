@@ -1,4 +1,6 @@
 import asyncio
+import glob
+import os
 import subprocess
 import time
 from typing import Any, Dict, List, Optional
@@ -74,6 +76,31 @@ class BatteryInfo(BaseModel):
     percent: Optional[float]
     plugged_in: Optional[bool]
     secs_left: Optional[int]
+
+
+class SingleBatteryHealth(BaseModel):
+    name: str
+    path: str
+    present: bool
+    cycle_count: Optional[int]
+    design_capacity_wh: Optional[float]
+    current_max_capacity_wh: Optional[float]
+    health_percent: Optional[float]
+    manufacturer: Optional[str]
+    model_name: Optional[str]
+    serial_number: Optional[str]
+    technology: Optional[str]
+    voltage_now_uv: Optional[int]
+    charge_control_start_threshold: Optional[int]
+    charge_control_stop_threshold: Optional[int]
+
+
+class BatteryHealthInfo(BaseModel):
+    """Aggregated battery health across all detected batteries."""
+
+    batteries: List[SingleBatteryHealth]
+    total_cycle_count: Optional[int]
+    overall_health_percent: Optional[float]
 
 
 class ProcessInfo(BaseModel):
@@ -232,6 +259,87 @@ def _get_battery_status() -> BatteryInfo:
     )
 
 
+def _read_sysfs_int(path: str) -> Optional[int]:
+    try:
+        with open(path, "r") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _read_sysfs_str(path: str) -> Optional[str]:
+    try:
+        with open(path, "r") as f:
+            val = f.read().strip()
+            return val if val else None
+    except OSError:
+        return None
+
+
+def _get_battery_health() -> BatteryHealthInfo:
+    batteries: List[SingleBatteryHealth] = []
+    total_cycle: Optional[int] = None
+    health_values: List[float] = []
+
+    for bat_dir in sorted(glob.glob("/sys/class/power_supply/BAT*")):
+        name = os.path.basename(bat_dir)
+        present_val = _read_sysfs_int(os.path.join(bat_dir, "present"))
+        present = present_val == 1 if present_val is not None else True
+
+        cycle_count = _read_sysfs_int(os.path.join(bat_dir, "cycle_count"))
+        design_cap_uwh = _read_sysfs_int(os.path.join(bat_dir, "energy_full_design"))
+        current_cap_uwh = _read_sysfs_int(os.path.join(bat_dir, "energy_full"))
+
+        design_wh = round(design_cap_uwh / 1_000_000, 2) if design_cap_uwh is not None else None
+        current_wh = round(current_cap_uwh / 1_000_000, 2) if current_cap_uwh is not None else None
+
+        health_pct: Optional[float] = None
+        if design_cap_uwh is not None and design_cap_uwh > 0 and current_cap_uwh is not None:
+            health_pct = round((current_cap_uwh / design_cap_uwh) * 100, 2)
+
+        if health_pct is not None:
+            health_values.append(health_pct)
+
+        if cycle_count is not None:
+            if total_cycle is not None:
+                total_cycle += cycle_count
+            else:
+                total_cycle = cycle_count
+
+        batteries.append(
+            SingleBatteryHealth(
+                name=name,
+                path=bat_dir,
+                present=present,
+                cycle_count=cycle_count,
+                design_capacity_wh=design_wh,
+                current_max_capacity_wh=current_wh,
+                health_percent=health_pct,
+                manufacturer=_read_sysfs_str(os.path.join(bat_dir, "manufacturer")),
+                model_name=_read_sysfs_str(os.path.join(bat_dir, "model_name")),
+                serial_number=_read_sysfs_str(os.path.join(bat_dir, "serial_number")),
+                technology=_read_sysfs_str(os.path.join(bat_dir, "technology")),
+                voltage_now_uv=_read_sysfs_int(os.path.join(bat_dir, "voltage_now")),
+                charge_control_start_threshold=_read_sysfs_int(
+                    os.path.join(bat_dir, "charge_control_start_threshold")
+                ),
+                charge_control_stop_threshold=_read_sysfs_int(
+                    os.path.join(bat_dir, "charge_control_stop_threshold")
+                ),
+            )
+        )
+
+    overall_health: Optional[float] = None
+    if health_values:
+        overall_health = round(sum(health_values) / len(health_values), 2)
+
+    return BatteryHealthInfo(
+        batteries=batteries,
+        total_cycle_count=total_cycle,
+        overall_health_percent=overall_health,
+    )
+
+
 def _get_top_processes(limit: int = 20) -> ProcessMetrics:
     processes: List[ProcessInfo] = []
     for proc in psutil.process_iter(attrs=["pid", "name", "username"]):
@@ -339,6 +447,18 @@ async def monitor_fans() -> Any:
 async def monitor_battery() -> Any:
     try:
         return _get_battery_status()
+    except Exception as exc:
+        return _error_response(str(exc))
+
+
+@router.get(
+    "/battery-health",
+    response_model=BatteryHealthInfo,
+    dependencies=[Depends(get_current_user)],
+)
+async def monitor_battery_health() -> Any:
+    try:
+        return _get_battery_health()
     except Exception as exc:
         return _error_response(str(exc))
 

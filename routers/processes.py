@@ -75,14 +75,18 @@ async def list_processes() -> Any:
     for proc in psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent", "cmdline", "status"]):
         try:
             with proc.oneshot():
+                # Safely capture cmdline to avoid NoneType iteration errors
+                raw_cmdline = proc.info.get("cmdline")
+                cmdline_list = [str(item) for item in raw_cmdline if item] if raw_cmdline else []
+
                 processes.append(
                     ProcessInfo(
                         pid=proc.pid,
-                        name=proc.info.get("name") or "",
+                        name=proc.info.get("name") or "Unknown",
                         cpu_percent=float(proc.info.get("cpu_percent", 0.0)) if proc.info.get("cpu_percent") is not None else 0.0,
                         memory_percent=float(proc.info.get("memory_percent", 0.0)) if proc.info.get("memory_percent") is not None else 0.0,
                         status=proc.info.get("status"),
-                        cmdline=[str(item) for item in proc.info.get("cmdline", []) if item],
+                        cmdline=cmdline_list,
                     )
                 )
         except (psutil.NoSuchProcess, psutil.AccessDenied):

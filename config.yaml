@@ -5,7 +5,7 @@ token_expire_minutes: 1440
 allowed_origins: []
 allowed_ips: []
 allowed_base_dirs: []
-rate_limit_default: 100/minute
+rate_limit_default: 150/minute
 route_rate_limits:
   /auth/token: 10/minute
   /ping: 60/minute

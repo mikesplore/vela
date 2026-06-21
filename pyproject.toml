@@ -36,7 +36,7 @@ vela-agent = "agent:main"
 vela-init = "installer:main"
 
 [tool.setuptools]
-py-modules = ["agent", "auth", "config", "dependencies", "installer", "main", "middleware", "rate_limiter"]
+py-modules = ["agent", "auth", "config", "dependencies", "errors", "installer", "main", "middleware", "rate_limiter"]
 
 [tool.setuptools.packages.find]
 include = ["routers*"]

@@ -152,7 +152,63 @@ Note: `/audio/input-device` is not implemented; microphone mute is in `/security
 **Filesystem** (prefix: /fs)
 
 - GET /fs/list?path=/home/user
-  - Response: { "files": [ { "name":"file.txt","path":"/...","type":"file","size":1234,"modified":163... }, ... ] }
+  - Response: Tree-friendly directory listing with parent navigation:
+    ```json
+    {
+      "files": [
+        {
+          "name": "folder1",
+          "path": "/home/user/folder1",
+          "type": "directory",
+          "size": 4096,
+          "modified": 1634567890.0,
+          "has_children": true,
+          "children_count": 5
+        },
+        {
+          "name": "file.txt",
+          "path": "/home/user/file.txt",
+          "type": "file",
+          "size": 1234,
+          "modified": 1634567890.0,
+          "extension": ".txt"
+        }
+      ],
+      "current_path": "/home/user",
+      "parent_path": "/home",
+      "total_items": 2
+    }
+    ```
+  - Folders appear first (sorted), followed by files
+  - `has_children` & `children_count`: for folders only (indicates if folder can be explored)
+  - `parent_path`: for easy upward navigation in tree
+  - `extension`: for files only (file type indicator)
+
+- GET /fs/tree?path=/home/user&max_depth=1
+  - Hierarchical tree structure for folder visualization:
+    ```json
+    {
+      "root": {
+        "name": "user",
+        "path": "/home/user",
+        "type": "directory",
+        "has_children": true,
+        "children_count": 15
+      },
+      "children": [
+        {"name": "folder1", "path": "...", "type": "directory", "has_children": true, "children_count": 5},
+        {"name": "file.txt", "path": "...", "type": "file", "has_children": false, "children_count": 0}
+      ],
+      "breadcrumbs": [
+        {"name": "/", "path": "/"},
+        {"name": "home", "path": "/home"},
+        {"name": "user", "path": "/home/user"}
+      ]
+    }
+    ```
+  - `breadcrumbs`: Full path navigation for tree UI
+  - `max_depth`: 1-3 for performance optimization
+  - Ideal for building interactive file explorers
 
 - GET /fs/download?path=/home/user/file.txt
   - Response: binary file download (Content-Disposition attachment).
@@ -174,7 +230,7 @@ Note: `/audio/input-device` is not implemented; microphone mute is in `/security
   - Response: { "success": true, "message": "Renamed ..." }
 
 - GET /fs/search?query=report&path=/home
-  - Response: same shape as /fs/list with matching files.
+  - Response: same shape as /fs/list with matching files and folders (tree-enabled).
 
 - GET /fs/disk-usage
   - Response: { "usage": [ { "mountpoint":"/","total":...,"used":...,"free":...,"percent":...,"filesystem":"ext4" }, ... ] }

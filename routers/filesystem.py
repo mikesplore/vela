@@ -2,6 +2,8 @@ import os
 import shutil
 import subprocess
 import zipfile
+from typing import Optional
+from pydantic import BaseModel, Field
 from pathlib import Path
 from typing import Any, List
 
@@ -43,27 +45,52 @@ def _validate_path(path_str: str, must_exist: bool = False) -> Path:
     return path
 
 
-def _file_entry(path: Path) -> dict[str, Any]:
+def _file_entry(path: Path, include_tree_meta: bool = True) -> dict[str, Any]:
+    """Create a file/folder entry with optional tree metadata."""
     stat = path.stat()
-    return {
+    is_dir = path.is_dir()
+    entry = {
         "name": path.name,
         "path": str(path),
-        "type": "directory" if path.is_dir() else "file",
+        "type": "directory" if is_dir else "file",
         "size": stat.st_size,
         "modified": stat.st_mtime,
     }
+    
+    # Add tree navigation metadata
+    if include_tree_meta:
+        if is_dir:
+            try:
+                # Count immediate children (files and folders)
+                children = list(path.iterdir())
+                entry["has_children"] = len(children) > 0
+                entry["children_count"] = len(children)
+            except (OSError, PermissionError):
+                entry["has_children"] = False
+                entry["children_count"] = 0
+        else:
+            # For files, add extension info for better filtering
+            entry["extension"] = path.suffix.lower() if path.suffix else ""
+    
+    return entry
 
 
 class FileEntry(BaseModel):
     name: str
     path: str
-    type: str
+    type: str  # "file" or "directory"
     size: int
     modified: float
+    has_children: bool | None = None  # Only for directories
+    children_count: int | None = None  # Only for directories
+    extension: str | None = None  # Only for files
 
 
 class FileListResponse(BaseModel):
     files: List[FileEntry]
+    current_path: str  # The path being listed
+    parent_path: str | None  # Parent directory path for navigation
+    total_items: int  # Total items in the current directory
 
 
 class FileActionResponse(BaseModel):
@@ -95,13 +122,125 @@ class UnzipRequest(BaseModel):
 
 
 @router.get("/list", response_model=FileListResponse, dependencies=[Depends(get_current_user)])
-async def list_files(path: str = Query(".")) -> Any:
-    """List directory contents for a given path."""
+async def list_files(
+    path: str = Query("."), 
+    show_hidden: bool = Query(False)  # 👈 1. Accept the boolean toggle parameter here
+) -> Any:
+    """List directory contents (files and folders) for tree navigation."""
     target = _validate_path(path, must_exist=True)
     if not target.is_dir():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Path must be a directory")
-    files = [_file_entry(child) for child in sorted(target.iterdir(), key=lambda p: p.name)]
-    return FileListResponse(files=[FileEntry(**entry) for entry in files])
+    
+    # Get parent path for navigation (if not root)
+    parent_path = None
+    try:
+        parent = target.parent
+        if parent != target and _is_allowed(parent):  # Not root and is allowed
+            parent_path = str(parent)
+    except (OSError, ValueError):
+        pass
+    
+    # List all items (both files and folders), sorted with folders first
+    items = []
+    try:
+        children = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        for child in children:
+            # 👈 2. THE FIX: If show_hidden is False, skip items starting with a dot (.)
+            if not show_hidden and child.name.startswith("."):
+                continue
+                
+            try:
+                entry_dict = _file_entry(child, include_tree_meta=True)
+                items.append(FileEntry(**entry_dict))
+            except (OSError, PermissionError):
+                # Skip items we can't access
+                continue
+    except (OSError, PermissionError) as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Cannot read directory: {exc}")
+    
+    return FileListResponse(
+        files=items,
+        current_path=str(target),
+        parent_path=parent_path,
+        total_items=len(items)
+    )
+
+
+class TreeNode(BaseModel):
+    name: str
+    path: str
+    type: str  # "directory" or "file"
+    size: int
+    modified: float
+    
+    # Crucial Fixes here: Allow them to swallow None gracefully
+    has_children: Optional[bool] = Field(default=None)
+    children_count: Optional[int] = Field(default=None)
+    
+    # Extension can stay optional as well
+    extension: Optional[str] = None
+
+
+class TreeResponse(BaseModel):
+    """Response for tree-based folder navigation."""
+    root: TreeNode
+    children: List[TreeNode]
+    breadcrumbs: List[dict[str, str]]  # Path navigation breadcrumbs
+
+
+@router.get("/tree", response_model=TreeResponse, dependencies=[Depends(get_current_user)])
+async def get_directory_tree(path: str = Query("."), max_depth: int = Query(1, ge=1, le=3)) -> Any:
+    """Get directory tree structure for folder navigation.
+    
+    max_depth: How many levels deep to traverse (1-3 for performance).
+    """
+    target = _validate_path(path, must_exist=True)
+    if not target.is_dir():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Path must be a directory")
+    
+    # Build breadcrumbs for current path
+    breadcrumbs = []
+    current = target
+    allowed_dirs = [Path(p).expanduser().resolve() for p in config.allowed_base_dirs] or [Path("/")]
+    
+    while current != current.parent:
+        breadcrumbs.insert(0, {"name": current.name or "/", "path": str(current)})
+        if current in allowed_dirs:
+            break
+        current = current.parent
+    
+    # Create root node
+    root_entry = _file_entry(target, include_tree_meta=True)
+    root_node = TreeNode(
+        name=target.name or str(target),
+        path=str(target),
+        type="directory",
+        **{k: root_entry.get(k) for k in ["has_children", "children_count", "size", "modified"]}
+    )
+    
+    # Get children
+    children = []
+    try:
+        items = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        for child in items:
+            try:
+                entry_dict = _file_entry(child, include_tree_meta=True)
+                children.append(TreeNode(
+                    name=child.name,
+                    path=str(child),
+                    type=entry_dict["type"],
+                    **{k: entry_dict.get(k) for k in ["has_children", "children_count", "size", "modified"]}
+                ))
+            except (OSError, PermissionError):
+                continue
+    except (OSError, PermissionError) as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Cannot read directory: {exc}")
+    
+    return TreeResponse(
+        root=root_node,
+        children=children,
+        breadcrumbs=breadcrumbs
+    )
 
 
 @router.get("/download", dependencies=[Depends(get_current_user)])
@@ -135,16 +274,31 @@ async def upload_file(path: str = Form(...), file: UploadFile = File(...)) -> An
 
 @router.delete("/delete", response_model=FileActionResponse, dependencies=[Depends(get_current_user)])
 async def delete_path(request: PathRequest) -> Any:
-    """Delete a file or directory."""
+    """Permanently delete a file, symlink, or directory safely."""
     target = _validate_path(request.path, must_exist=True)
+    
     try:
-        if target.is_dir():
+        # Check if it's a directory, but ensure it's NOT a symlink
+        if target.is_dir() and not target.is_symlink():
             shutil.rmtree(target)
+            message = f"Successfully deleted directory: {target.name}"
         else:
+            # Safely deletes files, symlinks, broken links, or sockets
             target.unlink()
-    except OSError as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
-    return FileActionResponse(success=True, message=f"Deleted {target}")
+            message = f"Successfully deleted file: {target.name}"
+            
+        return FileActionResponse(success=True, message=message)
+        
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission denied: Unable to delete '{target.name}'"
+        )
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail=f"Failed to delete target: {str(exc)}"
+        )
 
 
 @router.post("/mkdir", response_model=FileActionResponse, dependencies=[Depends(get_current_user)])
@@ -175,18 +329,53 @@ async def rename_path(request: RenameRequest) -> Any:
     return FileActionResponse(success=True, message=f"Renamed {source} to {destination}")
 
 
+class SystemConfigResponse(BaseModel):
+    home_directory: str
+    username: str
+
+@router.get("/config", response_model=SystemConfigResponse, dependencies=[Depends(get_current_user)])
+async def get_system_config() -> Any:
+    """Retrieve runtime host environment configurations for app initialization."""
+    home_path = Path.home()
+    return SystemConfigResponse(
+        home_directory=str(home_path),
+        username=home_path.name
+    )
+
+
 @router.get("/search", response_model=FileListResponse, dependencies=[Depends(get_current_user)])
 async def search_files(query: str = Query(...), path: str = Query(".")) -> Any:
-    """Search for files and directories by name."""
+    """Search for files and directories by name with tree-enabled results."""
     target = _validate_path(path, must_exist=True)
     if not target.is_dir():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Path must be a directory")
-    matches: List[dict[str, Any]] = []
-    for root, dirs, files in os.walk(target):
-        for name in dirs + files:
-            if query.lower() in name.lower():
-                matches.append(_file_entry(Path(root) / name))
-    return FileListResponse(files=[FileEntry(**entry) for entry in matches])
+        
+    
+    matches: List[FileEntry] = []
+    try:
+        for root, dirs, files in os.walk(target):
+            # Search in files
+            for name in files:
+                if query.lower() in name.lower():
+                    entry_dict = _file_entry(Path(root) / name)
+                    matches.append(FileEntry(**entry_dict))
+            # Search in directories
+            for name in dirs:
+                if query.lower() in name.lower():
+                    entry_dict = _file_entry(Path(root) / name)
+                    matches.append(FileEntry(**entry_dict))
+    except (OSError, PermissionError) as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Search failed: {exc}")
+    
+    # Sort results: folders first, then by name
+    matches.sort(key=lambda x: (x.type != "directory", x.name.lower()))
+    
+    return FileListResponse(
+        files=matches,
+        current_path=str(target),
+        parent_path=None,
+        total_items=len(matches)
+    )
 
 
 class DiskUsageEntry(BaseModel):
