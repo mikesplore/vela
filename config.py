@@ -1,79 +1,38 @@
+import logging
 import os
+import re
 from pathlib import Path
 from typing import Dict, List
 
 import yaml
 from dotenv import load_dotenv
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
+from prompts import DEFAULT_ASSISTANT_SYSTEM_PROMPT
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "vela"
 
+# NOTE: load_dotenv() defaults to override=False, so the FIRST path that
+# defines a given var wins. Order here is intentional, highest priority first:
+#   1. ./.env                       (local dev override)
+#   2. ~/.config/vela/.env          (per-user installed config)
+#   3. <package dir>/.env           (bundled fallback, usually absent)
 for dotenv_path in (Path.cwd() / ".env", DEFAULT_CONFIG_DIR / ".env", BASE_DIR / ".env"):
     load_dotenv(dotenv_path)
 
-DEFAULT_ASSISTANT_SYSTEM_PROMPT = """Identity & Voice
-You are Vela, a sophisticated, calm, and highly capable AI assistant designed to control a Linux PC through a remote relay.
-Tone: Concise, professional, and slightly technical.
-Format: Respond in clean Markdown. Never return raw JSON to the user.
-Core Directive: You act as the brain between the user's natural language and the PC Agent's API. Your job is to translate intent into precise tool calls.
-Operating Principles
-Action-First: If the user asks for information or an action, call the relevant tool immediately. Do not ask for permission for safe, read-only tasks (e.g., checking battery, listing files).
-Safety Gates:
-Destructive Actions: (Shutdown, Restart, Hibernate, Delete File, Kill Process) MUST require a quick confirmation from the user (e.g., "Are you sure you want to shut down?").
-Input Control: (Typing text, moving mouse) Mention that you are about to take physical control of the input devices before execution.
-Relay Awareness: You communicate with the PC via a relay. If a tool returns a connection error, explain that the "Remote Relay is unreachable" rather than a generic "Internet error."
-Data Translation:
-Bytes to Human: Convert values like 1073741824 to 1 GB.
-Percentages: Round metrics to the nearest whole number (e.g., 12.56% -> 13%).
-Uptime: Convert seconds into X hours, Y minutes.
-Conciseness: After executing a command, confirm it in one sentence. Example: "I've set your volume to 50%."
-Tool-Calling Strategy
-Chaining: If a user says "Get me ready for bed," you should chain multiple calls: set_brightness(10), set_volume(0), turn_monitor_off(), and lock_screen().
-Parameter Precision:
-When the user says "Turn it up a bit," assume a step of 10 for volume.
-When searching files, always ask for a path if none is provided.
-Error Recovery: If a tool fails (e.g., "Process not found"), inform the user and ask if they would like to see the current process list instead.
-Tool Definitions Reference
-1. System Monitoring (Read-Only)
-get_system_info: Detailed hardware/OS snapshot.
-get_snapshot: Live metrics (CPU, RAM, Temp, Network).
-get_battery: Charge %, plugged status, and time remaining.
-get_top_processes: Identifying resource-heavy apps.
-2. Media & Audio
-get_media_status: Current song/video, artist, and playback state.
-toggle_play_pause, next_track, previous_track.
-set_volume, set_mute.
-3. Display & Environment
-take_screenshot: Returning a visual of the desktop.
-set_brightness.
-lock_screen, turn_monitor_off, turn_monitor_on.
-4. Direct Control (Input & Apps)
-type_text: Injecting keyboard strings.
-launch_application: Opening apps by command name (e.g., firefox, vlc).
-kill_process_by_name.
-5. Files & Network
-list_directory: Browsing the filesystem.
-run_speed_test: Measuring bandwidth.
-Response Examples
-User: "Is my battery okay?"
-Vela: [Calls get_battery] "Your battery is at 87% and discharging. You have about 4 hours of usage remaining."
-User: "I'm leaving for an hour."
-Vela: [Calls lock_screen, set_mute(true)] "I've locked your PC and muted the audio. Have a safe trip."
-User: "What's playing right now?"
-Vela: [Calls get_media_status] "You're listening to 'Lithe - Hold Out' ft. FRVRFRIDAY. It's currently playing."
-Constraints
-Do not attempt to run shell commands that aren't mapped to tools.
-Do not hallucinate capabilities; if a specific hardware control isn't in your toolset, politely inform the user.
-Always prioritize the X-API-Key authentication context provided by the backend.
-"""
+_RATE_LIMIT_RE = re.compile(r"\d+/(second|minute|hour|day)")
 
 
 class Config(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8765
-    secret_key: str = "change-me"
+    # No default on purpose: a placeholder secret here would be a silent
+    # security hole. Must be supplied via VELA_SECRET_KEY, .env, or config.yaml.
+    secret_key: str
     token_expire_minutes: int = 1440
     allowed_origins: List[str] = []
     allowed_ips: List[str] = []
@@ -95,6 +54,79 @@ class Config(BaseSettings):
         "env_prefix": "VELA_",
         "case_sensitive": False,
     }
+
+    # ---- validators -------------------------------------------------
+
+    @field_validator("secret_key")
+    @classmethod
+    def secret_key_must_be_strong(cls, v: str) -> str:
+        if v.lower() in {"change-me", "changeme", "secret", ""}:
+            raise ValueError(
+                "VELA_SECRET_KEY is a placeholder/empty value. Set a real "
+                "random secret (32+ chars), e.g. `openssl rand -hex 32`."
+            )
+        if len(v) < 32:
+            raise ValueError("VELA_SECRET_KEY should be at least 32 characters long.")
+        return v
+
+    @field_validator("password_hash")
+    @classmethod
+    def password_must_be_hashed(cls, v: str) -> str:
+        # Sanity check, not a full format validator: catches the common
+        # mistake of pasting a plaintext password instead of a bcrypt/
+        # argon2/pbkdf2_sha256 hash (all of which start with '$').
+        if not v.startswith("$") or len(v) < 20:
+            raise ValueError(
+                "password_hash doesn't look like a hashed value (expected "
+                "something like a bcrypt/argon2 hash starting with '$'). "
+                "Did you set a plaintext password by mistake?"
+            )
+        return v
+
+    @field_validator("port")
+    @classmethod
+    def port_in_range(cls, v: int) -> int:
+        if not (1 <= v <= 65535):
+            raise ValueError("port must be between 1 and 65535.")
+        return v
+
+    @field_validator("token_expire_minutes", "assistant_action_timeout_seconds")
+    @classmethod
+    def must_be_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("must be a positive number of minutes/seconds.")
+        return v
+
+    @field_validator("rate_limit_default")
+    @classmethod
+    def rate_limit_format(cls, v: str) -> str:
+        if not _RATE_LIMIT_RE.fullmatch(v):
+            raise ValueError(
+                f"rate_limit_default '{v}' must match '<number>/<second|minute|hour|day>' "
+                "(e.g. '100/minute')."
+            )
+        return v
+
+    @field_validator("route_rate_limits")
+    @classmethod
+    def route_rate_limits_format(cls, v: Dict[str, str]) -> Dict[str, str]:
+        bad = {route: limit for route, limit in v.items() if not _RATE_LIMIT_RE.fullmatch(limit)}
+        if bad:
+            raise ValueError(f"Invalid rate limit format for routes: {bad}")
+        return v
+
+    @field_validator("allowed_origins", "allowed_ips", "allowed_base_dirs")
+    @classmethod
+    def warn_if_empty(cls, v: List[str], info) -> List[str]:
+        if not v:
+            logger.warning(
+                "%s is empty — confirm downstream code treats this as "
+                "'deny all' (fail-closed), not 'allow all'.",
+                info.field_name,
+            )
+        return v
+
+    # ---- settings sources --------------------------------------------
 
     def settings_customise_sources(
         settings_cls,

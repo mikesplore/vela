@@ -282,7 +282,8 @@ def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tu
 
     system = (
         "You are Vela. The user asked for one or more actions. "
-        "Use the tool results below to write a single concise Markdown reply. "
+        "Use the tool results below to write a single concise Markdown reply optimized for an Android app screen. "
+        "Use small headers (###, ####) and compact lists. "
         "Do not return raw JSON. If any action failed, say so clearly."
     )
     results_text = "\n".join(

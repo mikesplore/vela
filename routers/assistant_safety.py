@@ -248,17 +248,17 @@ def build_confirmation_card(tool_calls: list[dict[str, Any]], requires_auth: boo
     first_summary = action_details[0] if action_details else "unknown action"
 
     if requires_auth:
-        title = "High-Risk Action Confirmation"
+        title = "Auth Required"
         prompt_text = f"High-risk action pending: {first_summary}"
         if len(tool_calls) > 1:
-            prompt_text += f" and {len(tool_calls) - 1} additional action(s)"
-        prompt_text += ". Enter your PIN to continue, or say cancel."
+            prompt_text += f" and {len(tool_calls) - 1} more"
+        prompt_text += ". Enter PIN to continue."
     else:
-        title = "Action Confirmation"
+        title = "Confirm Action"
         prompt_text = f"Confirmation required: {first_summary}"
         if len(tool_calls) > 1:
-            prompt_text += f" and {len(tool_calls) - 1} additional action(s)"
-        prompt_text += ". Reply yes to continue or cancel to stop."
+            prompt_text += f" and {len(tool_calls) - 1} more"
+        prompt_text += ". Reply yes to continue."
 
     return ConfirmationCard(
         title=title,
@@ -281,10 +281,10 @@ def build_pending_prompt(tool_calls: list[dict[str, Any]], requires_auth: bool) 
     tool_input = first_call.get("tool_input") or {}
     summary = _tool_summary(tool_name, tool_input)
     if len(tool_calls) > 1:
-        summary = f"{summary} and {len(tool_calls) - 1} additional action(s)"
+        summary = f"{summary} (+{len(tool_calls) - 1})"
     if requires_auth:
-        return f"High-risk action pending: {summary}. Enter your PIN to continue, or say cancel."
-    return f"Confirmation required: {summary}. Reply yes to continue or cancel to stop."
+        return f"High-risk action pending: {summary}. Enter PIN to continue."
+    return f"Confirm action: {summary}. Reply yes to continue."
 
 
 def register_pending_action(user_id: str, session_id: str, user_message: str, tool_calls: list[dict[str, Any]], requires_auth: bool) -> PendingAction:

@@ -35,11 +35,11 @@ class IPAllowlistMiddleware(BaseHTTPMiddleware):
         self.allowed_ips = allowed_ips or []
 
     async def dispatch(self, request: Request, call_next):
-        if self.allowed_ips:
-            client = request.client
-            if not client or client.host not in self.allowed_ips:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="IP address is not allowed",
-                )
+        client = request.client
+        if not client or client.host not in self.allowed_ips:
+            logger.warning("Access denied for IP: %s", client.host if client else "unknown")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="IP address is not allowed",
+            )
         return await call_next(request)
