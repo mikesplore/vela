@@ -1,10 +1,14 @@
 import argparse
 import getpass
 import os
+import socket
 from pathlib import Path
 from secrets import token_urlsafe
+from urllib.parse import urlparse
 
 import bcrypt
+import requests
+import yaml
 
 
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "vela"
@@ -21,48 +25,71 @@ def _write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _config_yaml(username: str, password_hash: str, secret_key: str) -> str:
-    return f"""host: 0.0.0.0
-port: 8765
-secret_key: {secret_key}
-token_expire_minutes: 1440
-allowed_origins: []
-allowed_ips: []
-allowed_base_dirs: []
-rate_limit_default: 100/minute
-route_rate_limits:
-  /auth/token: 10/minute
-  /ping: 60/minute
-feature_flags:
-  display: true
-  audio: true
-  power: true
-  notifications: true
-  network: true
-  filesystem: true
-  input_control: true
-  system_info: true
-  monitoring: true
-  processes: true
-  security: true
-  scheduler: true
-  maintenance: true
-  media: true
-  clipboard: true
-username: {username}
-password_hash: "{password_hash}"
-log_level: INFO
-"""
+def _csv_list(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _env_file(username: str, password: str) -> str:
-    return f"""USERNAME={username}
-PASSWORD={password}
-LOCAL_SERVICE_USERNAME={username}
-LOCAL_SERVICE_PASSWORD={password}
-LOCAL_SERVICE_URL=http://localhost:8765
-LOCAL_SERVICE_TOKEN_PATH=/auth/token
-"""
+def _config_yaml(
+    username: str,
+    password_hash: str,
+    secret_key: str,
+    host: str,
+    port: int,
+    allowed_ips: list[str],
+    allowed_base_dirs: list[str],
+) -> str:
+    config = {
+        "host": host,
+        "port": port,
+        "secret_key": secret_key,
+        "token_expire_minutes": 1440,
+        "allowed_origins": [],
+        "allowed_ips": allowed_ips,
+        "allowed_base_dirs": allowed_base_dirs,
+        "rate_limit_default": "100/minute",
+        "route_rate_limits": {
+            "/auth/token": "10/minute",
+            "/ping": "60/minute",
+        },
+        "feature_flags": {
+            "display": True,
+            "audio": True,
+            "power": True,
+            "notifications": True,
+            "network": True,
+            "filesystem": True,
+            "input_control": True,
+            "system_info": True,
+            "monitoring": True,
+            "processes": True,
+            "security": True,
+            "scheduler": True,
+            "maintenance": True,
+            "media": True,
+            "clipboard": True,
+        },
+        "username": username,
+        "password_hash": password_hash,
+        "log_level": "INFO",
+    }
+    return yaml.safe_dump(config, sort_keys=False)
+
+
+def _env_file(username: str, password: str, port: int, vps_url: str, agent_id: str, agent_secret: str) -> str:
+    values = {
+        "USERNAME": username,
+        "PASSWORD": password,
+        "LOCAL_SERVICE_USERNAME": username,
+        "LOCAL_SERVICE_PASSWORD": password,
+        "LOCAL_SERVICE_URL": f"http://127.0.0.1:{port}",
+        "LOCAL_SERVICE_TOKEN_PATH": "/auth/token",
+        "LOCAL_SERVICE_AUTH_TOKEN": "",
+        "LOCAL_SERVICE_AUTH_TOKEN_EXPIRES": "",
+        "VPS_URL": vps_url,
+        "AGENT_ID": agent_id,
+        "AGENT_SECRET": agent_secret,
+    }
+    return "".join(f"{key}={value!r}\n" for key, value in values.items())
 
 
 def _service_file(
@@ -98,11 +125,38 @@ def _run_systemctl(*args: str) -> None:
     os.system("systemctl --user " + " ".join(args))
 
 
+def _test_vps_connectivity(vps_url: str, agent_id: str, agent_secret: str) -> None:
+    print(f"Testing connectivity to VPS at {vps_url}...")
+    try:
+        resp = requests.post(
+            f"{vps_url.rstrip('/')}/relay/{agent_id}",
+            json={"secret": agent_secret},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            print("Successfully connected to VPS and verified credentials.")
+        elif resp.status_code == 401:
+            raise SystemExit("Failed to verify credentials: VPS returned 401 Unauthorized.")
+        elif resp.status_code == 404:
+            raise SystemExit(f"Failed to reach registration endpoint: VPS returned 404 Not Found at {vps_url}/relay/{agent_id}.")
+        else:
+            raise SystemExit(f"Failed to connect to VPS: Status {resp.status_code} - {resp.text}")
+    except requests.exceptions.RequestException as e:
+        raise SystemExit(f"Failed to connect to VPS at {vps_url}: {e}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Initialize a packaged Vela install")
     parser.add_argument("--config-dir", default=str(DEFAULT_CONFIG_DIR), help="Directory to store config.yaml and .env")
     parser.add_argument("--username", default=DEFAULT_SERVICE_USERNAME, help="Login username for the local service")
     parser.add_argument("--password", help="Login password for the local service")
+    parser.add_argument("--vps-url", help="VPS relay URL, including http:// or https://")
+    parser.add_argument("--agent-id", default=f"{getpass.getuser()}-{socket.gethostname()}", help="Agent ID registered with the VPS relay")
+    parser.add_argument("--agent-secret", help="Agent registration secret from the VPS relay")
+    parser.add_argument("--host", default="127.0.0.1", help="Local API bind host; must be localhost")
+    parser.add_argument("--port", type=int, default=8765, help="Local API port")
+    parser.add_argument("--allowed-ips", default="127.0.0.1,::1", help="Comma-separated local API client IP allowlist")
+    parser.add_argument("--allowed-base-dirs", default=str(Path.home()), help="Comma-separated filesystem base directories")
     parser.add_argument("--no-systemd", action="store_true", help="Skip systemd unit installation")
     return parser
 
@@ -116,6 +170,30 @@ def main() -> None:
     service_password = args.password or getpass.getpass("Password: ")
     if not service_password:
         raise SystemExit("Password is required.")
+    vps_url = args.vps_url or input("VPS relay URL, including http:// or https://: ").strip()
+    parsed_vps = urlparse(vps_url)
+    if parsed_vps.scheme not in {"http", "https"} or not parsed_vps.netloc:
+        raise SystemExit("VPS relay URL must include http:// or https:// and a host.")
+    agent_secret = args.agent_secret or getpass.getpass("Agent registration secret from the VPS relay: ")
+    if not agent_secret:
+        raise SystemExit("Agent registration secret is required.")
+
+    _test_vps_connectivity(vps_url, args.agent_id, agent_secret)
+
+    if args.host not in {"127.0.0.1", "localhost", "::1"}:
+        raise SystemExit("The local API must only bind to localhost.")
+    if not 1 <= args.port <= 65535:
+        raise SystemExit("Port must be between 1 and 65535.")
+    allowed_base_dirs = _csv_list(args.allowed_base_dirs)
+    if not allowed_base_dirs:
+        raise SystemExit("At least one allowed base directory is required.")
+    if allowed_base_dirs == ["/"]:
+        confirm = input("Allow filesystem access to the entire host? Type 'I understand': ")
+        if confirm != "I understand":
+            raise SystemExit("Choose narrower allowed base directories.")
+    for value in allowed_base_dirs:
+        if not Path(value).expanduser().is_absolute():
+            raise SystemExit(f"Allowed base directory must be absolute: {value}")
 
     secret_key = token_urlsafe(32)
     password_hash = _hash_password(service_password)
@@ -123,8 +201,19 @@ def main() -> None:
     config_yaml_path = config_dir / "config.yaml"
     env_file_path = config_dir / ".env"
 
-    _write_text(config_yaml_path, _config_yaml(service_username, password_hash, secret_key))
-    _write_text(env_file_path, _env_file(service_username, service_password))
+    _write_text(
+        config_yaml_path,
+        _config_yaml(
+            service_username,
+            password_hash,
+            secret_key,
+            args.host,
+            args.port,
+            _csv_list(args.allowed_ips),
+            allowed_base_dirs,
+        ),
+    )
+    _write_text(env_file_path, _env_file(service_username, service_password, args.port, vps_url, args.agent_id, agent_secret))
     env_file_path.chmod(0o600)
 
     print(f"Wrote config to {config_yaml_path}")

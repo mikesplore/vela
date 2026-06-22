@@ -21,33 +21,172 @@ if [[ -f "$ENV_FILE" ]]; then
   echo "Loaded environment values from $ENV_FILE"
 fi
 
+prompt_value() {
+  local var_name="$1"
+  local prompt="$2"
+  local default_value="${3:-}"
+  local current_value="${!var_name:-}"
+  local answer=""
+
+  if [[ -n "$current_value" ]]; then
+    default_value="$current_value"
+  fi
+
+  if [[ -n "$default_value" ]]; then
+    read -rp "$prompt [$default_value]: " answer
+    printf -v "$var_name" '%s' "${answer:-$default_value}"
+  else
+    read -rp "$prompt: " answer
+    printf -v "$var_name" '%s' "$answer"
+  fi
+}
+
+prompt_required() {
+  local var_name="$1"
+  local prompt="$2"
+  local default_value="${3:-}"
+
+  while true; do
+    prompt_value "$var_name" "$prompt" "$default_value"
+    if [[ -n "${!var_name}" ]]; then
+      break
+    fi
+    echo "$prompt is required." >&2
+  done
+}
+
+prompt_secret_required() {
+  local var_name="$1"
+  local prompt="$2"
+  local current_value="${!var_name:-}"
+  local answer=""
+
+  if [[ -n "$current_value" ]]; then
+    return
+  fi
+
+  while true; do
+    read -rsp "$prompt: " answer
+    echo
+    if [[ -n "$answer" ]]; then
+      printf -v "$var_name" '%s' "$answer"
+      break
+    fi
+    echo "$prompt is required." >&2
+  done
+}
+
+confirm_secret() {
+  local first="$1"
+  local second=""
+
+  read -rsp "Confirm password: " second
+  echo
+  if [[ "$first" != "$second" ]]; then
+    echo "Passwords do not match." >&2
+    exit 1
+  fi
+}
+
 if [[ ! -d "$VENV_DIR" ]]; then
   python3 -m venv "$VENV_DIR"
 fi
 
 source "$VENV_DIR/bin/activate"
-python -m pip install --upgrade pip
-python -m pip install -e "$ROOT_DIR"
+python -m pip install --upgrade pip > /dev/null 2>&1 || { echo "Failed to upgrade pip"; exit 1; }
+python -m pip install -e "$ROOT_DIR" > /dev/null 2>&1 || { echo "Failed to install Vela package"; exit 1; }
 
-USERNAME="${USERNAME:-admin}"
-PASSWORD="${PASSWORD:-}"
-LOCAL_SERVICE_USERNAME="${LOCAL_SERVICE_USERNAME:-$USERNAME}"
-LOCAL_SERVICE_PASSWORD="${LOCAL_SERVICE_PASSWORD:-$PASSWORD}"
-PASSWORD="${PASSWORD:-$LOCAL_SERVICE_PASSWORD}"
+DEFAULT_USERNAME="${USERNAME:-${LOCAL_SERVICE_USERNAME:-$(id -un)}}"
+prompt_required USERNAME "Local service username" "$DEFAULT_USERNAME"
 
+PASSWORD="${PASSWORD:-${LOCAL_SERVICE_PASSWORD:-}}"
 if [[ -z "$PASSWORD" ]]; then
-  read -rp "Username [admin]: " USERNAME
-  USERNAME="${USERNAME:-admin}"
+  prompt_secret_required PASSWORD "Local service password"
+  confirm_secret "$PASSWORD"
+fi
+LOCAL_SERVICE_USERNAME="$USERNAME"
+LOCAL_SERVICE_PASSWORD="$PASSWORD"
 
-  read -rsp "Password: " PASSWORD
-  echo
-  if [[ -z "$PASSWORD" ]]; then
-    echo "Password is required." >&2
+VPS_URL="${VPS_URL:-${RELAY_URL:-}}"
+prompt_required VPS_URL "VPS relay URL, including http:// or https://"
+
+DEFAULT_AGENT_ID="${AGENT_ID:-$(hostname | tr -cs 'A-Za-z0-9_.-' '-')}"
+prompt_required AGENT_ID "Agent ID registered with the VPS relay" "$DEFAULT_AGENT_ID"
+AGENT_SECRET="${AGENT_SECRET:-${SECRET:-}}"
+prompt_secret_required AGENT_SECRET "Agent registration secret from the VPS relay"
+
+SERVER_HOST="${SERVER_HOST:-127.0.0.1}"
+SERVER_PORT="${SERVER_PORT:-8765}"
+prompt_required SERVER_HOST "Local API bind host" "$SERVER_HOST"
+prompt_required SERVER_PORT "Local API port" "$SERVER_PORT"
+
+if [[ "$SERVER_HOST" != "127.0.0.1" && "$SERVER_HOST" != "localhost" && "$SERVER_HOST" != "::1" ]]; then
+  echo "Refusing to bind the API to '$SERVER_HOST'. Vela's local API must only listen on localhost." >&2
+  exit 1
+fi
+
+ALLOWED_IPS="${ALLOWED_IPS:-127.0.0.1,::1}"
+prompt_required ALLOWED_IPS "Allowed client IPs for the local API, comma-separated" "$ALLOWED_IPS"
+
+ALLOWED_BASE_DIRS="${ALLOWED_BASE_DIRS:-$HOME}"
+prompt_required ALLOWED_BASE_DIRS "Filesystem base directories the agent may access, comma-separated" "$ALLOWED_BASE_DIRS"
+if [[ "$ALLOWED_BASE_DIRS" == "/" ]]; then
+  read -rp "Allow filesystem access to the entire host? Type 'I understand': " CONFIRM_ROOT_FS
+  if [[ "$CONFIRM_ROOT_FS" != "I understand" ]]; then
+    echo "Setup cancelled. Choose narrower allowed base directories." >&2
     exit 1
   fi
-  LOCAL_SERVICE_USERNAME="${LOCAL_SERVICE_USERNAME:-$USERNAME}"
-  LOCAL_SERVICE_PASSWORD="${LOCAL_SERVICE_PASSWORD:-$PASSWORD}"
 fi
+
+export USERNAME PASSWORD LOCAL_SERVICE_USERNAME LOCAL_SERVICE_PASSWORD
+export VPS_URL AGENT_ID AGENT_SECRET SERVER_HOST SERVER_PORT ALLOWED_IPS ALLOWED_BASE_DIRS
+
+python - <<'PY'
+import os
+from pathlib import Path
+from urllib.parse import urlparse
+import requests
+
+vps_url = os.environ["VPS_URL"].strip()
+parsed = urlparse(vps_url)
+if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    raise SystemExit("VPS relay URL must include http:// or https:// and a host.")
+
+agent_secret = os.environ["AGENT_SECRET"].strip()
+
+print(f"Testing connectivity to VPS at {vps_url}/health...")
+try:
+    resp = requests.get(
+        f"{vps_url.rstrip('/')}/health",
+        headers={"X-API-Key": agent_secret},
+        timeout=10,
+    )
+    if resp.status_code == 200:
+        print("Successfully connected to VPS and verified API key.")
+    elif resp.status_code == 401:
+        raise SystemExit("Failed to verify credentials: VPS returned 401 Unauthorized. Check your Agent Secret.")
+    elif resp.status_code == 403:
+        raise SystemExit("Access forbidden: VPS returned 403 Forbidden. Check your Agent Secret permissions.")
+    elif resp.status_code == 404:
+        raise SystemExit(f"Failed to reach health endpoint: VPS returned 404 Not Found at {vps_url}/health.")
+    else:
+        raise SystemExit(f"Failed to connect to VPS: Status {resp.status_code} - {resp.text}")
+except requests.exceptions.ConnectionError:
+    raise SystemExit(f"Could not connect to {vps_url}. Ensure the VPS is running and reachable.")
+except requests.exceptions.Timeout:
+    raise SystemExit(f"Connection to {vps_url} timed out after 10 seconds.")
+except requests.exceptions.RequestException as e:
+    raise SystemExit(f"Failed to connect to VPS at {vps_url}: {e}")
+
+port = int(os.environ["SERVER_PORT"])
+if not 1 <= port <= 65535:
+    raise SystemExit("Local API port must be between 1 and 65535.")
+
+for value in os.environ["ALLOWED_BASE_DIRS"].split(","):
+    path = Path(value.strip()).expanduser()
+    if not path.is_absolute():
+        raise SystemExit(f"Allowed base directory must be absolute: {value}")
+PY
 
 SECRET_KEY="$(python - <<'PY'
 from secrets import token_urlsafe
@@ -63,38 +202,58 @@ print(hash)
 PY
 )"
 
-cat > "$CONFIG_FILE" <<EOF
-host: 0.0.0.0
-port: 8765
-secret_key: $SECRET_KEY
-token_expire_minutes: 1440
-allowed_origins: []
-allowed_ips: []
-allowed_base_dirs: []
-rate_limit_default: 100/minute
-route_rate_limits:
-  /auth/token: 10/minute
-  /ping: 60/minute
-feature_flags:
-  display: true
-  audio: true
-  power: true
-  notifications: true
-  network: true
-  filesystem: true
-  input_control: true
-  system_info: true
-  monitoring: true
-  processes: true
-  security: true
-  scheduler: true
-  maintenance: true
-  media: true
-  clipboard: true
-username: $USERNAME
-password_hash: "$PASSWORD_HASH"
-log_level: INFO
-EOF
+VELA_CONFIG_FILE="$CONFIG_FILE" \
+VELA_SECRET_KEY_VALUE="$SECRET_KEY" \
+VELA_PASSWORD_HASH_VALUE="$PASSWORD_HASH" \
+python - <<'PY'
+import os
+from pathlib import Path
+
+import yaml
+
+def csv_list(name: str) -> list[str]:
+    return [item.strip() for item in os.environ[name].split(",") if item.strip()]
+
+config = {
+    "host": os.environ["SERVER_HOST"],
+    "port": int(os.environ["SERVER_PORT"]),
+    "secret_key": os.environ["VELA_SECRET_KEY_VALUE"],
+    "token_expire_minutes": 1440,
+    "allowed_origins": [],
+    "allowed_ips": csv_list("ALLOWED_IPS"),
+    "allowed_base_dirs": csv_list("ALLOWED_BASE_DIRS"),
+    "rate_limit_default": "100/minute",
+    "route_rate_limits": {
+        "/auth/token": "10/minute",
+        "/ping": "60/minute",
+    },
+    "feature_flags": {
+        "display": True,
+        "audio": True,
+        "power": True,
+        "notifications": True,
+        "network": True,
+        "filesystem": True,
+        "input_control": True,
+        "system_info": True,
+        "monitoring": True,
+        "processes": True,
+        "security": True,
+        "scheduler": True,
+        "maintenance": True,
+        "media": True,
+        "clipboard": True,
+    },
+    "username": os.environ["USERNAME"],
+    "password_hash": os.environ["VELA_PASSWORD_HASH_VALUE"],
+    "log_level": "INFO",
+}
+
+Path(os.environ["VELA_CONFIG_FILE"]).write_text(
+    yaml.safe_dump(config, sort_keys=False),
+    encoding="utf-8",
+)
+PY
 
 mkdir -p "$SERVICE_DIR"
 mkdir -p "$(dirname "$DESKTOP_ENV_FILE")"
@@ -110,14 +269,29 @@ DESKTOP_SESSION=${DESKTOP_SESSION:-}
 EOF
 chmod 600 "$DESKTOP_ENV_FILE"
 
-cat > "$ENV_FILE" <<EOF
-USERNAME=$USERNAME
-PASSWORD=$PASSWORD
-LOCAL_SERVICE_USERNAME=$LOCAL_SERVICE_USERNAME
-LOCAL_SERVICE_PASSWORD=$LOCAL_SERVICE_PASSWORD
-LOCAL_SERVICE_URL=http://127.0.0.1:8765
-LOCAL_SERVICE_TOKEN_PATH=/auth/token
-EOF
+LOCAL_SERVICE_URL="http://127.0.0.1:$SERVER_PORT"
+export LOCAL_SERVICE_URL
+ENV_FILE="$ENV_FILE" python - <<'PY'
+import os
+from dotenv import set_key
+
+env_file = os.environ["ENV_FILE"]
+open(env_file, "a", encoding="utf-8").close()
+for key in (
+    "USERNAME",
+    "PASSWORD",
+    "LOCAL_SERVICE_USERNAME",
+    "LOCAL_SERVICE_PASSWORD",
+    "LOCAL_SERVICE_URL",
+    "VPS_URL",
+    "AGENT_ID",
+    "AGENT_SECRET",
+):
+    set_key(env_file, key, os.environ[key])
+set_key(env_file, "LOCAL_SERVICE_TOKEN_PATH", "/auth/token")
+set_key(env_file, "LOCAL_SERVICE_AUTH_TOKEN", "")
+set_key(env_file, "LOCAL_SERVICE_AUTH_TOKEN_EXPIRES", "")
+PY
 chmod 600 "$ENV_FILE"
 
 echo "Generated environment file at $ENV_FILE"
@@ -171,4 +345,4 @@ echo "Config path: $CONFIG_FILE"
 echo "Service: $SERVICE_PATH"
 echo "Agent service: $AGENT_SERVICE_PATH"
 
-echo "Local access URL: http://$(python -c 'import socket; print([ip for ip in socket.gethostbyname_ex(socket.gethostname())[2] if not ip.startswith("127.")][0] if True else "127.0.0.1")'):8765"
+echo "Local access URL: http://127.0.0.1:$SERVER_PORT"
