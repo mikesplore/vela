@@ -16,11 +16,6 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "vela"
 
-# NOTE: load_dotenv() defaults to override=False, so the FIRST path that
-# defines a given var wins. Order here is intentional, highest priority first:
-#   1. ./.env                       (local dev override)
-#   2. ~/.config/vela/.env          (per-user installed config)
-#   3. <package dir>/.env           (bundled fallback, usually absent)
 for dotenv_path in (Path.cwd() / ".env", DEFAULT_CONFIG_DIR / ".env", BASE_DIR / ".env"):
     load_dotenv(dotenv_path)
 
@@ -30,15 +25,13 @@ _RATE_LIMIT_RE = re.compile(r"\d+/(second|minute|hour|day)")
 class Config(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8765
-    # No default on purpose: a placeholder secret here would be a silent
-    # security hole. Must be supplied via VELA_SECRET_KEY, .env, or config.yaml.
     secret_key: str
     token_expire_minutes: int = 1440
     allowed_origins: List[str] = []
     allowed_base_dirs: List[str] = []
     feature_flags: Dict[str, bool] = {}
     log_level: str = "INFO"
-    rate_limit_default: str = "100/minute"
+    rate_limit_default: str = "150/minute"
     route_rate_limits: Dict[str, str] = {}
     username: str = "admin"
     password_hash: str
@@ -46,7 +39,7 @@ class Config(BaseSettings):
     assistant_action_timeout_seconds: int = 120
     dashscope_api_url: str = "https://dashscope-intl.aliyuncs.com/api/v1"
     dashscope_api_key: str | None = None
-    dashscope_model: str = "qwen-plus"
+    dashscope_model: str = "qwen_plus"
     assistant_system_prompt: str = DEFAULT_ASSISTANT_SYSTEM_PROMPT
 
     model_config = {

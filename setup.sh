@@ -147,9 +147,6 @@ if [[ "$SERVER_HOST" != "127.0.0.1" && "$SERVER_HOST" != "localhost" && "$SERVER
   exit 1
 fi
 
-ALLOWED_IPS="${ALLOWED_IPS:-127.0.0.1,::1}"
-prompt_required ALLOWED_IPS "Allowed client IPs for the local API, comma-separated" "$ALLOWED_IPS"
-
 ALLOWED_BASE_DIRS="${ALLOWED_BASE_DIRS:-$HOME}"
 prompt_required ALLOWED_BASE_DIRS "Filesystem base directories the agent may access, comma-separated" "$ALLOWED_BASE_DIRS"
 if [[ "$ALLOWED_BASE_DIRS" == "/" ]]; then
@@ -161,7 +158,7 @@ if [[ "$ALLOWED_BASE_DIRS" == "/" ]]; then
 fi
 
 export USERNAME PASSWORD LOCAL_SERVICE_USERNAME LOCAL_SERVICE_PASSWORD
-export VPS_URL AGENT_ID AGENT_SECRET PUBLIC_ADDRESS METADATA SERVER_HOST SERVER_PORT ALLOWED_IPS ALLOWED_BASE_DIRS
+export VPS_URL AGENT_ID AGENT_SECRET PUBLIC_ADDRESS METADATA SERVER_HOST SERVER_PORT ALLOWED_BASE_DIRS
 
 python - <<'PY'
 import os
@@ -257,7 +254,6 @@ config = {
     "secret_key": os.environ["VELA_SECRET_KEY_VALUE"],
     "token_expire_minutes": 1440,
     "allowed_origins": [],
-    "allowed_ips": csv_list("ALLOWED_IPS"),
     "allowed_base_dirs": csv_list("ALLOWED_BASE_DIRS"),
     "rate_limit_default": "100/minute",
     "route_rate_limits": {
