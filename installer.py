@@ -35,7 +35,6 @@ def _config_yaml(
     secret_key: str,
     host: str,
     port: int,
-    allowed_ips: list[str],
     allowed_base_dirs: list[str],
 ) -> str:
     config = {
@@ -44,7 +43,6 @@ def _config_yaml(
         "secret_key": secret_key,
         "token_expire_minutes": 1440,
         "allowed_origins": [],
-        "allowed_ips": allowed_ips,
         "allowed_base_dirs": allowed_base_dirs,
         "rate_limit_default": "100/minute",
         "route_rate_limits": {
@@ -75,7 +73,7 @@ def _config_yaml(
     return yaml.safe_dump(config, sort_keys=False)
 
 
-def _env_file(username: str, password: str, port: int, vps_url: str, agent_id: str, agent_secret: str) -> str:
+def _env_file(username: str, password: str, port: int, vps_url: str, agent_id: str, agent_secret: str = "") -> str:
     values = {
         "USERNAME": username,
         "PASSWORD": password,
@@ -125,20 +123,39 @@ def _run_systemctl(*args: str) -> None:
     os.system("systemctl --user " + " ".join(args))
 
 
-def _test_vps_connectivity(vps_url: str, agent_id: str, agent_secret: str) -> None:
+def _test_vps_connectivity(vps_url: str, agent_id: str, agent_secret: str = "") -> None:
+    """Test connectivity to the VPS using the new /register endpoint."""
     print(f"Testing connectivity to VPS at {vps_url}...")
     try:
-        resp = requests.post(
-            f"{vps_url.rstrip('/')}/relay/{agent_id}",
-            json={"secret": agent_secret},
-            timeout=10,
-        )
+        url = f"{vps_url.rstrip('/')}/register"
+        payload = {"agent_id": agent_id}
+        headers = {}
+
+        if agent_secret:
+            # Authenticated test (re-registration)
+            payload["public_address"] = "http://127.0.0.1:0"
+            headers["X-API-Key"] = agent_secret
+            resp = requests.post(url, json=payload, headers=headers, timeout=10)
+        else:
+            # First-time registration test
+            payload["public_address"] = "http://127.0.0.1:0"
+            resp = requests.post(url, json=payload, timeout=10)
+
         if resp.status_code == 200:
-            print("Successfully connected to VPS and verified credentials.")
+            data = resp.json()
+            print("Successfully connected to VPS.")
+            issued_secret = data.get("secret")
+            if issued_secret:
+                print(f"Issued Agent Secret: {issued_secret}")
+                print("IMPORTANT: Save this secret. It authenticates your agent to the VPS relay.")
+                print("You'll pass it as X-API-Key header in client requests to this agent,")
+                print(f"e.g.: curl -H 'X-API-Key: {issued_secret}' http://<vps-url>/...")
+            else:
+                print("VPS acknowledged registration.")
         elif resp.status_code == 401:
             raise SystemExit("Failed to verify credentials: VPS returned 401 Unauthorized.")
         elif resp.status_code == 404:
-            raise SystemExit(f"Failed to reach registration endpoint: VPS returned 404 Not Found at {vps_url}/relay/{agent_id}.")
+            raise SystemExit(f"Failed to reach registration endpoint: VPS returned 404 Not Found at {url}.")
         else:
             raise SystemExit(f"Failed to connect to VPS: Status {resp.status_code} - {resp.text}")
     except requests.exceptions.RequestException as e:
@@ -152,10 +169,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--password", help="Login password for the local service")
     parser.add_argument("--vps-url", help="VPS relay URL, including http:// or https://")
     parser.add_argument("--agent-id", default=f"{getpass.getuser()}-{socket.gethostname()}", help="Agent ID registered with the VPS relay")
-    parser.add_argument("--agent-secret", help="Agent registration secret from the VPS relay")
+    parser.add_argument("--agent-secret", help="Agent registration secret from the VPS relay (not needed for first-time registration)")
     parser.add_argument("--host", default="127.0.0.1", help="Local API bind host; must be localhost")
     parser.add_argument("--port", type=int, default=8765, help="Local API port")
-    parser.add_argument("--allowed-ips", default="127.0.0.1,::1", help="Comma-separated local API client IP allowlist")
     parser.add_argument("--allowed-base-dirs", default=str(Path.home()), help="Comma-separated filesystem base directories")
     parser.add_argument("--no-systemd", action="store_true", help="Skip systemd unit installation")
     return parser
@@ -174,9 +190,17 @@ def main() -> None:
     parsed_vps = urlparse(vps_url)
     if parsed_vps.scheme not in {"http", "https"} or not parsed_vps.netloc:
         raise SystemExit("VPS relay URL must include http:// or https:// and a host.")
-    agent_secret = args.agent_secret or getpass.getpass("Agent registration secret from the VPS relay: ")
+
+    agent_secret = args.agent_secret or ""
     if not agent_secret:
-        raise SystemExit("Agent registration secret is required.")
+        # Ask whether they have an existing secret
+        answer = input("Do you have an existing agent secret from a previous registration? (y/N): ").strip().lower()
+        if answer in ("y", "yes"):
+            agent_secret = getpass.getpass("Agent registration secret from the VPS relay: ")
+            if not agent_secret:
+                raise SystemExit("Agent registration secret is required.")
+        else:
+            print("No secret provided — will perform first-time registration with the VPS.")
 
     _test_vps_connectivity(vps_url, args.agent_id, agent_secret)
 
@@ -209,7 +233,6 @@ def main() -> None:
             secret_key,
             args.host,
             args.port,
-            _csv_list(args.allowed_ips),
             allowed_base_dirs,
         ),
     )

@@ -1,377 +1,399 @@
 # Vela RemotePC Agent
 
-**Talk to your laptop. It listens and acts.**
+**Control your Linux desktop from anywhere — via chat, API, or WebSocket tunnel.**
 
-Vela is a **conversational AI agent** for Linux desktops that turns your PC into an intelligent assistant. Currently chat-based, but **designed to be voice-first**. Instead of clicking through settings or typing commands, you ask—naturally—and Vela understands your intent and executes.
+Vela is a FastAPI-based remote PC agent for Linux. It exposes your desktop's capabilities (filesystem, audio, display, processes, notifications, power management, etc.) through a secure REST API, optionally tunneled through a WebSocket relay for remote access.
 
-```
-"Vela, what's using up my RAM?"
-→ Agent analyzes processes and tells you instantly
+## Features
 
-"Vela, is my Bluetooth off?"
-→ Agent checks and reports back
+- **Full system control API** — filesystem, audio, display, power, notifications, network, input control, system info, monitoring, processes, security, scheduler, maintenance, media, clipboard
+- **LLM-powered assistant** — natural language chat interface via DashScope's Qwen model with tool-calling
+- **WebSocket tunnel** — connect to a remote VPS relay to access your PC from anywhere
+- **Agent registration** — one-time registration with a VPS; automatic secret rotation
+- **JWT authentication** — bcrypt-hashed passwords, bearer token auth, rate-limited
+- **IP allowlisting** — restrict API access to specific IPs
+- **Filesystem access control** — whitelist-based directory permissions
+- **Rate limiting** — per-endpoint rate limits (default 100/min, auth endpoints 10/min)
+- **systemd integration** — runs as user services with auto-restart
 
-"Vela, kill the app that's hogging CPU"
-→ Agent identifies the culprit and terminates it immediately
+## Architecture
 
-"Vela, remind me to call mom in 5 minutes"
-→ Agent sets a notification
-```
+Vela connects your phone to your Linux desktop through a secure relay. Here's how the data flows:
 
-Tasks that are **faster to ask for than to click through** are the core of Vela. It's built for the moments when you're busy and want to control your system without context-switching.
+### Direct command flow (e.g. "Lock screen", "List files")
 
-## Why Vela? How is this different?
+```mermaid
+sequenceDiagram
+    participant Phone as Phone / Client
+    participant VPS as VPS Relay
+    participant Agent as Vela Agent (tunnel)
+    participant API as Vela API Server
+    participant Desktop as Linux Desktop
 
-| Tool             | What you do          | What Vela does           |
-|------------------|----------------------|--------------------------|
-| Remote Desktop   | Stare at a stream    | Executes intent          |
-| SSH              | Remember commands    | Understands context      |
-| KDE Connect      | Send files across    | Converses with you       |
-| Task automation  | Write scripts        | Infers what you mean     |
-
-Vela is **intent-driven, not command-driven**. When you say "my laptop is slow," Vela doesn't ask you for flags or arguments. It analyzes the system, identifies the problem, and proposes solutions—or executes them if you ask.
-
-It's powered by an LLM (DashScope's Qwen) that uses **tool-calling** to map natural language to actual system operations. The assistant layer understands context, handles ambiguity, and ensures you get what you meant, not what you said literally.
-
-**Key differentiators:**
-- **Conversational, not imperative** — ask, don't command
-- **Mobile-friendly** — control from your phone on the same or different network
-- **Designed for voice** — currently chat-based, but built to support voice commands soon
-- **Lightweight** — no remote desktop overhead, pure intent execution
-- **Intelligent** — understands context and delegates to the right system layer
-
-## Prerequisites
-
-- Python 3.13+
-- Linux desktop environment with `xrandr`, `playerctl`, `xdotool`, `nmcli`, `bluetoothctl`, `systemctl`, and `journalctl` available where applicable
-- `python3-venv` and `python3-pip`
-- A user-level systemd session for service deployment
-
-## How Vela Works
-
-### The Intent Pipeline
-
-1. **You chat or speak** a natural language request (currently via text; voice coming soon)
-2. **Frontend receives** the message and sends it to the Vela backend
-3. **Assistant layer** (LLM + tool-calling) parses intent, determines which system operation is needed
-4. **PC Agent router** executes the actual system operation (filesystem, processes, audio, etc.)
-5. **Result flows back** to your phone/frontend with natural language summary
-
-### Architecture: Clean Separation
-
-```
-┌─────────────────────────────────────────────────┐
-│ Your Phone / Remote Client (React/native app)   │
-│ - Conversational UI                             │
-│ - Sends natural language requests               │
-│ - Does NOT parse, execute, or sandbox anything │
-└─────────────────┬───────────────────────────────┘
-                  │ JWT-protected HTTPS
-                  ▼
-┌─────────────────────────────────────────────────┐
-│ Vela Backend (FastAPI + Express proxy)          │
-│ - Receives natural language                      │
-│ - Routes to Assistant or direct operations      │
-│ - Handles errors, permissions, logging          │
-└─────────────────┬───────────────────────────────┘
-                  │ Direct system calls
-                  ▼
-┌─────────────────────────────────────────────────┐
-│ PC Agent (Routers: filesystem, audio, etc.)     │
-│ - Executes against real system state            │
-│ - Applies safety policies (whitelisting,        │
-│   destructive action checks, permissions)       │
-│ - Returns structured data back                  │
-└─────────────────────────────────────────────────┘
-                  │
-                  ▼
-            Your Linux Desktop
+    Phone->>VPS: REST / API call (X-API-Key or JWT)
+    VPS->>Agent: Forward via WebSocket tunnel
+    Agent->>API: Forward to local FastAPI (127.0.0.1:8765)
+    API->>Desktop: Execute system operation
+    Desktop-->>API: Result
+    API-->>Agent: Response
+    Agent-->>VPS: Forward response
+    VPS-->>Phone: Response
 ```
 
-**What each layer does—and what it doesn't:**
+### AI assistant flow (e.g. "How much storage do I have left?")
+
+```mermaid
+sequenceDiagram
+    participant Phone as Phone / Client
+    participant VPS as VPS Relay
+    participant Agent as Vela Agent (tunnel)
+    participant API as Vela API Server
+    participant LLM as DashScope LLM
+    participant Desktop as Linux Desktop
+
+    Phone->>VPS: POST /assistant/chat "How much storage?"
+    VPS->>Agent: Forward via WebSocket
+    Agent->>API: Forward to local FastAPI /assistant/chat
+    API->>LLM: Send message + available tools
+    LLM-->>API: Intent: check disk space → select filesystem tool
+    API->>Desktop: Run df / lsblk
+    Desktop-->>API: Disk usage data
+    API->>LLM: Send tool result for summarization
+    LLM-->>API: Natural language response
+    API-->>Agent: Response
+    Agent-->>VPS: Forward response
+    VPS-->>Phone: "Your SSD is 340/500 GB full"
+```
+
+### Registration flow
+
+```mermaid
+sequenceDiagram
+    participant Agent as Vela Agent (tunnel)
+    participant VPS as VPS Relay
+
+    Note over Agent,VPS: First-time registration (no secret yet)
+    Agent->>VPS: POST /register {agent_id, public_address, metadata}
+    VPS-->>Agent: {secret, ws_token, expires_at}
+    Note right of Agent: Secret auto-saved to .env
+
+    Note over Agent,VPS: Subsequent reconnects
+    Agent->>VPS: POST /register {agent_id} + X-API-Key
+    VPS-->>Agent: {ws_token, expires_at}
+
+    Note over Agent,VPS: Password change
+    Agent->>VPS: POST /register {agent_id, regenerate_secret: true} + X-API-Key
+    VPS-->>Agent: {secret, ws_token, expires_at}
+    Note right of Agent: New secret auto-saved to .env
+```
+
+### The role of each layer
 
 | Layer | Does | Doesn't |
 |-------|------|---------|
-| Frontend | Sends messages, displays results | Parse commands, execute anything, sandbox |
-| Vela API | Route requests, handle auth, enforce limits | Directly touch the filesystem (agent does) |
-| PC Agent | Execute operations, enforce safety rules | Know what the user "meant" (assistant does) |
-| Assistant | Understand intent, map to tools | Actually execute (routers do) |
+| **Phone / Client** | Sends requests, displays results | Parse commands, execute anything |
+| **VPS Relay** | Routes requests via WebSocket, manages agent registration | Execute system operations, understand intent |
+| **Vela Agent (tunnel)** | Maintains WebSocket tunnel to VPS, forwards requests to local API server | Execute system operations, communicate with LLM |
+| **Vela API Server** | Executes system operations via routers, handles AI chat with LLM, enforces auth & safety | Connect to the VPS directly — the agent handles that |
+| **LLM (DashScope)** | Understands natural language, selects tools, summarizes results | Execute system calls — the API server handles that |
+| **Linux Desktop** | Runs the actual system (files, processes, audio, etc.) | Make decisions — it just follows OS calls |
 
-This separation ensures that **safety decisions live where they matter most**: in the agent backend, where the actual system state is known.
+## Quick Start
 
-## Safety & Permissions Model
+### Prerequisites
 
-Vela is designed to be safe by default, with multiple layers of protection:
+#### System Requirements
 
-### 1. **Authentication & Authorization**
-- All requests require a valid JWT bearer token
-- Username/password auth with bcrypt hashing
-- No token = no access (rate-limited to prevent brute force)
+- **Python 3.13+**
+- **Linux desktop** (X11 or Wayland)
 
-### 2. **Filesystem Permissions**
-- `allowed_base_dirs` whitelist restricts which directories the agent can access
-- Empty list = all paths allowed (for local LAN only)
-- Directory traversal checks prevent `../` escapes
+#### Required System Packages
 
-### 3. **Intent-Level Safeguards**
-- Destructive operations (file deletion, process termination) require explicit confirmation or opt-in
-- The assistant layer can detect risky intents and surface warnings
-- Example: "You asked me to kill the process using 99% CPU. That's `chrome`. Kill it? [Y/n]"
+Most of these are typically pre-installed on a modern Linux desktop. Missing tools affect only the corresponding feature.
 
-### 4. **Process & System Safeguards**
-- Critical system processes (init, systemd, kernel threads) cannot be terminated
-- Power operations (shutdown, reboot) require explicit user confirmation
-- Filesystem operations limited to user-owned files unless running as root
+| Feature | Required Commands | Install (Debian/Ubuntu) | Install (Fedora) | Install (Arch) |
+|---------|------------------|------------------------|------------------|----------------|
+| **Filesystem** | `xdg-open` | `xdg-utils` | `xdg-utils` | `xdg-utils` |
+| **Audio** | `amixer`, `pactl`, `canberra-gtk-play` | `alsa-utils`, `pulseaudio-utils`, `libcanberra-gtk-module` | `alsa-utils`, `pulseaudio-utils`, `libcanberra-gtk3` | `alsa-utils`, `pulseaudio-utils`, `libcanberra` |
+| **Display / Screenshot** | `xrandr`, `flameshot`, `xset`, `ffmpeg`, `busctl`, `brightnessctl`, `gsettings`, `loginctl`, `swaymsg` | `x11-xserver-utils`, `flameshot`, `x11-xserver-utils`, `ffmpeg`, `libglib2.0-bin`, `brightnessctl`, `systemd` | `xorg-xrandr`, `flameshot`, `xorg-xset`, `ffmpeg`, `glib2`, `brightnessctl`, `systemd` | `xorg-xrandr`, `flameshot`, `xorg-xset`, `ffmpeg`, `glib2`, `brightnessctl`, `systemd` |
+| **Input Control** | `xdotool`, `xprop`, `xwininfo` | `xdotool`, `x11-utils` | `xdotool`, `xorg-xprop`, `xorg-xwininfo` | `xdotool`, `xorg-xprop`, `xorg-xwininfo` |
+| **Media** | `playerctl` | `playerctl` | `playerctl` | `playerctl` |
+| **Network** | `nmcli`, `bluetoothctl`, `rfkill`, `ping`, `speedtest-cli` | `network-manager`, `bluez`, `util-linux`, `iputils-ping`, `speedtest-cli` | `NetworkManager`, `bluez`, `util-linux`, `iputils`, `speedtest-cli` | `networkmanager`, `bluez`, `util-linux`, `iputils`, `speedtest-cli` |
+| **Notifications** | `notify-send`, `dunstctl` | `libnotify-bin`, `dunst` | `libnotify`, `dunst` | `libnotify`, `dunst` |
+| **Power** | `systemctl`, `powerprofilesctl` | `systemd`, `power-profiles-daemon` | `systemd`, `power-profiles-daemon` | `systemd`, `power-profiles-daemon` |
+| **Processes** | `xdotool`, `xprop`, `xwininfo` | `xdotool`, `x11-utils` | `xdotool`, `xorg-xprop`, `xorg-xwininfo` | `xdotool`, `xorg-xprop`, `xorg-xwininfo` |
+| **Security** | `loginctl`, `modprobe`, `pactl`, `pkill`, `last`, `who`, `ffmpeg` | `systemd`, `kmod`, `pulseaudio-utils`, `procps`, `util-linux`, `coreutils`, `ffmpeg` | `systemd`, `kmod`, `pulseaudio-utils`, `procps-ng`, `util-linux`, `coreutils`, `ffmpeg` | `systemd`, `kmod`, `pulseaudio-utils`, `procps-ng`, `util-linux`, `coreutils`, `ffmpeg` |
+| **System Info** | `lspci`, `lsusb`, `dmidecode`, `nvidia-smi`, `xrandr` | `pciutils`, `usbutils`, `dmidecode`, `nvidia-smi`, `x11-xserver-utils` | `pciutils`, `usbutils`, `dmidecode`, `nvidia-smi`, `xorg-xrandr` | `pciutils`, `usbutils`, `dmidecode`, `nvidia-smi`, `xorg-xrandr` |
+| **Maintenance** | `journalctl`, `systemctl`, `timedatectl`, `apt-get`/`dnf`/`pacman` | `systemd` | `systemd` | `systemd` |
+| **Monitoring** | `nvidia-smi` | `nvidia-smi` (NVIDIA GPU only) | `nvidia-smi` (NVIDIA GPU only) | `nvidia-smi` (NVIDIA GPU only) |
 
-### 5. **Rate Limiting**
-- Per-endpoint rate limits prevent abuse
-- Default: 100 requests/minute globally
-- Auth endpoints: stricter limits (10/min) prevent credential attacks
-- Ping endpoint: higher limit (60/min) for health checks
+> 💡 **Tip:** Run `which <command>` to check if a particular tool is already installed.
+> Missing tools won't crash the app — the corresponding endpoint will return an appropriate error.
 
-### 6. **IP Allowlisting**
-- Optional `allowed_ips` restricts which addresses can connect
-- Designed for LAN use; pair with a VPN/tunnel for remote access
+#### Optional Python Dependencies (for the assistant)
 
-### Why Safety is Built Into the Backend
+- DashScope API key (for the LLM-powered assistant at `/assistant/chat`)
 
-The assistant doesn't execute—it interprets. The PC Agent doesn't decide what's safe—it enforces policy. This separation means:
+### Development Setup
 
-- **No surprises:** You know exactly what your laptop will do before it does it
-- **No accidental damage:** Warnings surface before destructive operations
-- **Deterministic behavior:** The same request always behaves the same way
-- **Auditability:** Every operation is logged with intent + result
-
-## How the Assistant Works
-
-Vela's conversational intelligence is **LLM-powered with tool-calling**:
-
-### The Assistant Uses:
-- **Large Language Model (LLM)**: DashScope's Qwen model for understanding context and intent
-- **Tool-calling**: Maps natural language to specific system operations (check processes, toggle Bluetooth, etc.)
-- **Hybrid approach**: Rule-based safety overlaid on top of neural understanding
-
-### What Makes It Intelligent:
-1. **Context awareness** — "My laptop is slow" → analyzes CPU, memory, disk I/O → identifies the culprit
-2. **Intent inference** — "Is my Bluetooth off?" understands this as a state-check, not a toggle request
-3. **Ambiguity resolution** — "Kill it" refers back to the process you were just talking about
-4. **Error surfacing** — If something goes wrong, you get a human-readable explanation, not a traceback
-
-### What the Assistant Doesn't Do:
-- ✗ Execute arbitrary shell commands
-- ✗ Make destructive decisions without your confirmation
-- ✗ Guess what you mean when it's unclear (asks for clarification instead)
-- ✗ Send telemetry or track your usage
-
-## Real-World Use Cases
-
-### You're in a video call—your laptop is slowing down
-```
-Chat: "Vela, my video is lagging. What's using the most CPU?"
-→ Vela analyzes and tells you: Firefox (42%), VSCode (28%), Spotify (5%)
-
-Chat: "Kill Firefox"
-→ Vela terminates it, call smooths out immediately
-
-(Future: Voice: "Vela, my video is lagging...")
-```
-
-### You're in the kitchen—you need a reminder
-```
-Chat: "Vela, remind me to take the laundry out in 15 minutes"
-→ Your phone vibrates in 15 minutes with the reminder
-
-(Future: Voice from kitchen: "Vela, remind me...")
-```
-
-### You're working out—you want to know your system health
-```
-Chat: "Vela, how much storage do I have left?"
-→ Vela: "Your SSD is 340GB full out of 500GB. Largest items: Videos (120GB), Docker images (85GB)"
-
-Chat: "Show me what's in Videos"
-→ Vela lists the folder contents so you can decide what to delete
-
-(Future: Voice from the gym: "Vela, how much storage...")
-```
-
-### You're on the couch—your music needs to switch devices
-```
-Chat: "Vela, is my Bluetooth on?"
-→ Vela: "Yes, connected to My Earbuds"
-
-Chat: "Switch audio to speakers"
-→ Vela switches the audio output and resumes playback
-
-(Future: Voice: "Switch to speakers" while hands-free)
-```
-
-### You need system maintenance but you're busy
-```
-Chat: "Vela, check if there are any system updates"
-→ Vela: "3 security updates pending. Your kernel is out of date"
-
-Chat: "Install them"
-→ Vela runs the updates in the background, notifies you when done
-
-(Future: Voice commands during other tasks)
-```
-
-**Today:** These work via chat on your phone or desktop.
-**Soon:** Same functionality via voice—ask Vela without typing, and it responds audibly.
-
-These aren't available in SSH, remote desktop, or KDE Connect because **those tools require command knowledge or clicking**. Vela understands what you want.
-
-## Long-Term Vision
-
-Vela is built with these future states in mind:
-
-### Phase 1: Chat → Voice (Current → Immediate)
-- **Current:** Chat interface (phone app and desktop)
-- **Next:** Voice input/output (speak commands, get audio responses)
-- **Soon:** Bluetooth headset support, hands-free operation
-- **Later:** In-car integration (tell Vela to remind you when you get home)
-
-### Phase 2: Proactive Notifications
-- Phone ringing alerts on your PC
-- Calendar/meeting reminders
-- System health warnings ("Your SSD is 85% full")
-
-### Phase 3: Personal AI Assistant for Your PC
-- Multi-step task automation ("Organize my Downloads folder, back up my photos, then compress old logs")
-- Learning from your patterns ("You always pause music when video calls come in")
-- Privacy-first: 100% runs locally or on your own infrastructure
-
-### Phase 4: Cross-Device Ecosystem
-- Same voice assistant across phone, PC, car
-- Seamless context switching ("Continue playing my podcast on my phone")
-- Device-aware scheduling ("Don't interrupt me on video calls")
-
-The north star: **A truly personal assistant that lives on your devices, understands you, and never leaves your control.**
-
-## Installation & Prerequisites
-
-**System Requirements:**
-- Python 3.13+
-- Linux desktop environment with `xrandr`, `playerctl`, `xdotool`, `nmcli`, `bluetoothctl`, `systemctl`, and `journalctl` available where applicable
-- `python3-venv` and `python3-pip`
-- A user-level systemd session for service deployment
-
-1. Clone the repo:
 ```bash
-git clone https://your-repo-url.git ~/Development/vela
-cd ~/Development/vela
+git clone https://github.com/mikesplore/vela.git
+cd vela
+
+# Create virtual environment and install
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+
+# Copy config and customize
+cp config.yaml.example config.yaml
+# Edit config.yaml with your settings
+
+# Run
+vela
 ```
-2. Run the setup script:
+
+OpenAPI docs available at `http://127.0.0.1:8765/docs`.
+
+### Production Setup
+
 ```bash
 ./setup.sh
 ```
-3. For distribution to another machine, build a wheel and give them the wheel instead of the repo:
+
+This will:
+- Prompt for credentials, VPS URL, agent ID
+- Generate a `config.yaml` and `.env`
+- Install `vela.service` and `vela-agent.service` as user systemd units
+
+## Agent Registration
+
+Vela agents authenticate to the VPS relay using a secret token. Registration follows a two-step flow:
+
+### First-Time Registration
+
+When you run `vela-agent` for the first time with no `AGENT_SECRET`, it performs a first-time registration:
+
 ```bash
-python -m pip install build
-python -m build
+# The agent sends a registration request with the agent_id
+curl -X POST http://<vps-url>:8000/register \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id": "my-agent", "public_address": "http://10.0.0.1:8080", "metadata": {"location": "home", "version": "1.0.0"}}'
+
+# Response includes an agent secret that authenticates this agent going forward:
+{
+  "agent": { ... },
+  "secret": "ubiuctIGyF_-d7hlIOcrNFBMR5x1CW3Mq-s7Nv5XkKA",
+  "ws_token": "LY6ggkkI3QU1G9_SeZIt4zrdHiuK6AOhi7kEF6iifis",
+  "expires_at": "2026-06-22T14:10:38Z"
+}
 ```
-4. On the target machine, install the wheel and bootstrap the config:
+
+The secret is automatically saved to `.env` and used for all subsequent connections. The `ws_token` is used to establish the WebSocket tunnel.
+
+### Re-registration (Normal Reconnect)
+
+On subsequent startups, the agent already has an `AGENT_SECRET` and simply re-registers to get a fresh `ws_token`:
+
 ```bash
-python -m pip install dist/vela-1.0.0-py3-none-any.whl
-vela-init
+curl -X POST http://<vps-url>:8000/register \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <current-secret>" \
+  -d '{"agent_id": "my-agent"}'
 ```
+
+### Password Change (Regenerate Secret)
+
+To rotate your agent secret (equivalent to changing your password):
+
+```bash
+vela-agent --regenerate-secret
+```
+
+Or via API:
+
+```bash
+curl -X POST http://<vps-url>:8000/register \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <current-secret>" \
+  -d '{"agent_id": "my-agent", "regenerate_secret": true}'
+
+# Response includes a new secret and ws_token
+```
+
+The new secret is automatically persisted to `.env`.
 
 ## Configuration
 
-`config.yaml` includes:
+### config.yaml
 
-- `host` / `port`
-- `secret_key`
-- `username` / `password_hash`
-- `allowed_origins`
-- `allowed_ips`
-- `allowed_base_dirs`
-- `rate_limit_default`
-- `route_rate_limits`
-- `feature_flags`
-
-### Filesystem security
-
-Set `allowed_base_dirs` to the directories the agent may access. If empty, all paths are permitted.
-
-### Environment variables and .env
-
-Vela supports configuration from environment variables and a `.env` file using the `VELA_` prefix. Example variables:
-
-```bash
-VELA_DASHSCOPE_API_URL=https://dashscope-intl.aliyuncs.com/api/v1
-VELA_DASHSCOPE_API_KEY=<your-api-key>
-VELA_DASHSCOPE_MODEL=qwen-plus
-# alternate fallback env names:
-# DASHSCOPE_HTTP_BASE_URL=https://dashscope-intl.aliyuncs.com/api/v1
-# DASHSCOPE_API_KEY=<your-api-key>
-VELA_SECRET_KEY=<your-secret-key>
-VELA_USERNAME=mike
-VELA_PASSWORD_HASH=<bcrypt-hash>
-```
-
-The `.env` file is loaded automatically if present, so you can keep secrets out of `config.yaml`.
-
-> Note: If you update `.env`, restart the Vela service or the Python process so the new values are loaded.
-
-### Rate limiting
-
-- `rate_limit_default`: global default limit
-- `route_rate_limits`: map endpoint paths to custom limits
-
-Example:
 ```yaml
+host: 127.0.0.1
+port: 8765
+secret_key: <32+ character random string>
+token_expire_minutes: 1440
+username: admin
+password_hash: <bcrypt hash>
+log_level: INFO
+
+# Security
+allowed_origins: []
+allowed_ips:
+  - 127.0.0.1
+  - ::1
+allowed_base_dirs:
+  - /home/youruser
+
+# Rate limiting
 rate_limit_default: 100/minute
 route_rate_limits:
   /auth/token: 10/minute
   /ping: 60/minute
+
+# Feature flags
+feature_flags:
+  display: true
+  audio: true
+  power: true
+  notifications: true
+  network: true
+  filesystem: true
+  input_control: true
+  system_info: true
+  monitoring: true
+  processes: true
+  security: true
+  scheduler: true
+  maintenance: true
+  media: true
+  clipboard: true
+
+# DashScope assistant
+dashscope_api_url: https://dashscope-intl.aliyuncs.com/api/v1
+dashscope_api_key: <your-api-key>
+dashscope_model: qwen-plus
+assistant_system_prompt: "You are Vela..."
+assistant_action_pin: null
+assistant_action_timeout_seconds: 120
 ```
 
-## Running
+### Environment variables (.env)
 
-Start locally:
+See [.env.example](.env.example) for the full list. Key variables:
+
+| Variable | Description |
+|----------|-------------|
+| `VPS_URL` | VPS relay URL (e.g. `http://your-vps:8000`) |
+| `AGENT_ID` | Unique agent identifier |
+| `AGENT_SECRET` | Agent authentication secret (auto-generated on first registration) |
+| `PUBLIC_ADDRESS` | Public address of this agent (optional, first registration) |
+| `METADATA` | JSON metadata for agent registration (optional) |
+
+## API Endpoints
+
+### Authentication
+
+- `POST /auth/token` — Login, returns JWT bearer token
+- `GET /auth/me` — Get current user
+
+### System Routers
+
+| Prefix | Description |
+|--------|-------------|
+| `/filesystem` | Read/write files, list directories |
+| `/audio` | Volume control, audio output switching |
+| `/display` | Screen lock, display info |
+| `/power` | Shutdown, reboot, suspend |
+| `/notifications` | Send desktop notifications |
+| `/network` | Network info, WiFi management |
+| `/input_control` | Mouse/keyboard control |
+| `/system_info` | OS, hardware, resource info |
+| `/monitoring` | CPU, memory, disk monitoring |
+| `/processes` | List/kill processes |
+| `/security` | Screen lock, webcam control, login history |
+| `/scheduler` | Task scheduling |
+| `/maintenance` | System maintenance tasks |
+| `/media` | Media playback control |
+| `/clipboard` | Clipboard read/write |
+
+### Assistant
+
+- `POST /assistant/chat` — Natural language chat with LLM-powered tool calling
+- `GET /assistant/conversations` — List conversation history
+- `GET /assistant/conversations/{id}` — Get conversation details
+
+### Health
+
+- `GET /health` — Service health check
+- `GET /ping` — Connectivity check
+
+## Assistant (LLM Integration)
+
+Vela includes a DashScope-powered chat assistant at `/assistant/chat`. It uses Qwen models with tool-calling to map natural language to system operations.
+
 ```bash
-source .venv/bin/activate
-vela
+curl -X POST http://127.0.0.1:8765/assistant/chat \
+  -H "Authorization: Bearer <jwt-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "How much storage do I have left?"}'
 ```
 
-After `vela-init`, the packaged install stores config in `~/.config/vela/` and creates `vela.service` plus `vela-agent.service` in the user systemd directory.
+The assistant:
+- Parses natural language into intent
+- Selects the appropriate system tool (filesystem, processes, etc.)
+- Returns a human-readable response with the result
 
-OpenAPI docs are available at `http://<host>:<port>/docs`.
+## Security
 
-## Systemd service
+- **JWT authentication** — all routes require a valid bearer token (except `/auth/token`)
+- **Rate limiting** — auth endpoints limited to 10 req/min
+- **IP allowlisting** — restrict to LAN IPs
+- **Filesystem whitelist** — restrict directory access
+- **Destructive action confirmation** — file deletion, power operations require explicit action confirmation
 
-The user services can be installed via `./setup.sh`. The main API runs as `vela.service`, and the tunnel process runs as `vela-agent.service`; both restart on failure.
+## Development
 
-## Connecting from a phone
+### Project Structure
 
-Use the local LAN IP shown by `ip a` or `hostname -I`. If you run behind Tailscale or another tunnel, use the provided private address and open port.
-
-## Security recommendations
-
-- Use a strong `secret_key`
-- Do not expose the API directly to the public internet
-- Use an allowlist in `allowed_ips` when possible
-- Use `allowed_base_dirs` to restrict filesystem access
-
-## Adding a new feature module
-
-1. Add a router file under `routers/`
-2. Export its router in `routers/__init__.py`
-3. Add the router to `all_routers`
-4. Add `feature_flags` in `config.yaml`
-5. Add tests under `tests/`
-6. Update `CHANGELOG.md`
-
-## Assistant integration
-
-A DashScope-powered assistant is available at `/assistant/chat`.
-It expects a JWT bearer token and forwards natural language prompts to the configured `dashscope_api_url` using `X-API-Key`.
-
-Example config fields:
-```yaml
-dashscope_api_url: https://api.dashscope.com/v1/chat/completions
-dashscope_api_key: "<your-key>"
-dashscope_model: qwen-max
 ```
+vela/
+├── app/
+│   ├── main.py              # FastAPI application entry point
+│   ├── agent.py              # VPS registration & WebSocket tunnel agent
+│   ├── auth.py               # JWT authentication
+│   ├── config.py             # Configuration loading
+│   ├── dependencies.py       # FastAPI dependencies
+│   ├── errors.py             # Error response models
+│   ├── middleware.py          # Request logging, IP allowlisting
+│   ├── rate_limiter.py        # Rate limiting setup
+│   ├── routers/               # System operation routers
+│   │   ├── filesystem.py
+│   │   ├── audio.py
+│   │   ├── display.py
+│   │   ├── ...
+│   │   └── __init__.py
+│   └── prompts.py            # Assistant system prompts
+├── tests/                    # Test suite
+├── config.yaml               # Local configuration
+├── setup.sh                  # Setup script
+├── installer.py              # Package installer (vela-init)
+└── pyproject.toml            # Python package metadata
+```
+
+### Adding a Route
+
+1. Add a router file under `app/routers/`
+2. Export the router in `app/routers/__init__.py`
+3. Add `feature_flags` entry in `config.yaml` if needed
+4. Add tests under `tests/`
+
+## Running Tests
+
+```bash
+cd tests
+python -m pytest
+```
+
+## License
+
+[MIT](LICENSE)

@@ -1,11 +1,8 @@
 host: 127.0.0.1
 port: 8765
-secret_key: Ot7q955Pzn5JzHfkWK3suzPmUURsHgGQj7J1szjRP6c
+secret_key: XIOwvjaEwUj3H-O4mKGOwaTOsTVl643go8WHdoWPrcU
 token_expire_minutes: 1440
 allowed_origins: []
-allowed_ips:
-- 127.0.0.1
-- ::1
 allowed_base_dirs:
 - /home/mike
 rate_limit_default: 100/minute
@@ -29,5 +26,5 @@ feature_flags:
   media: true
   clipboard: true
 username: mike
-password_hash: $2b$12$P.05E4BF/AjGMf/ozTTzzuHV7rJDflCo/JXrVPCQTU2QpasIKAXIu
+password_hash: $2b$12$7APnDyXt5JyM5MdONFjrhuwt/BZokRZQPJUINN8levogl0Eez6KcK
 log_level: INFO

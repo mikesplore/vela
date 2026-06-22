@@ -112,8 +112,30 @@ prompt_required VPS_URL "VPS relay URL, including http:// or https://"
 
 DEFAULT_AGENT_ID="${AGENT_ID:-$(hostname | tr -cs 'A-Za-z0-9_.-' '-')}"
 prompt_required AGENT_ID "Agent ID registered with the VPS relay" "$DEFAULT_AGENT_ID"
+
+# AGENT_SECRET is now optional — the VPS issues one on first registration
 AGENT_SECRET="${AGENT_SECRET:-${SECRET:-}}"
-prompt_secret_required AGENT_SECRET "Agent registration secret from the VPS relay"
+if [[ -z "$AGENT_SECRET" ]]; then
+  read -rp "Do you have an existing agent secret from a previous registration? (y/N): " has_secret
+  if [[ "$has_secret" == "y" || "$has_secret" == "Y" ]]; then
+    prompt_secret_required AGENT_SECRET "Agent registration secret from the VPS relay"
+  else
+    echo "No existing secret — will perform first-time registration with the VPS."
+  fi
+fi
+
+# Optional: Public address and metadata for first-time agent registration
+PUBLIC_ADDRESS="${PUBLIC_ADDRESS:-}"
+read -rp "Public address of this agent (optional, for first registration): " answer
+if [[ -n "$answer" ]]; then
+  PUBLIC_ADDRESS="$answer"
+fi
+
+METADATA="${METADATA:-}"
+read -rp "Agent metadata as JSON string (optional, e.g. {\"os\": \"linux\"}): " answer
+if [[ -n "$answer" ]]; then
+  METADATA="$answer"
+fi
 
 SERVER_HOST="${SERVER_HOST:-127.0.0.1}"
 SERVER_PORT="${SERVER_PORT:-8765}"
@@ -139,7 +161,7 @@ if [[ "$ALLOWED_BASE_DIRS" == "/" ]]; then
 fi
 
 export USERNAME PASSWORD LOCAL_SERVICE_USERNAME LOCAL_SERVICE_PASSWORD
-export VPS_URL AGENT_ID AGENT_SECRET SERVER_HOST SERVER_PORT ALLOWED_IPS ALLOWED_BASE_DIRS
+export VPS_URL AGENT_ID AGENT_SECRET PUBLIC_ADDRESS METADATA SERVER_HOST SERVER_PORT ALLOWED_IPS ALLOWED_BASE_DIRS
 
 python - <<'PY'
 import os
@@ -152,23 +174,38 @@ parsed = urlparse(vps_url)
 if parsed.scheme not in {"http", "https"} or not parsed.netloc:
     raise SystemExit("VPS relay URL must include http:// or https:// and a host.")
 
-agent_secret = os.environ["AGENT_SECRET"].strip()
+agent_secret = os.environ.get("AGENT_SECRET", "").strip()
+agent_id = os.environ.get("AGENT_ID", "").strip()
 
-print(f"Testing connectivity to VPS at {vps_url}/health...")
+print(f"Testing connectivity to VPS at {vps_url}/register...")
 try:
-    resp = requests.get(
-        f"{vps_url.rstrip('/')}/health",
-        headers={"X-API-Key": agent_secret},
-        timeout=10,
-    )
+    url = f"{vps_url.rstrip('/')}/register"
+    payload = {"agent_id": agent_id}
+    headers = {}
+
+    if agent_secret:
+        # Authenticated test (re-registration)
+        payload["public_address"] = "http://127.0.0.1:0"
+        headers["X-API-Key"] = agent_secret
+        resp = requests.post(url, json=payload, headers=headers, timeout=10)
+    else:
+        # First-time registration test
+        payload["public_address"] = "http://127.0.0.1:0"
+        resp = requests.post(url, json=payload, timeout=10)
+
     if resp.status_code == 200:
-        print("Successfully connected to VPS and verified API key.")
+        data = resp.json()
+        print("Successfully connected to VPS.")
+        issued_secret = data.get("secret")
+        if issued_secret:
+            print(f"Issued Agent Secret: {issued_secret}")
+            print("IMPORTANT: Save this secret. It authenticates your agent to the VPS relay.")
+            # Export it so it gets saved to .env
+            os.environ["AGENT_SECRET"] = issued_secret
     elif resp.status_code == 401:
         raise SystemExit("Failed to verify credentials: VPS returned 401 Unauthorized. Check your Agent Secret.")
-    elif resp.status_code == 403:
-        raise SystemExit("Access forbidden: VPS returned 403 Forbidden. Check your Agent Secret permissions.")
     elif resp.status_code == 404:
-        raise SystemExit(f"Failed to reach health endpoint: VPS returned 404 Not Found at {vps_url}/health.")
+        raise SystemExit(f"Failed to reach registration endpoint: VPS returned 404 Not Found at {url}.")
     else:
         raise SystemExit(f"Failed to connect to VPS: Status {resp.status_code} - {resp.text}")
 except requests.exceptions.ConnectionError:
@@ -288,6 +325,16 @@ for key in (
     "AGENT_SECRET",
 ):
     set_key(env_file, key, os.environ[key])
+
+# Set optional registration fields if provided
+public_address = os.environ.get("PUBLIC_ADDRESS", "").strip()
+if public_address:
+    set_key(env_file, "PUBLIC_ADDRESS", public_address)
+
+metadata = os.environ.get("METADATA", "").strip()
+if metadata:
+    set_key(env_file, "METADATA", metadata)
+
 set_key(env_file, "LOCAL_SERVICE_TOKEN_PATH", "/auth/token")
 set_key(env_file, "LOCAL_SERVICE_AUTH_TOKEN", "")
 set_key(env_file, "LOCAL_SERVICE_AUTH_TOKEN_EXPIRES", "")
