@@ -15,7 +15,7 @@ def _auth_headers() -> dict[str, str]:
 async def test_assistant_chat_requires_api_key(async_client):
     from routers import assistant
 
-    assistant.config.dashscope_api_key = None
+    assistant.config.groq_api_key = None
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(assistant, "_get_api_key", lambda: None)
 
@@ -26,7 +26,7 @@ async def test_assistant_chat_requires_api_key(async_client):
             headers=_auth_headers(),
         )
         assert response.status_code == 503
-        assert "DashScope API key" in response.json()["message"]
+        assert "Groq API key" in response.json()["detail"]
     finally:
         monkeypatch.undo()
 
@@ -35,8 +35,8 @@ async def test_assistant_chat_requires_api_key(async_client):
 async def test_assistant_chat_returns_reply(monkeypatch, async_client):
     from routers import assistant
 
-    assistant.config.dashscope_api_key = "test-key"
-    assistant.config.dashscope_api_url = "https://api.test/v1/chat/completions"
+    assistant.config.groq_api_key = "test-key"
+    assistant.config.groq_api_url = "https://api.test/v1"
     assistant.config.assistant_action_pin = None
     monkeypatch.setattr(assistant, "_get_api_key", lambda: "test-key")
 
@@ -61,7 +61,7 @@ async def test_assistant_requires_pin_for_high_risk_action(monkeypatch, async_cl
     from routers import assistant
     from routers import assistant_safety
 
-    assistant.config.dashscope_api_key = "test-key"
+    assistant.config.groq_api_key = "test-key"
     assistant.config.assistant_action_pin = "2468"
     assistant_safety.config.assistant_action_pin = "2468"
     monkeypatch.setattr(assistant, "_get_api_key", lambda: "test-key")
@@ -107,7 +107,7 @@ async def test_assistant_rejects_wrong_pin_after_three_attempts(monkeypatch, asy
     from routers import assistant
     from routers import assistant_safety
 
-    assistant.config.dashscope_api_key = "test-key"
+    assistant.config.groq_api_key = "test-key"
     assistant.config.assistant_action_pin = "2468"
     assistant_safety.config.assistant_action_pin = "2468"
     assistant_safety.clear_pending_action(config.username, "test-session")
@@ -162,7 +162,7 @@ async def test_assistant_rejects_wrong_pin_after_three_attempts(monkeypatch, asy
 async def test_assistant_returns_screenshot_directly(monkeypatch, async_client):
     from routers import assistant
 
-    assistant.config.dashscope_api_key = "test-key"
+    assistant.config.groq_api_key = "test-key"
     assistant.config.assistant_action_pin = None
     monkeypatch.setattr(assistant, "_get_api_key", lambda: "test-key")
 
@@ -252,7 +252,7 @@ async def test_new_tool_request_clears_old_pending_action(monkeypatch, async_cli
     from routers import assistant
     from routers import assistant_safety
 
-    assistant.config.dashscope_api_key = "test-key"
+    assistant.config.groq_api_key = "test-key"
     assistant.config.assistant_action_pin = None
     monkeypatch.setattr(assistant, "_get_api_key", lambda: "test-key")
     monkeypatch.setattr(assistant, "_extract_session_id", lambda request: "test-session")
@@ -315,7 +315,7 @@ async def test_cancelled_pending_action_message_removed_from_history(monkeypatch
     from routers import assistant
     from routers import assistant_core
 
-    assistant.config.dashscope_api_key = "test-key"
+    assistant.config.groq_api_key = "test-key"
     assistant.config.assistant_action_pin = None
     monkeypatch.setattr(assistant, "_get_api_key", lambda: "test-key")
     monkeypatch.setattr(assistant, "_extract_session_id", lambda request: "test-session-cancel")

@@ -39,7 +39,10 @@ class Config(BaseSettings):
     assistant_action_timeout_seconds: int = 120
     dashscope_api_url: str = "https://dashscope-intl.aliyuncs.com/api/v1"
     dashscope_api_key: str | None = None
-    dashscope_model: str = "qwen_plus"
+    dashscope_model: str = "qwen-plus"
+    groq_api_key: str | None = None
+    groq_model: str = "qwen/qwen3-32b"
+    groq_api_url: str = "https://api.groq.com/openai/v1"
     assistant_system_prompt: str = DEFAULT_ASSISTANT_SYSTEM_PROMPT
 
     model_config = {

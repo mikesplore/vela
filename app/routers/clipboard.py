@@ -36,7 +36,7 @@ def _write_clipboard(text: str) -> None:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@router.get("/readd", response_model=ClipboardData, dependencies=[Depends(get_current_user)])
+@router.get("/read", response_model=ClipboardData, dependencies=[Depends(get_current_user)])
 async def read_clipboard() -> Any:
     """Read the current clipboard contents."""
     return ClipboardData(text=_read_clipboard())

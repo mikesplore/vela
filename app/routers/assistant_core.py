@@ -9,8 +9,7 @@ from pathlib import Path
 from dotenv import dotenv_values
 from urllib.parse import quote_plus
 
-import dashscope
-from dashscope import Generation
+from groq import Groq, AsyncGroq
 from fastapi import FastAPI
 from httpx import AsyncClient, ASGITransport
 
@@ -42,7 +41,7 @@ def _clean_text(text: str) -> str:
 
 
 def _get_api_key() -> str | None:
-    """Read DASHSCOPE_API_KEY strictly from dotfiles only.
+    """Read GROQ_API_KEY strictly from dotfiles only.
 
     Search order (first match wins):
     1. ./ .env
@@ -64,7 +63,7 @@ def _get_api_key() -> str | None:
             vals = dotenv_values(p)
         except Exception:
             continue
-        key = vals.get("DASHSCOPE_API_KEY")
+        key = vals.get("GROQ_API_KEY")
         if key:
             return str(key)
     return None
@@ -95,8 +94,8 @@ def _get_response_text(response_data: Any) -> str:
     return _clean_text(str(response_data))
 
 
-def _explain_dashscope_issue(info: Any) -> str:
-    """Return a concise, user-facing explanation for DashScope errors.
+def _explain_groq_issue(info: Any) -> str:
+    """Return a concise, user-facing explanation for Groq errors.
 
     Accepts either an Exception or a response-like dict/object.
     """
@@ -105,87 +104,30 @@ def _explain_dashscope_issue(info: Any) -> str:
             msg = str(info)
             lower = msg.lower()
             if "401" in msg or "unauthorized" in lower or "api key" in lower:
-                return "Authentication failed: missing or invalid DASHSCOPE_API_KEY in your .env file."
+                return "Authentication failed: missing or invalid GROQ_API_KEY in your .env file."
             if "429" in msg or "rate limit" in lower:
-                return "Rate limited: too many requests to DashScope. Try again later."
+                return "Rate limited: too many requests to Groq. Try again later."
             if "timeout" in lower:
-                return "Request timed out contacting the DashScope API. Check network connectivity."
-            return f"Error contacting DashScope: {msg}"
+                return "Request timed out contacting the Groq API. Check network connectivity."
+            return f"Error contacting Groq: {msg}"
 
         if isinstance(info, dict):
-            # Common error shapes: {'error': {'code': 401, 'message': '...'}} or {'error': '...'}
             err = info.get("error") or info.get("message") or info
             if isinstance(err, dict):
                 code = err.get("code") or err.get("status")
                 message = err.get("message") or err.get("detail") or str(err)
                 code_str = str(code) if code is not None else ""
                 if "401" in code_str or "401" in message:
-                    return "Authentication failed: invalid DASHSCOPE_API_KEY in your .env file."
+                    return "Authentication failed: invalid GROQ_API_KEY in your .env file."
                 if "429" in code_str or "rate" in message.lower():
-                    return "Rate limited: too many requests to DashScope. Try again later."
+                    return "Rate limited: too many requests to Groq. Try again later."
                 if code and int(code) >= 500:
-                    return "DashScope service error: the remote service is unavailable. Try again later."
-                return f"DashScope API error: {message}"
-            return f"DashScope error: {err}"
+                    return "Groq service error: the remote service is unavailable. Try again later."
+                return f"Groq API error: {message}"
+            return f"Groq error: {err}"
     except Exception:
         pass
-    return "An unknown error occurred while contacting DashScope."
-
-
-def _set_dashscope_base_url() -> None:
-    """Resolve and set the DashScope base URL. Called once at startup."""
-    api_url = (
-        os.getenv("DASHSCOPE_HTTP_BASE_URL")
-        or os.getenv("DASHSCOPE_API_URL")
-        or os.getenv("VELA_DASHSCOPE_API_URL")
-        or config.dashscope_api_url
-    )
-    if "/chat/completions" in api_url:
-        api_url = api_url.split("/chat/completions")[0]
-    if api_url.startswith("https://api.dashscope.com"):
-        api_url = api_url.replace("https://api.dashscope.com", "https://dashscope-intl.aliyuncs.com/api")
-    if api_url.startswith("https://dashscope-intl.aliyuncs.com/v1"):
-        api_url = api_url.replace("https://dashscope-intl.aliyuncs.com/v1", "https://dashscope-intl.aliyuncs.com/api/v1")
-    dashscope.base_http_api_url = api_url.rstrip("/")
-
-
-_set_dashscope_base_url()
-
-
-def _extract_json_array(text: str) -> list[dict[str, Any]] | None:
-    """
-    Extract a JSON array from the model's response.
-    Falls back to wrapping a single object in a list for robustness.
-    """
-    cleaned = _clean_text(text)
-
-    match = re.search(r"\[.*\]", cleaned, flags=re.DOTALL)
-    if match:
-        candidate = match.group(0)
-        try:
-            result = json.loads(candidate)
-            if isinstance(result, list):
-                return result
-        except json.JSONDecodeError:
-            try:
-                candidate = re.sub(r",\s*\]\s*$", "]", candidate)
-                candidate = re.sub(r",\s*}\s*]", "}]", candidate)
-                result = json.loads(candidate)
-                if isinstance(result, list):
-                    return result
-            except json.JSONDecodeError:
-                pass
-
-    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
-    if match:
-        try:
-            obj = json.loads(match.group(0))
-            if isinstance(obj, dict) and "tool" in obj:
-                return [obj]
-        except json.JSONDecodeError:
-            pass
-
-    return None
+    return "An unknown error occurred while contacting Groq."
 
 
 def _get_or_init_session(user_id: str) -> list[dict[str, str]]:
@@ -218,20 +160,22 @@ def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = N
     messages.append({"role": "user", "content": user_message})
 
     try:
-        response = Generation.call(
-            api_key=_get_api_key(),
-            model=config.dashscope_model,
+        client = Groq(api_key=_get_api_key())
+        response = client.chat.completions.create(
+            model=config.groq_model,
             messages=messages,
-            result_format="message",
-            stream=False,
-            incremental_output=False,
             temperature=0.0,
             max_tokens=512,
+            top_p=1,
+            stream=False,
+            stop=None,
+            reasoning_effort="none",
         )
+        text = response.choices[0].message.content or ""
     except Exception as exc:
-        logger.error("DashScope Generation.call failed: %s", exc, exc_info=True)
-        raise ValueError(_explain_dashscope_issue(exc)) from exc
-    text = _get_response_text(response)
+        logger.error("Groq chat.completions.create failed: %s", exc, exc_info=True)
+        raise ValueError(_explain_groq_issue(exc)) from exc
+    text = _clean_text(text)
     parsed = _extract_json_array(text)
     if not parsed:
         suggestion = (
@@ -280,35 +224,68 @@ def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tu
             parts.append(f"Length: {length_text}.")
         return " ".join(parts), art_url
 
-    system = (
-        "You are Vela. The user asked for one or more actions. "
-        "Use the tool results below to write a single concise Markdown reply optimized for an Android app screen. "
-        "Use small headers (###, ####) and compact lists. "
-        "Do not return raw JSON. If any action failed, say so clearly."
-    )
+    system = config.assistant_system_prompt
     results_text = "\n".join(
         f"Tool: {r['tool']}\nResult: {json.dumps(r['result'], separators=(',', ':'))}"
         + (f"\nError: {r['error']}" if r.get("error") else "")
         for r in results
     )
     try:
-        response = Generation.call(
-            api_key=_get_api_key(),
-            model=config.dashscope_model,
+        client = Groq(api_key=_get_api_key())
+        response = client.chat.completions.create(
+            model=config.groq_model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": f"User request: {user_message}\n\n{results_text}\n\nAnswer in clean Markdown."},
             ],
-            result_format="message",
-            stream=False,
-            incremental_output=False,
             temperature=0.2,
             max_tokens=512,
+            top_p=1,
+            stream=False,
+            stop=None,
+            reasoning_effort="none",
         )
+        text = response.choices[0].message.content or ""
     except Exception as exc:
-        logger.error("DashScope Generation.call failed: %s", exc, exc_info=True)
-        raise ValueError(_explain_dashscope_issue(exc)) from exc
-    return _get_response_text(response), None
+        logger.error("Groq chat.completions.create failed: %s", exc, exc_info=True)
+        raise ValueError(_explain_groq_issue(exc)) from exc
+    return _clean_text(text), None
+
+
+def _extract_json_array(text: str) -> list[dict[str, Any]] | None:
+    """
+    Extract a JSON array from the model's response.
+    Falls back to wrapping a single object in a list for robustness.
+    """
+    cleaned = _clean_text(text)
+
+    match = re.search(r"\[.*\]", cleaned, flags=re.DOTALL)
+    if match:
+        candidate = match.group(0)
+        try:
+            result = json.loads(candidate)
+            if isinstance(result, list):
+                return result
+        except json.JSONDecodeError:
+            try:
+                candidate = re.sub(r",\s*\]\s*$", "]", candidate)
+                candidate = re.sub(r",\s*}\s*]", "}]", candidate)
+                result = json.loads(candidate)
+                if isinstance(result, list):
+                    return result
+            except json.JSONDecodeError:
+                pass
+
+    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+    if match:
+        try:
+            obj = json.loads(match.group(0))
+            if isinstance(obj, dict) and "tool" in obj:
+                return [obj]
+        except json.JSONDecodeError:
+            pass
+
+    return None
 
 
 async def _execute_tool(

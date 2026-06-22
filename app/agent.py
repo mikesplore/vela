@@ -62,7 +62,7 @@ LOCAL_SERVICE_PASSWORD = os.getenv("LOCAL_SERVICE_PASSWORD", os.getenv("PASSWORD
 LOCAL_SERVICE_TOKEN_PATH = os.getenv("LOCAL_SERVICE_TOKEN_PATH", "/auth/token")
 LOCAL_SERVICE_AUTH_TOKEN = os.getenv("LOCAL_SERVICE_AUTH_TOKEN")
 LOCAL_SERVICE_AUTH_TOKEN_EXPIRES = os.getenv("LOCAL_SERVICE_AUTH_TOKEN_EXPIRES")
-LOCAL_SERVICE_TIMEOUT = int(os.getenv("LOCAL_SERVICE_TIMEOUT", "10"))
+LOCAL_SERVICE_TIMEOUT = int(os.getenv("LOCAL_SERVICE_TIMEOUT", "30"))
 
 # How long to wait for a message from the relay before assuming the connection is dead.
 RELAY_READ_TIMEOUT = int(os.getenv("RELAY_READ_TIMEOUT", "60"))
