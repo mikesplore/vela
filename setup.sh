@@ -157,8 +157,14 @@ if [[ "$ALLOWED_BASE_DIRS" == "/" ]]; then
   fi
 fi
 
+ASSISTANT_ACTION_PIN="${ASSISTANT_ACTION_PIN:-${VELA_ASSISTANT_ACTION_PIN:-}}"
+read -rp "Assistant action PIN for high-risk actions (shutdown, delete, kill process, etc.) - press Enter to skip: " answer
+if [[ -n "$answer" ]]; then
+  ASSISTANT_ACTION_PIN="$answer"
+fi
+
 export USERNAME PASSWORD LOCAL_SERVICE_USERNAME LOCAL_SERVICE_PASSWORD
-export VPS_URL AGENT_ID AGENT_SECRET PUBLIC_ADDRESS METADATA SERVER_HOST SERVER_PORT ALLOWED_BASE_DIRS
+export VPS_URL AGENT_ID AGENT_SECRET PUBLIC_ADDRESS METADATA SERVER_HOST SERVER_PORT ALLOWED_BASE_DIRS ASSISTANT_ACTION_PIN
 
 python - <<'PY'
 import os
@@ -282,6 +288,10 @@ config = {
     "log_level": "INFO",
 }
 
+assistant_action_pin = os.environ.get("ASSISTANT_ACTION_PIN", "").strip()
+if assistant_action_pin:
+    config["assistant_action_pin"] = assistant_action_pin
+
 Path(os.environ["VELA_CONFIG_FILE"]).write_text(
     yaml.safe_dump(config, sort_keys=False),
     encoding="utf-8",
@@ -319,6 +329,7 @@ for key in (
     "VPS_URL",
     "AGENT_ID",
     "AGENT_SECRET",
+    "ASSISTANT_ACTION_PIN",
 ):
     set_key(env_file, key, os.environ[key])
 

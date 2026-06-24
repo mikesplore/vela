@@ -13,7 +13,7 @@ from httpx import AsyncClient, ASGITransport
 import requests
 
 from app.config import Config
-from .assistant_tools import INPUT_CONFIRM_TOOLS, SYSTEM_TOOL_PROMPT, TOOL_DEFINITIONS
+from .assistant_tools import INPUT_CONFIRM_TOOLS, SYSTEM_TOOL_PROMPT, TOOL_ALIASES, TOOL_DEFINITIONS
 
 config = Config()
 logger = logging.getLogger("vela.assistant")
@@ -176,11 +176,12 @@ def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = N
             })
             continue
 
-    suggestion = (
-        "Could not parse tool selection from model output after retries. "
-        "Raw output follows; possible causes: model returned non-JSON, unexpected formatting, or a missing system prompt."
+    logger.error(
+        "Could not parse tool selection from model output after %d retries. Output: %s",
+        max_retries,
+        text[:500],
     )
-    raise ValueError(f"{suggestion} Output: {text}")
+    return [{"tool": "none", "tool_input": {}, "conversational_reply": "I'm sorry, I couldn't process that request. Please try rephrasing it."}]
 
 
 def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tuple[str, str | None]:
@@ -303,8 +304,10 @@ async def _execute_tool(
         auth_header: str | None,
         confirmed: bool = False,
 ) -> dict[str, Any]:
-    if tool_name not in TOOL_DEFINITIONS:
+    resolved_tool = TOOL_ALIASES.get(tool_name, tool_name)
+    if resolved_tool not in TOOL_DEFINITIONS:
         raise ValueError(f"Unknown tool: {tool_name}")
+    tool_name = resolved_tool
 
     tool = TOOL_DEFINITIONS[tool_name]
     path = tool["path"]

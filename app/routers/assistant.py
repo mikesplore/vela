@@ -1,7 +1,7 @@
 import asyncio
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -23,6 +23,7 @@ from .assistant_safety import (
     PIN_MAX_ATTEMPTS,
     PendingAction,
     build_confirmation_card,
+    cancel_pending_action_by_ai,
     clear_pending_action,
     get_pending_action,
     is_affirmative,
@@ -82,8 +83,14 @@ class AssistantResponse(BaseModel):
     confirmation: ConfirmationCard | None = None
 
 
+def _expires_in_seconds(expires_at: datetime) -> int:
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return max(0, int((expires_at - datetime.now(UTC)).total_seconds()))
+
+
 def _pending_response(pending: PendingAction) -> AssistantResponse:
-    expires_in_seconds = max(0, int((pending.expires_at - datetime.now(pending.expires_at.tzinfo)).total_seconds()))
+    expires_in_seconds = _expires_in_seconds(pending.expires_at)
     confirmation_card = build_confirmation_card(
         pending.tool_calls,
         pending.requires_auth,
@@ -92,7 +99,7 @@ def _pending_response(pending: PendingAction) -> AssistantResponse:
     return AssistantResponse(
         reply=pending.prompt,
         pending_action_id=pending.action_id,
-        requires_confirmation=True,
+        requires_confirmation=not pending.requires_auth,
         requires_auth=pending.requires_auth,
         expires_in_seconds=expires_in_seconds,
         confirmation=confirmation_card,
@@ -168,9 +175,9 @@ async def chat(
                 return AssistantResponse(
                     reply="Enter your PIN to continue.",
                     pending_action_id=pending.action_id,
-                    requires_confirmation=True,
+                    requires_confirmation=False,
                     requires_auth=True,
-                    expires_in_seconds=max(0, int((pending.expires_at - datetime.now(timezone.utc)).total_seconds())),
+                    expires_in_seconds=_expires_in_seconds(pending.expires_at),
                     confirmation=confirmation_card,
                 )
 
@@ -189,9 +196,9 @@ async def chat(
             return AssistantResponse(
                 reply=f"Incorrect PIN. {remaining_attempts} attempt(s) remaining. Enter your PIN to continue or say cancel.",
                 pending_action_id=pending.action_id,
-                requires_confirmation=True,
+                requires_confirmation=False,
                 requires_auth=True,
-                expires_in_seconds=max(0, int((pending.expires_at - datetime.now(timezone.utc)).total_seconds())),
+                expires_in_seconds=_expires_in_seconds(pending.expires_at),
                 confirmation=confirmation_card,
             )
         if is_affirmative(message):
@@ -202,8 +209,10 @@ async def chat(
             SESSION_STORE[current_user] = _trim_history(history)
             return tool_response
 
-        # New request: clear the old pending action and remove its message from history
-        clear_pending_action(current_user, session_id)
+        # AI-initiated cancellation: new request overrides the pending action
+        cancellation_msg = cancel_pending_action_by_ai(current_user, session_id, "New request received")
+        if cancellation_msg:
+            history.append({"role": "assistant", "content": cancellation_msg})
         history = [h for h in history if h.get("content") != pending.user_message]
         SESSION_STORE[current_user] = history
 
@@ -235,9 +244,9 @@ async def chat(
             return AssistantResponse(
                 reply=reply_text,
                 pending_action_id=pending.action_id,
-                requires_confirmation=True,
+                requires_confirmation=not pending.requires_auth,
                 requires_auth=pending.requires_auth,
-                expires_in_seconds=max(0, int((pending.expires_at - datetime.now(timezone.utc)).total_seconds())),
+                expires_in_seconds=_expires_in_seconds(pending.expires_at),
                 confirmation=confirmation_card,
             )
 

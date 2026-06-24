@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel
 
 from app.config import Config
+from app.models import PendingAction
 
 config = Config()
 
@@ -32,20 +33,6 @@ class ConfirmationCard(BaseModel):
     prompt_text: str
     pin_attempts_remaining: int | None = None
     pin_max_attempts: int | None = None
-
-
-@dataclass
-class PendingAction:
-    action_id: str
-    user_id: str
-    session_id: str
-    user_message: str
-    tool_calls: list[dict[str, Any]]
-    prompt: str
-    requires_auth: bool
-    created_at: datetime
-    expires_at: datetime
-    pin_attempts: int = 0
 
 
 LOW_RISK_TOOLS = {
@@ -143,8 +130,11 @@ HIGH_RISK_TOOLS = {
     "power_hibernate",
 }
 
-PENDING_ACTIONS: dict[str, PendingAction] = {}
 PIN_MAX_ATTEMPTS = 3
+
+# Initialize database on module load
+from app.pending_actions_db import init_db, get_pending_action_from_db, save_pending_action, delete_pending_action as db_delete_pending_action
+init_db()
 
 
 def _pending_action_key(user_id: str, session_id: str) -> str:
@@ -154,7 +144,7 @@ def _pending_action_key(user_id: str, session_id: str) -> str:
 
 def get_tool_policy(tool_name: str) -> ToolPolicy:
     if tool_name in HIGH_RISK_TOOLS:
-        return ToolPolicy(risk_level="high", requires_confirmation=True, requires_auth=True)
+        return ToolPolicy(risk_level="high", requires_confirmation=False, requires_auth=True)
     if tool_name in MEDIUM_RISK_TOOLS:
         return ToolPolicy(risk_level="medium", requires_confirmation=True, requires_auth=False)
     return ToolPolicy(risk_level="low")
@@ -300,25 +290,43 @@ def register_pending_action(user_id: str, session_id: str, user_message: str, to
         created_at=now,
         expires_at=now + timedelta(seconds=config.assistant_action_timeout_seconds),
     )
-    key = _pending_action_key(user_id, session_id)
-    PENDING_ACTIONS[key] = pending
+    # Save to database
+    save_pending_action(pending)
     return pending
 
 
 def get_pending_action(user_id: str, session_id: str) -> PendingAction | None:
-    key = _pending_action_key(user_id, session_id)
-    pending = PENDING_ACTIONS.get(key)
+    # Get from database
+    pending = get_pending_action_from_db(user_id, session_id)
     if not pending:
         return None
-    if pending.expires_at <= datetime.now(timezone.utc):
+    # Check expiration (also handled in DB function, but double-check here)
+    expires_at = pending.expires_at
+    if expires_at.tzinfo is None:
+        # If stored as naive, assume UTC
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at <= datetime.now(UTC):
         clear_pending_action(user_id, session_id)
         return None
     return pending
 
 
 def clear_pending_action(user_id: str, session_id: str) -> None:
-    key = _pending_action_key(user_id, session_id)
-    PENDING_ACTIONS.pop(key, None)
+    """Clear a pending action (used by both user cancellation and AI override)."""
+    # Clear from database
+    db_delete_pending_action(user_id, session_id)
+
+
+def cancel_pending_action_by_ai(user_id: str, session_id: str, reason: str = "New request received") -> str:
+    """
+    Cancel a pending action initiated by the AI.
+    Returns a message explaining the cancellation.
+    """
+    pending = get_pending_action_from_db(user_id, session_id)
+    if pending:
+        clear_pending_action(user_id, session_id)
+        return f"Cancelled previous pending action: {reason}"
+    return ""
 
 
 def is_affirmative(message: str) -> bool:
@@ -349,4 +357,6 @@ def requires_auth(tool_name: str) -> bool:
 
 def register_pin_rejection(pending: PendingAction) -> int:
     pending.pin_attempts += 1
+    # Save updated pin attempts to database
+    save_pending_action(pending)
     return max(0, PIN_MAX_ATTEMPTS - pending.pin_attempts)

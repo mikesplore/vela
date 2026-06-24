@@ -426,14 +426,14 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": "List running processes.",
     },
     "kill_process": {
-        "method": "POST",
-        "path": "/processes/kill",
+        "method": "DELETE",
+        "path": "/processes/{pid}",
         "description": "Kill a process by PID.",
         "input": {"pid": "integer"},
     },
     "kill_process_by_name": {
-        "method": "POST",
-        "path": "/processes/kill/{name}",
+        "method": "DELETE",
+        "path": "/processes/name/{name}",
         "description": "Kill all processes matching a name.",
         "input": {"name": "string"},
     },
@@ -482,6 +482,214 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": "Trigger a scheduled task immediately.",
         "input": {"task_id": "string"},
     },
+    # ── Process control (extended) ────────────────────────────────────────────
+    "launch_process": {
+        "method": "POST",
+        "path": "/processes/launch",
+        "description": "Launch a new process with optional arguments.",
+        "input": {"command": "string", "args": "array of strings"},
+    },
+    "open_application": {
+        "method": "POST",
+        "path": "/processes/app/open",
+        "description": "Open an application by name with optional arguments.",
+        "input": {"name": "string", "args": "array of strings"},
+    },
+    "close_application": {
+        "method": "POST",
+        "path": "/processes/app/close",
+        "description": "Close an application by process name.",
+        "input": {"name": "string"},
+    },
+    "active_window": {
+        "method": "GET",
+        "path": "/processes/active-window",
+        "description": "Get the currently focused window title and app path.",
+    },
+    "minimize_window": {
+        "method": "POST",
+        "path": "/processes/window/minimize",
+        "description": "Minimize a window by window ID.",
+        "input": {"window_id": "string"},
+    },
+    "close_window": {
+        "method": "POST",
+        "path": "/processes/window/close",
+        "description": "Close a window by window ID.",
+        "input": {"window_id": "string"},
+    },
+    # ── Power (extended) ──────────────────────────────────────────────────────
+    "schedule_shutdown": {
+        "method": "POST",
+        "path": "/power/schedule-shutdown",
+        "description": "Schedule a shutdown at a specific ISO datetime.",
+        "input": {"at": "ISO datetime"},
+    },
+    "cancel_shutdown": {
+        "method": "POST",
+        "path": "/power/cancel-shutdown",
+        "description": "Cancel a pending scheduled shutdown.",
+    },
+    "get_power_profile": {
+        "method": "GET",
+        "path": "/power/profile",
+        "description": "Get the current power profile (performance, balanced, power-saver).",
+    },
+    "set_power_profile": {
+        "method": "POST",
+        "path": "/power/profile",
+        "description": "Set the power profile.",
+        "input": {"profile": "performance|balanced|power-saver"},
+    },
+    # ── Security ──────────────────────────────────────────────────────────────
+    "lock_screen_security": {
+        "method": "POST",
+        "path": "/security/lock",
+        "description": "Lock the screen session (security router with multiple fallbacks).",
+    },
+    "logout_user": {
+        "method": "POST",
+        "path": "/security/logout",
+        "description": "Log out the current user session.",
+    },
+    "disable_webcam": {
+        "method": "POST",
+        "path": "/security/webcam/disable",
+        "description": "Disable the webcam by unloading the kernel module.",
+    },
+    "enable_webcam": {
+        "method": "POST",
+        "path": "/security/webcam/enable",
+        "description": "Enable the webcam by loading the kernel module.",
+    },
+    "webcam_snapshot": {
+        "method": "POST",
+        "path": "/security/webcam/snapshot",
+        "description": "Capture a webcam image and return it as base64 PNG.",
+    },
+    "disable_mic": {
+        "method": "POST",
+        "path": "/security/mic/disable",
+        "description": "Mute the default microphone source.",
+    },
+    "enable_mic": {
+        "method": "POST",
+        "path": "/security/mic/enable",
+        "description": "Unmute the default microphone source.",
+    },
+    "login_history": {
+        "method": "GET",
+        "path": "/security/login-history",
+        "description": "Get recent login events from system auth logs.",
+    },
+    "ssh_sessions": {
+        "method": "GET",
+        "path": "/security/ssh-sessions",
+        "description": "List active SSH sessions.",
+    },
+    # ── Notifications ─────────────────────────────────────────────────────────
+    "send_notification": {
+        "method": "POST",
+        "path": "/notifications/send",
+        "description": "Send a desktop notification.",
+        "input": {"title": "string", "message": "string", "app_name": "string?", "urgency": "low|normal|critical?"},
+    },
+    "clear_notifications": {
+        "method": "POST",
+        "path": "/notifications/clear",
+        "description": "Clear all desktop notifications.",
+    },
+    "read_notifications": {
+        "method": "GET",
+        "path": "/notifications/read",
+        "description": "Read notifications sent through this agent.",
+    },
+    "list_notifications": {
+        "method": "GET",
+        "path": "/notifications/list",
+        "description": "List desktop notification history.",
+    },
+    # ── Maintenance ───────────────────────────────────────────────────────────
+    "clear_cache": {
+        "method": "POST",
+        "path": "/maintenance/clear-cache",
+        "description": "Clear /tmp and user cache directories.",
+    },
+    "get_logs": {
+        "method": "GET",
+        "path": "/maintenance/logs",
+        "description": "Get the last N lines of a systemd service log.",
+        "input": {"service": "string", "lines": "integer 1-1000"},
+    },
+    "check_updates": {
+        "method": "GET",
+        "path": "/maintenance/updates",
+        "description": "Check for available system updates.",
+    },
+    "run_update": {
+        "method": "POST",
+        "path": "/maintenance/update",
+        "description": "Run a full system update (requires confirmation).",
+        "input": {"confirm": "boolean"},
+    },
+    "sync_time": {
+        "method": "POST",
+        "path": "/maintenance/sync-time",
+        "description": "Sync the system clock via NTP.",
+    },
+    "list_services": {
+        "method": "GET",
+        "path": "/maintenance/services",
+        "description": "List systemd services and their status.",
+    },
+    "restart_service": {
+        "method": "POST",
+        "path": "/maintenance/service/restart",
+        "description": "Restart a systemd service.",
+        "input": {"name": "string"},
+    },
+    "stop_service": {
+        "method": "POST",
+        "path": "/maintenance/service/stop",
+        "description": "Stop a systemd service.",
+        "input": {"name": "string"},
+    },
+    "start_service": {
+        "method": "POST",
+        "path": "/maintenance/service/start",
+        "description": "Start a systemd service.",
+        "input": {"name": "string"},
+    },
+    # ── Network (extended) ────────────────────────────────────────────────────
+    "speed_test": {
+        "method": "GET",
+        "path": "/network/speed-test",
+        "description": "Run a network speed test (download, upload, ping).",
+    },
+    # ── Monitoring (extended) ─────────────────────────────────────────────────
+    "monitor_battery_health": {
+        "method": "GET",
+        "path": "/monitor/battery-health",
+        "description": "Get detailed battery health information (cycle count, capacity, health percent).",
+    },
+    # ── Filesystem (extended) ─────────────────────────────────────────────────
+    "get_system_config": {
+        "method": "GET",
+        "path": "/fs/config",
+        "description": "Get system configuration (home directory, username).",
+    },
+    "get_directory_tree": {
+        "method": "GET",
+        "path": "/fs/tree",
+        "description": "Get directory tree structure for folder navigation.",
+        "input": {"path": "string", "max_depth": "integer 1-3"},
+    },
+    # ── Audio (extended) ──────────────────────────────────────────────────────
+    "beep_audio": {
+        "method": "POST",
+        "path": "/audio/beep",
+        "description": "Play a simple notification beep sound.",
+    },
 }
 
 INPUT_CONFIRM_TOOLS = {
@@ -491,6 +699,14 @@ INPUT_CONFIRM_TOOLS = {
     "scroll_mouse",
     "type_keyboard",
     "press_keyboard_keys",
+}
+
+# Map common model hallucinations / alternate names to canonical tool names
+TOOL_ALIASES: dict[str, str] = {
+    "set_power_mode": "set_power_profile",
+    "set_power": "set_power_profile",
+    "change_power_profile": "set_power_profile",
+    "change_power_mode": "set_power_profile",
 }
 
 _TOOL_LIST = "\n".join(
@@ -521,6 +737,9 @@ Intent → Tool mappings (infer from natural language):
 - "what's playing"/"now playing" → get_media_status
 - "battery"/"how much battery" → get_battery
 - "how's my pc"/"system status" → get_snapshot
+- "bluetooth on/off"/"turn on bluetooth"/"turn off bluetooth" → toggle_bluetooth(enabled:true/false)
+- "kill process <PID>"/"terminate process <PID>"/"kill PID <number>" → kill_process(pid:<PID as integer>)
+- "kill <process name>"/"terminate <process name>"/"kill all <name>" → kill_process_by_name(name:<process name>)
 
 Valid response formats:
 - Single tool: [{{"tool":"get_battery","tool_input":{{}}}}]

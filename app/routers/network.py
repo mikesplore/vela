@@ -378,7 +378,7 @@ def _get_connected_addresses() -> set[str]:
 # Bluetooth endpoints
 # ---------------------------------------------------------------------------
 
-@router.post("/bluetooth/toggle", response_model=IPResponse, dependencies=[Depends(get_current_user)])
+@router.post("/bluetooth/toggle", response_model=dict, dependencies=[Depends(get_current_user)])
 async def bluetooth_toggle(request: ToggleRequest) -> Any:
     """Enable or disable the Bluetooth adapter via rfkill."""
     command = ["rfkill", "unblock", "bluetooth"] if request.enabled else ["rfkill", "block", "bluetooth"]
@@ -388,7 +388,8 @@ async def bluetooth_toggle(request: ToggleRequest) -> Any:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=stderr or stdout or "Could not toggle Bluetooth",
         )
-    return IPResponse(local_ip=_local_ip(), public_ip=_public_ip() or None)
+    state = "on" if request.enabled else "off"
+    return {"bluetooth": state, "message": f"Bluetooth turned {state}"}
 
 
 @router.get("/bluetooth/devices", response_model=BluetoothDevicesResponse, dependencies=[Depends(get_current_user)])
