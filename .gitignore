@@ -68,3 +68,4 @@ Thumbs.db
 
 # Config files
 config.yaml
+*.sqlite
