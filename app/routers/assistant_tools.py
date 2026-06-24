@@ -125,11 +125,6 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "path": "/monitor/cpu",
         "description": "CPU usage percentages overall and per core.",
     },
-    "get_monitor_state": {
-        "method": "GET",
-        "path": "/display/monitor/state",
-        "description": "Read GNOME Mutter PowerSaveMode so the agent can see whether the monitor is on or off.",
-    },
     "monitor_ram": {
         "method": "GET",
         "path": "/monitor/ram",
@@ -511,13 +506,28 @@ CRITICAL RULES:
 3. For ANY user message — including greetings, questions, or conversation — you must return a JSON array.
 4. Even for "thank you" or casual chat, return: [{{"tool":"none","tool_input":{{}},"conversational_reply":"You're welcome!"}}]
 5. NEVER output plain text like "**Battery Status**" or "Your battery is at 83%".
+6. BIAS TO ACTION: If intent implies an action, execute it. NEVER ask "would you like me to..." for safe actions.
+
+Intent → Tool mappings (infer from natural language):
+- "leaving"/"going out"/"stepping away"/"brb" → lock_screen_display + mute_audio(muted:true)
+- "nap"/"sleeping"/"going to sleep"/"bed" → set_display_brightness(0) + mute_audio(muted:true) + monitor_off
+- "I'm back"/"back now"/"wake up" → monitor_on + mute_audio(muted:false)
+- "mute"/"silence"/"quiet" → mute_audio(muted:true)
+- "unmute"/"sound on" → mute_audio(muted:false)
+- "volume up/down a bit" → step of 10
+- "turn off screen/display/monitor" → monitor_off
+- "lock"/"lock screen" → lock_screen_display
+- "screenshot" → display_screenshot
+- "what's playing"/"now playing" → get_media_status
+- "battery"/"how much battery" → get_battery
+- "how's my pc"/"system status" → get_snapshot
 
 Valid response formats:
 - Single tool: [{{"tool":"get_battery","tool_input":{{}}}}]
-- Multiple tools: [{{"tool":"set_volume","tool_input":{{"value":40}}}},{{"tool":"lock_session","tool_input":{{}}}}]
-- Conversation: [{{"tool":"none","tool_input":{{}},"conversational_reply":"Your reply here"}}]
+- Multiple tools: [{{"tool":"mute_audio","tool_input":{{"muted":true}}}},{{"tool":"lock_screen_display","tool_input":{{}}}}]
+- Conversation only: [{{"tool":"none","tool_input":{{}},"conversational_reply":"Your reply here"}}]
 
 Available tools:
-{_TOOL_LIST}
+{{_TOOL_LIST}}
 
-REMEMBER: Output ONLY the JSON array. Nothing else."""
+REMEMBER: Output ONLY the JSON array. Nothing else. When in doubt about intent, act — don't ask."""

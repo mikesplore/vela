@@ -347,10 +347,6 @@ def requires_auth(tool_name: str) -> bool:
     return get_tool_policy(tool_name).requires_auth
 
 
-def pin_attempts_remaining(pending: PendingAction) -> int:
-    return max(0, PIN_MAX_ATTEMPTS - pending.pin_attempts)
-
-
 def register_pin_rejection(pending: PendingAction) -> int:
     pending.pin_attempts += 1
-    return pin_attempts_remaining(pending)
+    return max(0, PIN_MAX_ATTEMPTS - pending.pin_attempts)

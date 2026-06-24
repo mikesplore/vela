@@ -2,7 +2,6 @@ import asyncio
 import base64
 import json
 import logging
-import os
 import re
 from typing import Any
 from pathlib import Path
@@ -22,12 +21,6 @@ logger = logging.getLogger("vela.assistant")
 # In-memory session store: {user_id: [{"role": "user|assistant", "content": "..."}, ...]}
 SESSION_STORE: dict[str, list[dict[str, str]]] = {}
 MAX_HISTORY_CHARS = 4000  # Token-budget-aware trimming instead of message count
-
-
-def _dict_get(obj: Any, name: str) -> Any:
-    if isinstance(obj, dict):
-        return obj.get(name)
-    return getattr(obj, name, None)
 
 
 def _clean_text(text: str) -> str:
@@ -67,31 +60,6 @@ def _get_api_key() -> str | None:
         if key:
             return str(key)
     return None
-
-
-def _get_response_text(response_data: Any) -> str:
-    if response_data is None:
-        return ""
-    output = _dict_get(response_data, "output")
-    if output is not None:
-        text = _dict_get(output, "text")
-        if text:
-            return _clean_text(str(text))
-        choices = _dict_get(output, "choices") or []
-        if isinstance(choices, dict):
-            choices = [choices]
-        for choice in choices:
-            if choice is None:
-                continue
-            message = _dict_get(choice, "message")
-            if not message:
-                continue
-            content = _dict_get(message, "content") or _dict_get(message, "text")
-            if content:
-                return _clean_text(str(content))
-    if isinstance(response_data, dict):
-        return _clean_text(json.dumps(response_data))
-    return _clean_text(str(response_data))
 
 
 def _explain_fireworks_issue(info: Any) -> str:
@@ -159,41 +127,60 @@ def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = N
         messages.extend(history)
     messages.append({"role": "user", "content": user_message})
 
-    try:
-        api_key = _get_api_key()
-        if not api_key:
-            raise ValueError("FIREWORKS_API_KEY is not configured in your .env file.")
-        
-        url = f"{config.fireworks_api_url}/chat/completions"
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
-        payload = {
-            "model": config.fireworks_model,
-            "max_tokens": 4096,
-            "reasoning_effort": "low",
-            "messages": messages,
-        }
-        
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        response.raise_for_status()
-        
-        res_json = response.json()
-        text = res_json["choices"][0]["message"]["content"] or ""
-    except Exception as exc:
-        logger.error("Fireworks AI chat.completions.create failed: %s", exc, exc_info=True)
-        raise ValueError(_explain_fireworks_issue(exc)) from exc
-    text = _clean_text(text)
-    parsed = _extract_json_array(text)
-    if not parsed:
-        suggestion = (
-            "Could not parse tool selection from model output. "
-            "Raw output follows; possible causes: model returned non-JSON, unexpected formatting, or a missing system prompt."
-        )
-        raise ValueError(f"{suggestion} Output: {text}")
-    return parsed
+    api_key = _get_api_key()
+    if not api_key:
+        raise ValueError("FIREWORKS_API_KEY is not configured in your .env file.")
+
+    url = f"{config.fireworks_api_url}/chat/completions"
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            payload = {
+                "model": config.fireworks_model,
+                "max_tokens": 512,
+                "reasoning_effort": "low",
+                "messages": messages,
+            }
+
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
+
+            res_json = response.json()
+            text = res_json["choices"][0]["message"]["content"] or ""
+        except Exception as exc:
+            logger.error("Fireworks AI chat.completions.create failed: %s", exc, exc_info=True)
+            raise ValueError(_explain_fireworks_issue(exc)) from exc
+
+        text = _clean_text(text)
+        parsed = _extract_json_array(text)
+        if parsed:
+            return parsed
+
+        # Model returned non-JSON; retry with a corrective system message
+        if attempt < max_retries - 1:
+            logger.warning(
+                "Model returned non-JSON on attempt %d/%d. Retrying with correction. Output: %s",
+                attempt + 1,
+                max_retries,
+                text[:200],
+            )
+            messages.append({
+                "role": "system",
+                "content": "ERROR: Your previous response was not valid JSON. You MUST respond with ONLY a JSON array starting with '[' and ending with ']'. No markdown, no explanations, no natural language. Example: [{\"tool\":\"none\",\"tool_input\":{},\"conversational_reply\":\"Your reply here\"}]",
+            })
+            continue
+
+    suggestion = (
+        "Could not parse tool selection from model output after retries. "
+        "Raw output follows; possible causes: model returned non-JSON, unexpected formatting, or a missing system prompt."
+    )
+    raise ValueError(f"{suggestion} Output: {text}")
 
 
 def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tuple[str, str | None]:
@@ -244,7 +231,7 @@ def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tu
         api_key = _get_api_key()
         if not api_key:
             raise ValueError("FIREWORKS_API_KEY is not configured in your .env file.")
-        
+
         url = f"{config.fireworks_api_url}/chat/completions"
         headers = {
             "Accept": "application/json",
@@ -253,17 +240,18 @@ def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tu
         }
         payload = {
             "model": config.fireworks_model,
-            "max_tokens": 4096,
+            "max_tokens": 1024,
             "reasoning_effort": "low",
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": f"User request: {user_message}\n\n{results_text}\n\nAnswer in clean Markdown."},
+                {"role": "user",
+                 "content": f"User request: {user_message}\n\n{results_text}\n\nAnswer in clean Markdown."},
             ],
         }
-        
+
         response = requests.post(url, headers=headers, json=payload, timeout=30)
         response.raise_for_status()
-        
+
         res_json = response.json()
         text = res_json["choices"][0]["message"]["content"] or ""
     except Exception as exc:
@@ -309,11 +297,11 @@ def _extract_json_array(text: str) -> list[dict[str, Any]] | None:
 
 
 async def _execute_tool(
-    app: FastAPI,
-    tool_name: str,
-    tool_input: dict[str, Any],
-    auth_header: str | None,
-    confirmed: bool = False,
+        app: FastAPI,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        auth_header: str | None,
+        confirmed: bool = False,
 ) -> dict[str, Any]:
     if tool_name not in TOOL_DEFINITIONS:
         raise ValueError(f"Unknown tool: {tool_name}")
@@ -380,11 +368,11 @@ async def _execute_tool(
 
 
 async def _execute_tool_safe(
-    app: FastAPI,
-    tool_name: str,
-    tool_input: dict[str, Any],
-    auth_header: str | None,
-    confirmed: bool = False,
+        app: FastAPI,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        auth_header: str | None,
+        confirmed: bool = False,
 ) -> dict[str, Any]:
     """Wrapper that catches errors so one failing tool doesn't abort the others."""
     try:
