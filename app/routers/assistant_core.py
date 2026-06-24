@@ -9,9 +9,9 @@ from pathlib import Path
 from dotenv import dotenv_values
 from urllib.parse import quote_plus
 
-from groq import Groq, AsyncGroq
 from fastapi import FastAPI
 from httpx import AsyncClient, ASGITransport
+import requests
 
 from app.config import Config
 from .assistant_tools import INPUT_CONFIRM_TOOLS, SYSTEM_TOOL_PROMPT, TOOL_DEFINITIONS
@@ -41,7 +41,7 @@ def _clean_text(text: str) -> str:
 
 
 def _get_api_key() -> str | None:
-    """Read GROQ_API_KEY strictly from dotfiles only.
+    """Read FIREWORKS_API_KEY strictly from dotfiles only.
 
     Search order (first match wins):
     1. ./ .env
@@ -63,7 +63,7 @@ def _get_api_key() -> str | None:
             vals = dotenv_values(p)
         except Exception:
             continue
-        key = vals.get("GROQ_API_KEY")
+        key = vals.get("FIREWORKS_API_KEY")
         if key:
             return str(key)
     return None
@@ -94,8 +94,8 @@ def _get_response_text(response_data: Any) -> str:
     return _clean_text(str(response_data))
 
 
-def _explain_groq_issue(info: Any) -> str:
-    """Return a concise, user-facing explanation for Groq errors.
+def _explain_fireworks_issue(info: Any) -> str:
+    """Return a concise, user-facing explanation for Fireworks AI errors.
 
     Accepts either an Exception or a response-like dict/object.
     """
@@ -104,12 +104,12 @@ def _explain_groq_issue(info: Any) -> str:
             msg = str(info)
             lower = msg.lower()
             if "401" in msg or "unauthorized" in lower or "api key" in lower:
-                return "Authentication failed: missing or invalid GROQ_API_KEY in your .env file."
+                return "Authentication failed: missing or invalid FIREWORKS_API_KEY in your .env file."
             if "429" in msg or "rate limit" in lower:
-                return "Rate limited: too many requests to Groq. Try again later."
+                return "Rate limited: too many requests to Fireworks AI. Try again later."
             if "timeout" in lower:
-                return "Request timed out contacting the Groq API. Check network connectivity."
-            return f"Error contacting Groq: {msg}"
+                return "Request timed out contacting the Fireworks AI API. Check network connectivity."
+            return f"Error contacting Fireworks AI: {msg}"
 
         if isinstance(info, dict):
             err = info.get("error") or info.get("message") or info
@@ -118,16 +118,16 @@ def _explain_groq_issue(info: Any) -> str:
                 message = err.get("message") or err.get("detail") or str(err)
                 code_str = str(code) if code is not None else ""
                 if "401" in code_str or "401" in message:
-                    return "Authentication failed: invalid GROQ_API_KEY in your .env file."
+                    return "Authentication failed: invalid FIREWORKS_API_KEY in your .env file."
                 if "429" in code_str or "rate" in message.lower():
-                    return "Rate limited: too many requests to Groq. Try again later."
+                    return "Rate limited: too many requests to Fireworks AI. Try again later."
                 if code and int(code) >= 500:
-                    return "Groq service error: the remote service is unavailable. Try again later."
-                return f"Groq API error: {message}"
-            return f"Groq error: {err}"
+                    return "Fireworks AI service error: the remote service is unavailable. Try again later."
+                return f"Fireworks AI API error: {message}"
+            return f"Fireworks AI error: {err}"
     except Exception:
         pass
-    return "An unknown error occurred while contacting Groq."
+    return "An unknown error occurred while contacting Fireworks AI."
 
 
 def _get_or_init_session(user_id: str) -> list[dict[str, str]]:
@@ -160,21 +160,31 @@ def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = N
     messages.append({"role": "user", "content": user_message})
 
     try:
-        client = Groq(api_key=_get_api_key())
-        response = client.chat.completions.create(
-            model=config.groq_model,
-            messages=messages,
-            temperature=0.0,
-            max_tokens=512,
-            top_p=1,
-            stream=False,
-            stop=None,
-            reasoning_effort="none",
-        )
-        text = response.choices[0].message.content or ""
+        api_key = _get_api_key()
+        if not api_key:
+            raise ValueError("FIREWORKS_API_KEY is not configured in your .env file.")
+        
+        url = f"{config.fireworks_api_url}/chat/completions"
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        payload = {
+            "model": config.fireworks_model,
+            "max_tokens": 4096,
+            "reasoning_effort": "low",
+            "messages": messages,
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        
+        res_json = response.json()
+        text = res_json["choices"][0]["message"]["content"] or ""
     except Exception as exc:
-        logger.error("Groq chat.completions.create failed: %s", exc, exc_info=True)
-        raise ValueError(_explain_groq_issue(exc)) from exc
+        logger.error("Fireworks AI chat.completions.create failed: %s", exc, exc_info=True)
+        raise ValueError(_explain_fireworks_issue(exc)) from exc
     text = _clean_text(text)
     parsed = _extract_json_array(text)
     if not parsed:
@@ -231,24 +241,34 @@ def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tu
         for r in results
     )
     try:
-        client = Groq(api_key=_get_api_key())
-        response = client.chat.completions.create(
-            model=config.groq_model,
-            messages=[
+        api_key = _get_api_key()
+        if not api_key:
+            raise ValueError("FIREWORKS_API_KEY is not configured in your .env file.")
+        
+        url = f"{config.fireworks_api_url}/chat/completions"
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        payload = {
+            "model": config.fireworks_model,
+            "max_tokens": 4096,
+            "reasoning_effort": "low",
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": f"User request: {user_message}\n\n{results_text}\n\nAnswer in clean Markdown."},
             ],
-            temperature=0.2,
-            max_tokens=512,
-            top_p=1,
-            stream=False,
-            stop=None,
-            reasoning_effort="none",
-        )
-        text = response.choices[0].message.content or ""
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        
+        res_json = response.json()
+        text = res_json["choices"][0]["message"]["content"] or ""
     except Exception as exc:
-        logger.error("Groq chat.completions.create failed: %s", exc, exc_info=True)
-        raise ValueError(_explain_groq_issue(exc)) from exc
+        logger.error("Fireworks AI chat.completions.create failed: %s", exc, exc_info=True)
+        raise ValueError(_explain_fireworks_issue(exc)) from exc
     return _clean_text(text), None
 
 

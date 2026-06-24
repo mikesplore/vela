@@ -133,7 +133,7 @@ async def chat(
     current_user: str = Depends(get_current_user),
 ) -> AssistantResponse:
     if not _get_api_key():
-        raise HTTPException(status_code=503, detail="DashScope API key is unavailable")
+        raise HTTPException(status_code=503, detail="FIREWORKS_API_KEY is unavailable")
 
     session_id = _extract_session_id(request)
     auth_header = request.headers.get("authorization")

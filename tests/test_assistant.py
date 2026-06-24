@@ -15,7 +15,7 @@ def _auth_headers() -> dict[str, str]:
 async def test_assistant_chat_requires_api_key(async_client):
     from routers import assistant
 
-    assistant.config.groq_api_key = None
+    assistant.config.fireworks_api_key = None
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(assistant, "_get_api_key", lambda: None)
 
@@ -26,7 +26,7 @@ async def test_assistant_chat_requires_api_key(async_client):
             headers=_auth_headers(),
         )
         assert response.status_code == 503
-        assert "Groq API key" in response.json()["detail"]
+        assert "FIREWORKS_API_KEY" in response.json()["detail"]
     finally:
         monkeypatch.undo()
 
@@ -35,8 +35,8 @@ async def test_assistant_chat_requires_api_key(async_client):
 async def test_assistant_chat_returns_reply(monkeypatch, async_client):
     from routers import assistant
 
-    assistant.config.groq_api_key = "test-key"
-    assistant.config.groq_api_url = "https://api.test/v1"
+    assistant.config.fireworks_api_key = "test-key"
+    assistant.config.fireworks_api_url = "https://api.test/v1"
     assistant.config.assistant_action_pin = None
     monkeypatch.setattr(assistant, "_get_api_key", lambda: "test-key")
 
