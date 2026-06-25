@@ -144,11 +144,16 @@ async def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | No
     async with AsyncClient(timeout=30.0) as client:
         for attempt in range(max_retries):
             try:
+                # Optimized payload for token-efficient tool planning
                 payload = {
                     "model": config.fireworks_model,
                     "max_tokens": 1024,
+                    "max_completion_tokens": 1500,  # Safety cap
                     "response_format": {"type": "json_object"},
                     "messages": messages,
+                    "top_k": 1,  # More deterministic, reduces token waste
+                    "reasoning_history": "disabled",  # Keeps inputs from snowballing
+                    "safe_tokenization": True,
                 }
 
                 response = await client.post(url, headers=headers, json=payload)
@@ -248,14 +253,19 @@ async def _compose_final_reply(user_message: str, results: list[dict[str, Any]])
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
         }
+        # Optimized payload for token-efficient final reply
         payload = {
             "model": config.fireworks_model,
             "max_tokens": 1024,
+            "max_completion_tokens": 1500,  # Safety cap for final replies
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user",
                  "content": f"User request: {user_message}\n\n{results_text}\n\nAnswer in clean Markdown."},
             ],
+            "top_k": 1,  # More deterministic, reduces token waste
+            "reasoning_history": "disabled",  # Keeps inputs from snowballing
+            "safe_tokenization": True,
         }
 
         async with AsyncClient(timeout=30.0) as client:
@@ -343,8 +353,23 @@ async def _stream_llm_response(
     if enable_thinking:
         payload["thinking"] = {"type": "enabled", "budget_tokens": 2048}
 
+    # Optimized payload for token efficiency
+    payload: dict[str, Any] = {
+        "model": config.fireworks_model,
+        "max_tokens": max_tokens,
+        "max_completion_tokens": 1500,  # Overall safety cap for entire response
+        "stream": True,
+        "messages": messages,
+        "top_k": 1,  # More deterministic, reduces token waste
+        "reasoning_history": "disabled",  # Keeps inputs from snowballing in cost
+        "safe_tokenization": True,
+    }
+    if enable_thinking:
+        payload["thinking"] = {"type": "enabled", "budget_tokens": 1024}  # Hard cap to stop overthinking
+
     try:
-        async with AsyncClient(timeout=60.0) as client:
+        # 300 second timeout for streaming LLM responses (5 minutes)
+        async with AsyncClient(timeout=300.0) as client:
             async with client.stream("POST", url, headers=headers, json=payload) as response:
                 response.raise_for_status()
                 async for raw_line in response.aiter_lines():
@@ -403,12 +428,17 @@ async def _plan_tool_calls_streaming(
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
+    # Optimized payload for token-efficient streaming tool planning
     payload: dict[str, Any] = {
         "model": config.fireworks_model,
         "max_tokens": 512,
+        "max_completion_tokens": 800,  # Safety cap for planning responses
         "stream": True,
         "thinking": {"type": "enabled", "budget_tokens": 1024},
         "messages": messages,
+        "top_k": 1,  # More deterministic, reduces token waste
+        "reasoning_history": "disabled",  # Keeps inputs from snowballing in cost
+        "safe_tokenization": True,
     }
 
     content_buf = ""
@@ -417,7 +447,8 @@ async def _plan_tool_calls_streaming(
     for attempt in range(max_retries):
         content_buf = ""
         try:
-            async with AsyncClient(timeout=30.0) as client:
+            # 300 second timeout for streaming tool planner (5 minutes)
+            async with AsyncClient(timeout=300.0) as client:
                 async with client.stream("POST", url, headers=headers, json=payload) as response:
                     response.raise_for_status()
                     async for raw_line in response.aiter_lines():

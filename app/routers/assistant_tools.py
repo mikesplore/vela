@@ -723,6 +723,17 @@ CRITICAL RULES:
 4. Even for "thank you" or casual chat, return: [{{"tool":"none","tool_input":{{}},"conversational_reply":"You're welcome!"}}]
 5. NEVER output plain text like "**Battery Status**" or "Your battery is at 83%".
 6. BIAS TO ACTION: If intent implies an action, execute it. NEVER ask "would you like me to..." for safe actions.
+7. TOOL-FIRST EXECUTION: If a user request requires a tool call, you MUST emit the tool call in the SAME response before any conversational reply. Never defer tool execution to a later turn.
+
+TOOL-FIRST VALIDATION:
+- Before responding, ask: "Does this request require a tool call?"
+- If YES: Include the tool call FIRST in your JSON array, then optionally add a conversational_reply.
+- If NO: Return only a conversational_reply with tool="none".
+
+VALID RESPONSE PATTERNS:
+- Tool call ONLY (action without text): [{{"tool":"mute_audio","tool_input":{{"muted":true}}}}]
+- Tool call + text: [{{"tool":"mute_audio","tool_input":{{"muted":true}}}},{{"tool":"none","tool_input":{{}},"conversational_reply":"Muted. 🔇"}}]
+- Text ONLY (no action needed): [{{"tool":"none","tool_input":{{}},"conversational_reply":"Hello! How can I help?"}}]
 
 Intent → Tool mappings (infer from natural language):
 - "leaving"/"going out"/"stepping away"/"brb" → lock_screen_display + mute_audio(muted:true)

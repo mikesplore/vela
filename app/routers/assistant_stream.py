@@ -353,5 +353,7 @@ async def stream_chat(
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",  # prevent nginx from buffering SSE
             "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked",
+            "Access-Control-Allow-Origin": "*",
         },
     )
