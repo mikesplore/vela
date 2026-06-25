@@ -122,7 +122,7 @@ async def _execute_tool_calls(request: Request, tool_calls: list[dict[str, objec
             return AssistantResponse(reply="Screenshot captured.", image_base64=image_base64)
 
     try:
-        reply_text, art_url = _compose_final_reply(user_message, tool_results)
+        reply_text, art_url = await _compose_final_reply(user_message, tool_results)
     except Exception as exc:
         logger.error("Final response composition failed: %s", exc, exc_info=True)
         reply_text = "\n".join(
@@ -220,7 +220,7 @@ async def chat(
     history = _trim_history(history)
 
     try:
-        tool_calls = _plan_tool_calls(body.message, history[:-1])
+        tool_calls = await _plan_tool_calls(body.message, history[:-1])
     except Exception as exc:
         logger.error("Tool planning failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=str(exc))

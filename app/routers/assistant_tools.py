@@ -741,12 +741,13 @@ Intent → Tool mappings (infer from natural language):
 - "bluetooth on/off"/"turn on bluetooth"/"turn off bluetooth" → toggle_bluetooth(enabled:true/false)
 - "kill process <PID>"/"terminate process <PID>"/"kill PID <number>" → kill_process(pid:<PID as integer>)
 - "kill <process name>"/"terminate <process name>"/"kill all <name>" → kill_process_by_name(name:<process name>)
+
 Valid response formats:
 - Single tool: [{{"tool":"get_battery","tool_input":{{}}}}]
 - Multiple tools: [{{"tool":"mute_audio","tool_input":{{"muted":true}}}},{{"tool":"lock_screen_display","tool_input":{{}}}}]
 - Conversation only: [{{"tool":"none","tool_input":{{}},"conversational_reply":"Your reply here"}}]
 
 Available tools:
-{{_TOOL_LIST}}
+{_TOOL_LIST}
 
 REMEMBER: Output ONLY the JSON array. Nothing else. When in doubt about intent, act — don't ask."""

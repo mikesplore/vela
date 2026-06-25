@@ -3,14 +3,13 @@ import base64
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, AsyncGenerator
 from pathlib import Path
 from dotenv import dotenv_values
 from urllib.parse import quote_plus
 
 from fastapi import FastAPI
 from httpx import AsyncClient, ASGITransport
-import requests
 
 from app.config import Config
 from .assistant_tools import INPUT_CONFIRM_TOOLS, SYSTEM_TOOL_PROMPT, TOOL_ALIASES, TOOL_DEFINITIONS
@@ -24,10 +23,12 @@ MAX_HISTORY_CHARS = 4000  # Token-budget-aware trimming instead of message count
 
 
 def _clean_text(text: str) -> str:
-    """Strip markdown code fences that some models wrap around JSON."""
+    """Strip markdown code fences and Qwen3/inline <think> blocks from text."""
     if not text:
         return ""
     cleaned = text.strip()
+    # Qwen3 and some models leak thinking as <think>...</think> in the content field
+    cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
     cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r'\s*```$', '', cleaned, flags=re.IGNORECASE)
     return cleaned.strip()
@@ -116,7 +117,7 @@ def _trim_history(history: list[dict[str, str]], max_chars: int = MAX_HISTORY_CH
     return trimmed
 
 
-def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
+async def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
     """
     Single LLM call → list of tool calls to execute in parallel.
     For conversational replies returns a single-item list with tool="none".
@@ -138,43 +139,51 @@ def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = N
         "Authorization": f"Bearer {api_key}",
     }
 
-    max_retries = 2
-    for attempt in range(max_retries):
-        try:
-            payload = {
-                "model": config.fireworks_model,
-                "max_tokens": 512,
-                "reasoning_effort": "low",
-                "messages": messages,
-            }
+    max_retries = 4
+    text = ""
+    async with AsyncClient(timeout=30.0) as client:
+        for attempt in range(max_retries):
+            try:
+                payload = {
+                    "model": config.fireworks_model,
+                    "max_tokens": 1024,
+                    "response_format": {"type": "json_object"},
+                    "messages": messages,
+                }
 
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-            response.raise_for_status()
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
 
-            res_json = response.json()
-            text = res_json["choices"][0]["message"]["content"] or ""
-        except Exception as exc:
-            logger.error("Fireworks AI chat.completions.create failed: %s", exc, exc_info=True)
-            raise ValueError(_explain_fireworks_issue(exc)) from exc
+                res_json = response.json()
+                text = res_json["choices"][0]["message"]["content"] or ""
+            except Exception as exc:
+                logger.error("Fireworks AI chat.completions.create failed: %s", exc, exc_info=True)
+                raise ValueError(_explain_fireworks_issue(exc)) from exc
 
-        text = _clean_text(text)
-        parsed = _extract_json_array(text)
-        if parsed:
-            return parsed
+            # Strip think blocks before any parsing or history injection
+            clean = _clean_text(text)
+            parsed = _extract_json_array(clean)
+            if parsed:
+                return parsed
 
-        # Model returned non-JSON; retry with a corrective system message
-        if attempt < max_retries - 1:
             logger.warning(
-                "Model returned non-JSON on attempt %d/%d. Retrying with correction. Output: %s",
+                "Model returned non-array JSON on attempt %d/%d. Retrying with correction. Output: %s",
                 attempt + 1,
                 max_retries,
-                text[:200],
+                clean[:200],
             )
-            messages.append({
-                "role": "system",
-                "content": "ERROR: Your previous response was not valid JSON. You MUST respond with ONLY a JSON array starting with '[' and ending with ']'. No markdown, no explanations, no natural language. Example: [{\"tool\":\"none\",\"tool_input\":{},\"conversational_reply\":\"Your reply here\"}]",
-            })
-            continue
+            if attempt < max_retries - 1:
+                # Append the CLEANED text (no <think> blocks) so retries don't get poisoned
+                messages.append({"role": "assistant", "content": clean or text})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "ERROR: Your previous response was not a JSON array. "
+                        "You MUST respond with ONLY a JSON array starting with '[' and ending with ']'. "
+                        "No markdown, no explanations, no natural language. "
+                        'Example: [{"tool":"none","tool_input":{},"conversational_reply":"Your reply here"}]'
+                    ),
+                })
 
     logger.error(
         "Could not parse tool selection from model output after %d retries. Output: %s",
@@ -184,7 +193,7 @@ def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = N
     return [{"tool": "none", "tool_input": {}, "conversational_reply": "I'm sorry, I couldn't process that request. Please try rephrasing it."}]
 
 
-def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tuple[str, str | None]:
+async def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tuple[str, str | None]:
     """
     Second LLM call — summarises ALL tool results into one clean Markdown reply.
     Returns (reply_text, art_url) where art_url is present for media status queries.
@@ -242,7 +251,6 @@ def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tu
         payload = {
             "model": config.fireworks_model,
             "max_tokens": 1024,
-            "reasoning_effort": "low",
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user",
@@ -250,15 +258,219 @@ def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tu
             ],
         }
 
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        response.raise_for_status()
+        async with AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
 
-        res_json = response.json()
-        text = res_json["choices"][0]["message"]["content"] or ""
+            res_json = response.json()
+            text = res_json["choices"][0]["message"]["content"] or ""
     except Exception as exc:
         logger.error("Fireworks AI chat.completions.create failed: %s", exc, exc_info=True)
         raise ValueError(_explain_fireworks_issue(exc)) from exc
     return _clean_text(text), None
+
+
+
+def _split_think_stream(text: str):
+    """
+    Qwen3 and some models emit <think>...</think> inline in the content delta stream.
+    This splits a single delta chunk into typed events so the streaming handlers
+    can route thinking tokens to the thinking event and real content separately.
+
+    Handles partial tags across chunk boundaries by treating an unclosed <think>
+    as a thinking token (safe: worst case a thinking fragment leaks into content).
+
+    Yields dicts: {"type": "thinking"|"content", "text": "..."}
+    """
+    remaining = text
+    while remaining:
+        open_idx = remaining.lower().find("<think>")
+        if open_idx == -1:
+            # No think tag — check if it ends with a partial open tag
+            # e.g. chunk ends with "<thi" — safe to pass through as content
+            if remaining:
+                yield {"type": "content", "text": remaining}
+            break
+
+        # Content before the <think> tag
+        if open_idx > 0:
+            yield {"type": "content", "text": remaining[:open_idx]}
+        remaining = remaining[open_idx + 7:]  # skip "<think>"
+
+        close_idx = remaining.lower().find("</think>")
+        if close_idx == -1:
+            # Unclosed tag — rest of this chunk is thinking
+            if remaining:
+                yield {"type": "thinking", "text": remaining}
+            break
+
+        if close_idx > 0:
+            yield {"type": "thinking", "text": remaining[:close_idx]}
+        remaining = remaining[close_idx + 8:]  # skip "</think>"
+
+
+async def _stream_llm_response(
+        messages: list[dict[str, Any]],
+        max_tokens: int = 1024,
+        enable_thinking: bool = True,
+) -> AsyncGenerator[dict[str, str], None]:
+    """
+    Stream a Fireworks chat completion, yielding structured delta dicts:
+        {"type": "thinking", "text": "..."}   — reasoning_content chunk
+        {"type": "content",  "text": "..."}   — visible answer chunk
+        {"type": "done"}                       — stream finished
+
+    Thinking is enabled via the `thinking` parameter (V4 Flash compatible).
+    This is NOT used for the tool planner (JSON mode is incompatible with streaming).
+    """
+    api_key = _get_api_key()
+    if not api_key:
+        yield {"type": "error", "text": "FIREWORKS_API_KEY is not configured in your .env file."}
+        return
+
+    url = f"{config.fireworks_api_url}/chat/completions"
+    headers = {
+        "Accept": "text/event-stream",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    payload: dict[str, Any] = {
+        "model": config.fireworks_model,
+        "max_tokens": max_tokens,
+        "stream": True,
+        "messages": messages,
+    }
+    if enable_thinking:
+        payload["thinking"] = {"type": "enabled", "budget_tokens": 2048}
+
+    try:
+        async with AsyncClient(timeout=60.0) as client:
+            async with client.stream("POST", url, headers=headers, json=payload) as response:
+                response.raise_for_status()
+                async for raw_line in response.aiter_lines():
+                    line = raw_line.strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        yield {"type": "done"}
+                        return
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    # Dedicated reasoning_content field (DeepSeek / R1 style)
+                    if delta.get("reasoning_content"):
+                        yield {"type": "thinking", "text": delta["reasoning_content"]}
+                    # Visible content — may contain inline <think> blocks (Qwen3 style)
+                    if delta.get("content"):
+                        for _evt in _split_think_stream(delta["content"]):
+                            yield _evt
+    except Exception as exc:
+        logger.error("Streaming LLM call failed: %s", exc, exc_info=True)
+        yield {"type": "error", "text": _explain_fireworks_issue(exc)}
+
+
+async def _plan_tool_calls_streaming(
+        user_message: str,
+        history: list[dict[str, str]] | None = None,
+) -> AsyncGenerator[dict[str, str] | list[dict[str, Any]], None]:
+    """
+    Streaming-aware tool planner.
+
+    Yields:
+        {"type": "thinking", "text": "..."}  — live thinking deltas while planning
+        {"type": "planning_done"}             — planning finished, JSON parsed
+        list[dict]                            — the parsed tool_calls (single non-dict yield)
+
+    Falls back to the non-streaming planner if streaming JSON can't be assembled.
+    Note: response_format/json_object is incompatible with stream=True on Fireworks,
+    so we stream with thinking enabled and buffer the content for JSON parsing.
+    """
+    messages = [{"role": "system", "content": SYSTEM_TOOL_PROMPT}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
+
+    api_key = _get_api_key()
+    if not api_key:
+        raise ValueError("FIREWORKS_API_KEY is not configured in your .env file.")
+
+    url = f"{config.fireworks_api_url}/chat/completions"
+    headers = {
+        "Accept": "text/event-stream",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    payload: dict[str, Any] = {
+        "model": config.fireworks_model,
+        "max_tokens": 512,
+        "stream": True,
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "messages": messages,
+    }
+
+    content_buf = ""
+    max_retries = 4
+
+    for attempt in range(max_retries):
+        content_buf = ""
+        try:
+            async with AsyncClient(timeout=30.0) as client:
+                async with client.stream("POST", url, headers=headers, json=payload) as response:
+                    response.raise_for_status()
+                    async for raw_line in response.aiter_lines():
+                        line = raw_line.strip()
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        if delta.get("reasoning_content"):
+                            yield {"type": "thinking", "text": delta["reasoning_content"]}
+                        if delta.get("content"):
+                            # Buffer raw content; also stream any <think> prefix as thinking
+                            for evt in _split_think_stream(delta["content"]):
+                                if evt["type"] == "thinking":
+                                    yield evt
+                                # content parts go into the buffer for JSON parsing, not streamed
+                                elif evt["type"] == "content":
+                                    content_buf += evt["text"]
+        except Exception as exc:
+            logger.error("Streaming tool planner failed: %s", exc, exc_info=True)
+            raise ValueError(_explain_fireworks_issue(exc)) from exc
+
+        parsed = _extract_json_array(_clean_text(content_buf))
+        if parsed:
+            yield {"type": "planning_done"}
+            yield parsed  # type: ignore[misc]
+            return
+
+        logger.warning(
+            "Planner non-array JSON on attempt %d/%d. Output: %s",
+            attempt + 1, max_retries, content_buf[:200],
+        )
+        if attempt < max_retries - 1:
+            messages.append({"role": "assistant", "content": content_buf})
+            messages.append({
+                "role": "user",
+                "content": (
+                    "ERROR: Your previous response was not a JSON array. "
+                    "You MUST respond with ONLY a JSON array starting with '[' and ending with ']'. "
+                    "No markdown, no explanations, no natural language. "
+                    'Example: [{"tool":"none","tool_input":{},"conversational_reply":"Your reply here"}]'
+                ),
+            })
+
+    logger.error("Planner failed after %d retries. Output: %s", max_retries, content_buf[:500])
+    yield {"type": "planning_done"}
+    yield [{"tool": "none", "tool_input": {}, "conversational_reply": "I'm sorry, I couldn't process that request. Please try rephrasing it."}]  # type: ignore[misc]
 
 
 def _extract_json_array(text: str) -> list[dict[str, Any]] | None:
@@ -318,6 +530,15 @@ async def _execute_tool(
             raise ValueError("tool_input.name is required for kill_process_by_name")
         path = path.format(name=quote_plus(str(name)))
         tool_input = {}
+
+    # ── Defensive field normalisations (model hallucinations) ────────────────
+    if tool_name == "set_volume":
+        # Model sometimes sends "volume", "level", or "amount" instead of "value"
+        if "value" not in tool_input:
+            for alias in ("volume", "level", "amount", "percent"):
+                if alias in tool_input:
+                    tool_input = {"value": int(tool_input[alias])}
+                    break
 
     headers: dict[str, str] = {}
     if tool_name != "upload_file":
