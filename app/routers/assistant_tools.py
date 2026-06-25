@@ -736,11 +736,11 @@ Intent → Tool mappings (infer from natural language):
 - "screenshot" → display_screenshot
 - "what's playing"/"now playing" → get_media_status
 - "battery"/"how much battery" → get_battery
+- "battery health"/"battery condition"/"is my battery healthy"/"battery wear" → monitor_battery_health
 - "how's my pc"/"system status" → get_snapshot
 - "bluetooth on/off"/"turn on bluetooth"/"turn off bluetooth" → toggle_bluetooth(enabled:true/false)
 - "kill process <PID>"/"terminate process <PID>"/"kill PID <number>" → kill_process(pid:<PID as integer>)
 - "kill <process name>"/"terminate <process name>"/"kill all <name>" → kill_process_by_name(name:<process name>)
-
 Valid response formats:
 - Single tool: [{{"tool":"get_battery","tool_input":{{}}}}]
 - Multiple tools: [{{"tool":"mute_audio","tool_input":{{"muted":true}}}},{{"tool":"lock_screen_display","tool_input":{{}}}}]
