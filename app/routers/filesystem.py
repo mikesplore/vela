@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from app.config import Config
+from app.utils.config import Config
 from app.dependencies import get_current_user
 from app.domain.filesystem import FileListResponse, FileEntry, FileActionResponse, PathRequest, RenameRequest
 from app.services.filesystem import validate_path, file_entry, is_allowed

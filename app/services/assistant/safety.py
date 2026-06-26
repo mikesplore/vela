@@ -4,11 +4,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, UTC
 from typing import Any, Literal
 from uuid import uuid4
-
-from pydantic import BaseModel
-
-from app.config import Config
-from db.models import PendingAction
+from app.utils.config import Config
+from app.db.models import PendingAction
+from app.domain.assistant import ConfirmationCard
 
 config = Config()
 
@@ -20,19 +18,6 @@ class ToolPolicy:
     risk_level: RiskLevel
     requires_confirmation: bool = False
     requires_auth: bool = False
-
-
-class ConfirmationCard(BaseModel):
-    """Structured confirmation data for rendering a UI card."""
-    title: str
-    description: str
-    action_type: str
-    tool_count: int
-    requires_auth: bool
-    action_details: list[str]
-    prompt_text: str
-    pin_attempts_remaining: int | None = None
-    pin_max_attempts: int | None = None
 
 
 LOW_RISK_TOOLS = {
@@ -213,7 +198,7 @@ def _tool_summary(tool_name: str, tool_input: dict[str, Any]) -> str:
     return tool_name.replace("_", " ")
 
 
-def build_confirmation_card(tool_calls: list[dict[str, Any]], requires_auth: bool,
+def build_confirmation_card(tool_calls: list[dict[str, Any]], requires_an_auth: bool,
                             pin_attempts: int = 0) -> ConfirmationCard:
     """Build a structured confirmation card for UI rendering."""
     if not tool_calls:
@@ -240,7 +225,7 @@ def build_confirmation_card(tool_calls: list[dict[str, Any]], requires_auth: boo
     first_tool = first_call.get("tool", "unknown")
     first_summary = action_details[0] if action_details else "unknown action"
 
-    if requires_auth:
+    if requires_an_auth:
         title = "Auth Required"
         prompt_text = f"High-risk action pending: {first_summary}"
         if len(tool_calls) > 1:
@@ -258,26 +243,30 @@ def build_confirmation_card(tool_calls: list[dict[str, Any]], requires_auth: boo
         description=first_summary,
         action_type=first_tool,
         tool_count=len(tool_calls),
-        requires_auth=requires_auth,
+        requires_auth=requires_an_auth,
         action_details=action_details,
         prompt_text=prompt_text,
-        pin_attempts_remaining=(max(0, PIN_MAX_ATTEMPTS - pin_attempts) if requires_auth else None),
-        pin_max_attempts=(PIN_MAX_ATTEMPTS if requires_auth else None),
+        pin_attempts_remaining=(max(0, PIN_MAX_ATTEMPTS - pin_attempts) if requires_an_auth else None),
+        pin_max_attempts=(PIN_MAX_ATTEMPTS if requires_an_auth else None),
     )
 
 
-def build_pending_prompt(tool_calls: list[dict[str, Any]], requires_auth: bool) -> str:
+def build_pending_prompt(tool_calls: list[dict[str, Any]], requires_an_auth: bool) -> str:
     if not tool_calls:
-        return "No pending action is available."
-    first_call = tool_calls[0]
-    tool_name = first_call.get("tool", "unknown")
-    tool_input = first_call.get("tool_input") or {}
-    summary = _tool_summary(tool_name, tool_input)
-    if len(tool_calls) > 1:
-        summary = f"{summary} (+{len(tool_calls) - 1})"
-    if requires_auth:
-        return f"High-risk action pending: {summary}. Enter PIN to continue."
-    return f"Confirm action: {summary}. Reply yes to continue."
+        return "No actions pending."
+
+    # Parse summaries for every tool call in the batch
+    summaries = [
+        _tool_summary(tc.get("tool", "unknown"), tc.get("tool_input") or {})
+        for tc in tool_calls
+    ]
+
+    # Join them with commas: "toggle Bluetooth, mute volume"
+    all_actions = ", ".join(summaries)
+
+    if requires_an_auth:
+        return f"To {all_actions}: Enter PIN to continue."
+    return f"Confirm: {all_actions}? Reply yes to continue."
 
 
 def register_pending_action(user_id: str, session_id: str, user_message: str, tool_calls: list[dict[str, Any]],

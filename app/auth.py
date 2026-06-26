@@ -8,7 +8,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import BaseModel
 
-from app.config import Config
+from app.utils.config import Config
 from app.rate_limiter import limit_route
 
 config = Config()

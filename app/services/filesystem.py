@@ -1,8 +1,8 @@
 from pathlib import Path
-from typing import Any, List
+from typing import Any
 from fastapi import HTTPException, status
 
-from app.config import Config
+from app.utils.config import Config
 
 config = Config()
 
@@ -26,7 +26,7 @@ def validate_path(path_str: str, must_exist: bool = False) -> Path:
     if not path_str:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Path is required")
     path = resolve_path(path_str)
-    if not _is_allowed(path):
+    if not is_allowed(path):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Path is outside allowed base directories")
     if must_exist and not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Path not found")

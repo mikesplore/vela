@@ -1,7 +1,7 @@
 import pytest
 
 from auth import create_access_token
-from config import Config
+from utils.config import Config
 
 config = Config()
 

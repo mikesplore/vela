@@ -10,10 +10,10 @@ from dotenv import set_key
 import requests
 import json
 
-from agent.tunnel import tunnel
-from app.utils.vela_config import VelaConfig
+from app.agent.tunnel import tunnel
 
-config = VelaConfig.load()
+from app.utils.config import Config
+config = Config()
 
 _local_token: str | None = None
 _local_token_expires = datetime.min.replace(tzinfo=timezone.utc)
@@ -96,8 +96,8 @@ def get_local_auth_token(retries: int = 3, delay: float = 2.0) -> str:
 
             # Persist to .env
             try:
-                set_key(config.dotenv_path, "config.local_service_auth_token", _local_token)
-                set_key(config.dotenv_path, "config.local_service_auth_token_expires", expiry_str)
+                set_key(config.dotenv_path, "LOCAL_SERVICE_AUTH_TOKEN", _local_token)
+                set_key(config.dotenv_path, "LOCAL_SERVICE_AUTH_TOKEN_EXPIRES", expiry_str)
                 print(f"Persisted local auth token to {config.dotenv_path}")
             except Exception as env_exc:
                 print(f"Failed to persist token to .env: {env_exc}")
@@ -155,7 +155,7 @@ def register():
 
     if config.agent_secret and regenerate:
         # Password change: re-register with a new secret
-        payload["regenerate_secret"] = True
+        payload["regenerate_secret"] = "true"
         print(f"Re-registering agent '{agent_id}' to regenerate secret")
     elif not config.agent_secret:
         # First-time registration: include public_address and metadata
@@ -206,7 +206,6 @@ def register():
 async def start_agent_loop() -> None:
     await wait_for_local_service()
 
-    # --- FIX 3: exponential backoff with a cap on reconnect attempts ---
     backoff = 5
     max_backoff = 60
 

@@ -7,7 +7,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
-from db.models import PendingAction
+from app.db.models import PendingAction
 
 
 class Base(DeclarativeBase):

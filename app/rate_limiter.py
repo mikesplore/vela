@@ -2,7 +2,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from fastapi import Request
 
-from app.config import Config
+from app.utils.config import Config
 
 config = Config()
 

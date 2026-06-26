@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
@@ -8,17 +7,17 @@ import requests
 import websockets
 from dotenv import set_key
 
-from agent.helpers import agent_settings, websocket_tunnel_url, async_get_local_auth_token
-from app.utils import vela_config
-
-# Load configurations cleanly
-config = vela_config.VelaConfig.load()
+from app.utils.config import Config
+config = Config()
 
 _local_token: str | None = None
 _local_token_expires = datetime.min.replace(tzinfo=timezone.utc)
 
 
 async def tunnel(token):
+    # Lazy imports to break circular dependency with app.agent.helpers
+    from app.agent.helpers import agent_settings, websocket_tunnel_url, async_get_local_auth_token
+
     vps_url, agent_id, _ = agent_settings()
     uri = websocket_tunnel_url(vps_url, agent_id, token)
     print(f"Connecting to {uri}...")
@@ -32,7 +31,6 @@ async def tunnel(token):
             print("Tunnel established. Waiting for requests...")
 
             while True:
-                # --- FIX 4: read timeout so zombie connections don't hang forever ---
                 try:
                     message = await asyncio.wait_for(websocket.recv(), timeout=config.relay_read_timeout)
                 except asyncio.TimeoutError:
@@ -94,13 +92,12 @@ async def tunnel(token):
                         **request_kwargs,
                     )
 
-                    # --- FIX 2: use `global` so the token is actually cleared ---
-                    if resp.status_code == 401 and not os.getenv("LOCAL_SERVICE_AUTH_TOKEN"):
+                    if resp.status_code == 401 and not config.local_service_auth_token:
                         print("Local request returned 401, refreshing local auth token and retrying")
-                        global _local_token, LOCAL_SERVICE_AUTH_TOKEN, LOCAL_SERVICE_AUTH_TOKEN_EXPIRES
+                        global _local_token
                         _local_token = None
-                        LOCAL_SERVICE_AUTH_TOKEN = None
-                        LOCAL_SERVICE_AUTH_TOKEN_EXPIRES = None
+                        config.local_service_auth_token = None
+                        config.local_service_auth_token_expires = None
 
                         # Clear from .env too
                         try:

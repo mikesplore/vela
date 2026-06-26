@@ -4,7 +4,6 @@ import os
 import time
 from contextlib import asynccontextmanager
 from typing import List
-
 import uvicorn
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -13,7 +12,7 @@ from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from app.auth import router as auth_router
-from app.config import Config
+from app.utils.config import Config
 from app.dependencies import get_current_user
 from app.agent.helpers import start_agent_loop
 from app.utils.errors import ErrorResponse
@@ -223,7 +222,7 @@ async def read_current_user(current_user: str = Depends(get_current_user)) -> di
 
 @app.get("/ping")
 @limit_route("/ping")
-async def ping() -> dict[str, bool]:
+async def ping(request: Request) -> dict[str, bool]:
     return {"pong": True}
 
 

@@ -1,10 +1,21 @@
 from pydantic import BaseModel
 
-from app.services.assistant.safety import ConfirmationCard
-
 
 class AssistantRequest(BaseModel):
     message: str
+
+
+class ConfirmationCard(BaseModel):
+    """Structured confirmation data for rendering a UI card."""
+    title: str
+    description: str
+    action_type: str
+    tool_count: int
+    requires_auth: bool
+    action_details: list[str]
+    prompt_text: str
+    pin_attempts_remaining: int | None = None
+    pin_max_attempts: int | None = None
 
 
 class AssistantResponse(BaseModel):

@@ -3,7 +3,7 @@ from fastapi.responses import StreamingResponse
 
 from app.dependencies import get_current_user
 from app.domain.assistant import AssistantResponse, AssistantRequest
-from app.services.assistant.core import (
+from app.services.assistant.helpers import (
     SESSION_STORE,
     config,
     logger, get_api_key, get_or_init_session, trim_history, plan_tool_calls,
