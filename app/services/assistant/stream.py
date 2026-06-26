@@ -32,7 +32,6 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
-from app.dependencies import get_current_user
 from app.services.assistant.helpers import (
     SESSION_STORE,
     get_or_init_session,

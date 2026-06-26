@@ -658,7 +658,7 @@ def extract_session_id(request: Request) -> str:
 
     Session IDs must be consistent across multiple requests from the same device/client.
     """
-    session_id = extract_session_id(request)
+    session_id = request.headers.get("X-Session-ID")
     if not session_id:
         raise HTTPException(status_code=400, detail="X-Session-ID header is required")
     return session_id
