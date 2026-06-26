@@ -15,7 +15,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.auth import router as auth_router
 from app.config import Config
 from app.dependencies import get_current_user
-from app.services.assistant.agent import start_agent_loop
+from app.agent.helpers import start_agent_loop
 from app.utils.errors import ErrorResponse
 from app.middleware import RequestLoggerMiddleware
 from app.rate_limiter import limiter, limit_route
