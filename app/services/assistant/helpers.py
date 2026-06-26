@@ -376,7 +376,7 @@ async def stream_llm_response(
         "safe_tokenization": True,
     }
     if enable_thinking:
-        payload["thinking"] = {"type": "enabled", "budget_tokens": 150}  # Hard cap to stop overthinking
+        payload["thinking"] = {"type": "enabled", "budget_tokens": 1024}  # Hard cap to stop overthinking
 
     try:
         # 300 second timeout for streaming LLM responses (5 minutes)
