@@ -34,22 +34,18 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.dependencies import get_current_user
-from .assistant_core import (
+from app.services.assistant.core import (
     SESSION_STORE,
-    _execute_tool_safe,
-    _get_api_key,
-    _get_or_init_session,
-    _plan_tool_calls_streaming,
-    _stream_llm_response,
-    _trim_history,
-    _compose_final_reply,
+    get_or_init_session,
+    plan_tool_calls_streaming,
+    stream_llm_response,
+    trim_history,
     config,
-    logger,
+    logger, execute_tool_safe, compose_final_reply, get_api_key,
 )
-from .assistant_safety import (
+from app.services.assistant.safety import (
     PIN_MAX_ATTEMPTS,
     build_confirmation_card,
-    build_pending_prompt,
     cancel_pending_action_by_ai,
     clear_pending_action,
     get_pending_action,
@@ -145,7 +141,7 @@ async def _run_tools_and_reply(
         yield _sse_tool(tc["tool"], "running")
 
     tasks = [
-        _execute_tool_safe(
+        execute_tool_safe(
             request.app, tc["tool"], tc.get("tool_input") or {},
             auth_header, confirmed=confirmed,
         )
@@ -168,14 +164,14 @@ async def _run_tools_and_reply(
     # Fast-path: media status (no second LLM call needed)
     if len(tool_results) == 1 and tool_results[0].get("tool") == "get_media_status":
         try:
-            reply_text, art_url = await _compose_final_reply(user_message, tool_results)
+            reply_text, art_url = await compose_final_reply(user_message, tool_results)
         except Exception as exc:
             reply_text, art_url = str(exc), None
         if art_url:
             yield _sse("art", {"url": art_url})
         yield _sse_content(reply_text)
         history.append({"role": "assistant", "content": reply_text.strip()})
-        SESSION_STORE[current_user] = _trim_history(history)
+        SESSION_STORE[current_user] = trim_history(history)
         yield _sse_done()
         return
 
@@ -191,7 +187,7 @@ async def _run_tools_and_reply(
     ]
 
     full_reply = ""
-    async for delta in _stream_llm_response(reply_messages, max_tokens=1024, enable_thinking=True):
+    async for delta in stream_llm_response(reply_messages, max_tokens=1024, enable_thinking=True):
         if delta["type"] == "thinking":
             yield _sse_thinking(delta["text"])
         elif delta["type"] == "content":
@@ -203,21 +199,21 @@ async def _run_tools_and_reply(
             return
 
     history.append({"role": "assistant", "content": full_reply.strip()})
-    SESSION_STORE[current_user] = _trim_history(history)
+    SESSION_STORE[current_user] = trim_history(history)
     yield _sse_done()
 
 
 # ── Main stream generator ─────────────────────────────────────────────────────
 
 async def _stream_chat(request: Request, message: str, current_user: str) -> AsyncGenerator[str, None]:
-    if not _get_api_key():
+    if not get_api_key():
         yield _sse_error("FIREWORKS_API_KEY is unavailable.")
         yield _sse_done()
         return
 
     session_id = _extract_session_id(request)
     auth_header = request.headers.get("authorization")
-    history = _get_or_init_session(current_user)
+    history = get_or_init_session(current_user)
     pending = get_pending_action(current_user, session_id)
 
     # ── Pending-action state machine ─────────────────────────────────────────
@@ -280,11 +276,11 @@ async def _stream_chat(request: Request, message: str, current_user: str) -> Asy
 
     # ── Planning phase: stream thinking, buffer tool calls ───────────────────
     history.append({"role": "user", "content": message})
-    history = _trim_history(history)
+    history = trim_history(history)
 
     tool_calls: list[dict] = []
     try:
-        async for item in _plan_tool_calls_streaming(message, history[:-1]):
+        async for item in plan_tool_calls_streaming(message, history[:-1]):
             if isinstance(item, dict):
                 if item["type"] == "thinking":
                     yield _sse_thinking(item["text"])
@@ -302,7 +298,7 @@ async def _stream_chat(request: Request, message: str, current_user: str) -> Asy
         reply_text: str = tool_calls[0].get("conversational_reply") or "Hello! How can I help you today?"
         yield _sse_content(reply_text)
         history.append({"role": "assistant", "content": reply_text})
-        SESSION_STORE[current_user] = _trim_history(history)
+        SESSION_STORE[current_user] = trim_history(history)
         yield _sse_done()
         return
 

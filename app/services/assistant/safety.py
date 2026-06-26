@@ -133,7 +133,9 @@ HIGH_RISK_TOOLS = {
 PIN_MAX_ATTEMPTS = 3
 
 # Initialize database on module load
-from app.pending_actions_db import init_db, get_pending_action_from_db, save_pending_action, delete_pending_action as db_delete_pending_action
+from app.pending_actions_db import init_db, get_pending_action_from_db, save_pending_action, \
+    delete_pending_action as db_delete_pending_action
+
 init_db()
 
 
@@ -211,7 +213,8 @@ def _tool_summary(tool_name: str, tool_input: dict[str, Any]) -> str:
     return tool_name.replace("_", " ")
 
 
-def build_confirmation_card(tool_calls: list[dict[str, Any]], requires_auth: bool, pin_attempts: int = 0) -> ConfirmationCard:
+def build_confirmation_card(tool_calls: list[dict[str, Any]], requires_auth: bool,
+                            pin_attempts: int = 0) -> ConfirmationCard:
     """Build a structured confirmation card for UI rendering."""
     if not tool_calls:
         return ConfirmationCard(
@@ -277,7 +280,8 @@ def build_pending_prompt(tool_calls: list[dict[str, Any]], requires_auth: bool) 
     return f"Confirm action: {summary}. Reply yes to continue."
 
 
-def register_pending_action(user_id: str, session_id: str, user_message: str, tool_calls: list[dict[str, Any]], requires_auth: bool) -> PendingAction:
+def register_pending_action(user_id: str, session_id: str, user_message: str, tool_calls: list[dict[str, Any]],
+                            requires_auth: bool) -> PendingAction:
     now = datetime.now(timezone.utc)
     pending = PendingAction(
         action_id=uuid4().hex,
@@ -331,7 +335,8 @@ def cancel_pending_action_by_ai(user_id: str, session_id: str, reason: str = "Ne
 
 def is_affirmative(message: str) -> bool:
     normalized = message.strip().lower()
-    return normalized in {"yes", "y", "ok", "okay", "confirm", "confirmed", "approve", "approved", "proceed", "go", "go ahead", "do it", "continue"}
+    return normalized in {"yes", "y", "ok", "okay", "confirm", "confirmed", "approve", "approved", "proceed", "go",
+                          "go ahead", "do it", "continue"}
 
 
 def is_negative(message: str) -> bool:

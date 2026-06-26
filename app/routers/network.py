@@ -1,12 +1,14 @@
 import json
 import re
-import socket
-import subprocess
-import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+
+from domain.network import IPResponse, LocationResponse, GeoLocation, WifiNetwork, WifiStatusResponse, \
+    WifiConnectRequest, ToggleRequest, BluetoothDevice, BluetoothDevicesResponse, BluetoothActionResponse, \
+    BluetoothActionRequest, PingResponse, PingRequest, SpeedTestResponse
+from services.network import local_ip, public_ip as p_ip, geolocate_ip, run_command_input
+from utils.run_command import run_command
 
 try:
     import speedtest
@@ -18,199 +20,19 @@ from app.dependencies import get_current_user
 router = APIRouter(prefix="/network", tags=["network"])
 
 
-def _run_command(cmd: list[str], timeout: int = 10) -> tuple[str, str, int]:
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
-        return result.stdout.strip(), result.stderr.strip(), result.returncode
-    except (FileNotFoundError, subprocess.SubprocessError) as exc:
-        return "", str(exc), 1
-
-
-def _run_command_input(cmd: list[str], input_text: str, timeout: int = 10) -> tuple[str, str, int]:
-    """Run a command with stdin input (used for bluetoothctl interactive commands)."""
-    try:
-        result = subprocess.run(
-            cmd,
-            input=input_text,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-        return result.stdout.strip(), result.stderr.strip(), result.returncode
-    except (FileNotFoundError, subprocess.SubprocessError) as exc:
-        return "", str(exc), 1
-
-
-def _local_ip() -> str:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        sock.connect(("8.8.8.8", 80))
-        return sock.getsockname()[0]
-    except OSError:
-        return "127.0.0.1"
-    finally:
-        sock.close()
-
-
-def _public_ip() -> str:
-    try:
-        with urllib.request.urlopen("https://api.ipify.org", timeout=5) as response:
-            return response.read().decode().strip()
-    except Exception:
-        return ""
-
-
-# ---------------------------------------------------------------------------
-# Pydantic models
-# ---------------------------------------------------------------------------
-
-class IPResponse(BaseModel):
-    local_ip: str
-    public_ip: Optional[str]
-
-
-class GeoLocation(BaseModel):
-    status: str
-    query: Optional[str]
-    country: Optional[str]
-    region: Optional[str]
-    city: Optional[str]
-    zip: Optional[str]
-    timezone: Optional[str]
-    isp: Optional[str]
-    org: Optional[str]
-    lat: Optional[float]
-    lon: Optional[float]
-    message: Optional[str]
-
-
-class LocationResponse(BaseModel):
-    local_ip: str
-    public_ip: Optional[str]
-    location: Optional[GeoLocation]
-
-
-class WifiNetwork(BaseModel):
-    ssid: str
-    security: Optional[str]
-    signal: Optional[int]
-    active: bool
-
-
-class WifiStatusResponse(BaseModel):
-    connected: bool
-    ssid: Optional[str]
-    device: Optional[str]
-    signal: Optional[int]
-    networks: List[WifiNetwork]
-
-
-class WifiConnectRequest(BaseModel):
-    ssid: str
-    password: Optional[str] = None
-
-
-class BluetoothDevice(BaseModel):
-    address: str
-    name: str
-    connected: bool = False
-
-
-class BluetoothDevicesResponse(BaseModel):
-    """
-    connected_devices  – devices with an active BT connection right now.
-    paired_devices     – devices that are paired (trusted/known) but not currently connected.
-    """
-    connected_devices: List[BluetoothDevice]
-    paired_devices: List[BluetoothDevice]
-
-
-class BluetoothActionRequest(BaseModel):
-    address: str
-
-
-class BluetoothActionResponse(BaseModel):
-    address: str
-    action: str
-    message: str
-
-
-class ToggleRequest(BaseModel):
-    enabled: bool
-
-
-class PingRequest(BaseModel):
-    host: str
-    count: int = Field(4, ge=1, le=20)
-
-
-class PingResponse(BaseModel):
-    host: str
-    packets_transmitted: int
-    packets_received: int
-    packet_loss: float
-    avg_rtt_ms: Optional[float]
-
-
-class SpeedTestResponse(BaseModel):
-    download_mbps: float
-    upload_mbps: float
-    ping_ms: float
-
-
-# ---------------------------------------------------------------------------
-# Geo-location helper
-# ---------------------------------------------------------------------------
-
-def _geolocate_ip(ip: str) -> Optional[Dict[str, Any]]:
-    if not ip:
-        return None
-    try:
-        url = (
-            f"http://ip-api.com/json/{ip}"
-            "?fields=status,country,regionName,city,zip,timezone,isp,org,lat,lon,query,message"
-        )
-        with urllib.request.urlopen(url, timeout=5) as response:
-            raw = response.read().decode().strip()
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            return None
-        return {
-            "status": data.get("status", "fail"),
-            "query": data.get("query"),
-            "country": data.get("country"),
-            "region": data.get("regionName") or data.get("region"),
-            "city": data.get("city"),
-            "zip": data.get("zip"),
-            "timezone": data.get("timezone"),
-            "isp": data.get("isp"),
-            "org": data.get("org"),
-            "lat": data.get("lat"),
-            "lon": data.get("lon"),
-            "message": data.get("message"),
-        }
-    except Exception:
-        return None
-
-
-# ---------------------------------------------------------------------------
-# IP / location endpoints
-# ---------------------------------------------------------------------------
-
 @router.get("/ip", response_model=IPResponse, dependencies=[Depends(get_current_user)])
 async def network_ip() -> Any:
     """Return local and public IP addresses."""
-    return IPResponse(local_ip=_local_ip(), public_ip=_public_ip() or None)
+    return IPResponse(local_ip=local_ip(), public_ip=p_ip() or None)
 
 
 @router.get("/location", response_model=LocationResponse, dependencies=[Depends(get_current_user)])
 async def network_location() -> Any:
     """Return local and public IP addresses with geo-location information."""
-    public_ip = _public_ip()
-    location_data = _geolocate_ip(public_ip) if public_ip else None
+    public_ip = p_ip()
+    location_data = geolocate_ip(public_ip) if public_ip else None
     return LocationResponse(
-        local_ip=_local_ip(),
+        local_ip=local_ip(),
         public_ip=public_ip or None,
         location=GeoLocation(**location_data) if location_data else None,
     )
@@ -250,7 +72,7 @@ def _parse_nmcli_wifi_list(raw: str) -> List[WifiNetwork]:
 
 def _active_wifi_device() -> Optional[str]:
     """Return the name of the Wi-Fi device that is currently connected, or None."""
-    stdout, _, rc = _run_command(
+    stdout, _, rc = run_command(
         ["nmcli", "--terse", "--escape", "no", "-f", "DEVICE,TYPE,STATE", "device", "status"]
     )
     if rc != 0:
@@ -263,7 +85,7 @@ def _active_wifi_device() -> Optional[str]:
 
 
 def _current_wifi_status() -> WifiStatusResponse:
-    stdout, stderr, rc = _run_command(
+    stdout, stderr, rc = run_command(
         ["nmcli", "--terse", "--escape", "no", "-f", "ACTIVE,SSID,SECURITY,SIGNAL", "device", "wifi", "list"]
     )
     if rc != 0:
@@ -297,7 +119,7 @@ async def wifi_status() -> Any:
 async def wifi_list() -> Any:
     """List all available WiFi networks (triggers a fresh scan)."""
     # Trigger a rescan so the list is fresh, then return status
-    _run_command(["nmcli", "device", "wifi", "rescan"])
+    run_command(["nmcli", "device", "wifi", "rescan"])
     return _current_wifi_status()
 
 
@@ -307,7 +129,7 @@ async def wifi_connect(request: WifiConnectRequest) -> Any:
     cmd = ["nmcli", "device", "wifi", "connect", request.ssid]
     if request.password:
         cmd += ["password", request.password]
-    stdout, stderr, rc = _run_command(cmd, timeout=30)
+    stdout, stderr, rc = run_command(cmd, timeout=30)
     if rc != 0:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -327,26 +149,26 @@ async def wifi_disconnect() -> Any:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No active WiFi connection to disconnect",
         )
-    stdout, stderr, rc = _run_command(["nmcli", "device", "disconnect", device])
+    stdout, stderr, rc = run_command(["nmcli", "device", "disconnect", device])
     if rc != 0:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=stderr or stdout or "Could not disconnect WiFi",
         )
-    return IPResponse(local_ip=_local_ip(), public_ip=_public_ip() or None)
+    return IPResponse(local_ip=local_ip(), public_ip=p_ip() or None)
 
 
 @router.post("/wifi/toggle", response_model=IPResponse, dependencies=[Depends(get_current_user)])
 async def wifi_toggle(request: ToggleRequest) -> Any:
     """Enable or disable the WiFi radio entirely."""
     state = "on" if request.enabled else "off"
-    stdout, stderr, rc = _run_command(["nmcli", "radio", "wifi", state])
+    stdout, stderr, rc = run_command(["nmcli", "radio", "wifi", state])
     if rc != 0:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=stderr or stdout or "Could not toggle WiFi",
         )
-    return IPResponse(local_ip=_local_ip(), public_ip=_public_ip() or None)
+    return IPResponse(local_ip=local_ip(), public_ip=p_ip() or None)
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +190,7 @@ def _parse_bluetooth_device_list(raw: str) -> List[BluetoothDevice]:
 
 def _get_connected_addresses() -> set[str]:
     """Return MAC addresses of devices that are currently connected."""
-    stdout, _, rc = _run_command(["bluetoothctl", "devices", "Connected"])
+    stdout, _, rc = run_command(["bluetoothctl", "devices", "Connected"])
     if rc != 0:
         return set()
     return {d.address for d in _parse_bluetooth_device_list(stdout)}
@@ -382,7 +204,7 @@ def _get_connected_addresses() -> set[str]:
 async def bluetooth_toggle(request: ToggleRequest) -> Any:
     """Enable or disable the Bluetooth adapter via rfkill."""
     command = ["rfkill", "unblock", "bluetooth"] if request.enabled else ["rfkill", "block", "bluetooth"]
-    stdout, stderr, rc = _run_command(command)
+    stdout, stderr, rc = run_command(command)
     if rc != 0:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -402,7 +224,7 @@ async def bluetooth_devices() -> Any:
       (i.e. available to connect without re-pairing).
     """
     # Connected devices
-    connected_stdout, connected_stderr, connected_rc = _run_command(["bluetoothctl", "devices", "Connected"])
+    connected_stdout, connected_stderr, connected_rc = run_command(["bluetoothctl", "devices", "Connected"])
     if connected_rc != 0:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -412,7 +234,7 @@ async def bluetooth_devices() -> Any:
     connected_addresses = {d.address for d in connected_devices}
 
     # All paired devices
-    paired_stdout, paired_stderr, paired_rc = _run_command(["bluetoothctl", "devices", "Paired"])
+    paired_stdout, paired_stderr, paired_rc = run_command(["bluetoothctl", "devices", "Paired"])
     if paired_rc != 0:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -433,7 +255,7 @@ def _bluetoothctl_action(action: str, address: str, timeout: int = 20) -> Blueto
     """Run a single-shot bluetoothctl action (pair / connect / disconnect / remove)."""
     # Feed commands via stdin so bluetoothctl runs non-interactively
     stdin_cmds = f"{action} {address}\nquit\n"
-    stdout, stderr, rc = _run_command_input(["bluetoothctl"], stdin_cmds, timeout=timeout)
+    stdout, stderr, rc = run_command_input(["bluetoothctl"], stdin_cmds, timeout=timeout)
 
     # bluetoothctl rarely sets a non-zero exit code on failure; check output too
     failure_indicators = ("failed", "error", "not available")
@@ -480,7 +302,7 @@ async def bluetooth_unpair(request: BluetoothActionRequest) -> Any:
 @router.post("/ping", response_model=PingResponse, dependencies=[Depends(get_current_user)])
 async def ping_host(request: PingRequest) -> Any:
     """Ping a host and return round-trip statistics."""
-    stdout, stderr, rc = _run_command(["ping", "-c", str(request.count), request.host])
+    stdout, stderr, rc = run_command(["ping", "-c", str(request.count), request.host])
     if rc != 0 and not stdout:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=stderr or "Ping failed")
     transmitted = received = 0
@@ -573,14 +395,14 @@ async def speed_test() -> Any:
     """Run a network speed test and return upload/download/ping metrics."""
 
     # 1. Try Ookla CLI with JSON output (most reliable parsing)
-    stdout, _, rc = _run_command(["speedtest", "--format=json", "--accept-license", "--accept-gdpr"], timeout=60)
+    stdout, _, rc = run_command(["speedtest", "--format=json", "--accept-license", "--accept-gdpr"], timeout=60)
     if rc == 0:
         result = _parse_speedtest_json(stdout)
         if result:
             return result
 
     # 2. Try speedtest-cli (pip package) with --simple
-    stdout, _, rc = _run_command(["speedtest-cli", "--simple"], timeout=60)
+    stdout, _, rc = run_command(["speedtest-cli", "--simple"], timeout=60)
     if rc == 0:
         result = _parse_speedtest_simple(stdout)
         if result:

@@ -1,67 +1,17 @@
-import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
 
 from app.dependencies import get_current_user
+from domain.audio import ActionResponse
+from domain.maintenance import LogResponse, UpdateEntry, UpdateResponse, ServiceListResponse, ServiceEntry
+from services.maintenance import detect_package_manager
+from utils.run_command import run_command
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
-
-
-def _run_command(cmd: list[str], timeout: int = 10) -> tuple[str, str, int]:
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
-        return result.stdout.strip(), result.stderr.strip(), result.returncode
-    except (FileNotFoundError, subprocess.SubprocessError) as exc:
-        return "", str(exc), 1
-
-
-def _detect_package_manager() -> Optional[str]:
-    if shutil.which("apt-get"):
-        return "apt"
-    if shutil.which("dnf"):
-        return "dnf"
-    if shutil.which("pacman"):
-        return "pacman"
-    return None
-
-
-class ServiceEntry(BaseModel):
-    name: str
-    load: str
-    active: str
-    sub: str
-    description: str
-
-
-class ServiceListResponse(BaseModel):
-    services: List[ServiceEntry]
-
-
-class UpdateEntry(BaseModel):
-    package: str
-    current: Optional[str] = None
-    available: Optional[str] = None
-
-
-class UpdateResponse(BaseModel):
-    updates: List[UpdateEntry]
-    manager: str
-
-
-class ActionResponse(BaseModel):
-    success: bool
-    message: str
-
-
-class LogResponse(BaseModel):
-    service: str
-    lines: List[str]
 
 
 @router.post("/clear-cache", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
@@ -87,9 +37,10 @@ async def clear_cache() -> Any:
 @router.get("/logs", response_model=LogResponse, dependencies=[Depends(get_current_user)])
 async def get_logs(service: str = Query(...), lines: int = Query(100, ge=1, le=1000)) -> Any:
     """Get the last N lines of a systemd service log."""
-    stdout, stderr, rc = _run_command(["journalctl", "-u", service, f"-n", str(lines), "--no-pager"])
+    stdout, stderr, rc = run_command(["journalctl", "-u", service, f"-n", str(lines), "--no-pager"])
     if rc != 0:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=stderr or "Could not read service logs")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=stderr or "Could not read service logs")
     return LogResponse(service=service, lines=stdout.splitlines())
 
 
@@ -115,21 +66,24 @@ def _parse_pacman_updates(raw: str) -> List[UpdateEntry]:
 @router.get("/updates", response_model=UpdateResponse, dependencies=[Depends(get_current_user)])
 async def check_updates() -> Any:
     """Check for available system updates."""
-    manager = _detect_package_manager()
+    manager = detect_package_manager()
     if manager == "apt":
-        stdout, stderr, rc = _run_command(["apt", "list", "--upgradable"])
+        stdout, stderr, rc = run_command(["apt", "list", "--upgradable"])
         if rc != 0:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=stderr or "Could not check updates")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail=stderr or "Could not check updates")
         updates = _parse_apt_updates(stdout)
     elif manager == "dnf":
-        stdout, stderr, rc = _run_command(["dnf", "check-update"])
+        stdout, stderr, rc = run_command(["dnf", "check-update"])
         if rc not in (0, 100):
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=stderr or "Could not check updates")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail=stderr or "Could not check updates")
         updates = _parse_apt_updates(stdout)
     elif manager == "pacman":
-        stdout, stderr, rc = _run_command(["pacman", "-Qu"])
+        stdout, stderr, rc = run_command(["pacman", "-Qu"])
         if rc != 0:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=stderr or "Could not check updates")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail=stderr or "Could not check updates")
         updates = _parse_pacman_updates(stdout)
     else:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unsupported package manager")
@@ -141,50 +95,57 @@ async def run_update(confirm: bool = Query(False)) -> Any:
     """Run a full system update when explicitly confirmed."""
     if not confirm:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmation required to run updates")
-    manager = _detect_package_manager()
+    manager = detect_package_manager()
     if manager == "apt":
-        stdout, stderr, rc = _run_command(["apt-get", "update"])
+        stdout, stderr, rc = run_command(["apt-get", "update"])
         if rc != 0:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=stderr or stdout or "Could not refresh apt cache")
-        stdout, stderr, rc = _run_command(["apt-get", "upgrade", "-y"])
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail=stderr or stdout or "Could not refresh apt cache")
+        stdout, stderr, rc = run_command(["apt-get", "upgrade", "-y"])
     elif manager == "dnf":
-        stdout, stderr, rc = _run_command(["dnf", "upgrade", "-y"])
+        stdout, stderr, rc = run_command(["dnf", "upgrade", "-y"])
     elif manager == "pacman":
-        stdout, stderr, rc = _run_command(["pacman", "-Syu", "--noconfirm"])
+        stdout, stderr, rc = run_command(["pacman", "-Syu", "--noconfirm"])
     else:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unsupported package manager")
     if rc != 0:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=stderr or stdout or "Update failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=stderr or stdout or "Update failed")
     return ActionResponse(success=True, message="System updated.")
 
 
 @router.post("/sync-time", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
 async def sync_time() -> Any:
     """Sync the system clock via NTP."""
-    stdout, stderr, rc = _run_command(["timedatectl", "set-ntp", "true"])
+    stdout, stderr, rc = run_command(["timedatectl", "set-ntp", "true"])
     if rc != 0:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=stderr or stdout or "Could not sync time")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=stderr or stdout or "Could not sync time")
     return ActionResponse(success=True, message="Time synchronization enabled.")
 
 
 @router.get("/services", response_model=ServiceListResponse, dependencies=[Depends(get_current_user)])
 async def list_services() -> Any:
     """List systemd services and their status."""
-    stdout, stderr, rc = _run_command(["systemctl", "list-units", "--type=service", "--all", "--no-legend", "--no-pager"])
+    stdout, stderr, rc = run_command(
+        ["systemctl", "list-units", "--type=service", "--all", "--no-legend", "--no-pager"])
     if rc != 0:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=stderr or "Could not list services")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=stderr or "Could not list services")
     services: List[ServiceEntry] = []
     for line in stdout.splitlines():
         parts = re.split(r"\s+", line, maxsplit=4)
         if len(parts) == 5:
-            services.append(ServiceEntry(name=parts[0], load=parts[1], active=parts[2], sub=parts[3], description=parts[4]))
+            services.append(
+                ServiceEntry(name=parts[0], load=parts[1], active=parts[2], sub=parts[3], description=parts[4]))
     return ServiceListResponse(services=services)
 
 
 def _service_action(name: str, action: str) -> ActionResponse:
-    stdout, stderr, rc = _run_command(["systemctl", action, name])
+    stdout, stderr, rc = run_command(["systemctl", action, name])
     if rc != 0:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=stderr or stdout or f"Could not {action} service")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=stderr or stdout or f"Could not {action} service")
     return ActionResponse(success=True, message=f"Service {name} {action}ed.")
 
 

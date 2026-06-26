@@ -1,18 +1,17 @@
-import asyncio
 import base64
 import json
 import logging
 import re
-from typing import Any, AsyncGenerator
 from pathlib import Path
-from dotenv import dotenv_values
+from typing import Any, AsyncGenerator
 from urllib.parse import quote_plus
 
+from app.services.assistant.tools import INPUT_CONFIRM_TOOLS, SYSTEM_TOOL_PROMPT, TOOL_ALIASES, TOOL_DEFINITIONS
+from dotenv import dotenv_values
 from fastapi import FastAPI
 from httpx import AsyncClient, ASGITransport
 
 from app.config import Config
-from .assistant_tools import INPUT_CONFIRM_TOOLS, SYSTEM_TOOL_PROMPT, TOOL_ALIASES, TOOL_DEFINITIONS
 
 config = Config()
 logger = logging.getLogger("vela.assistant")
@@ -22,7 +21,7 @@ SESSION_STORE: dict[str, list[dict[str, str]]] = {}
 MAX_HISTORY_CHARS = 4000  # Token-budget-aware trimming instead of message count
 
 
-def _clean_text(text: str) -> str:
+def clean_text(text: str) -> str:
     """Strip markdown code fences and Qwen3/inline <think> blocks from text."""
     if not text:
         return ""
@@ -34,7 +33,7 @@ def _clean_text(text: str) -> str:
     return cleaned.strip()
 
 
-def _get_api_key() -> str | None:
+def get_api_key() -> str | None:
     """Read FIREWORKS_API_KEY strictly from dotfiles only.
 
     Search order (first match wins):
@@ -63,7 +62,7 @@ def _get_api_key() -> str | None:
     return None
 
 
-def _explain_fireworks_issue(info: Any) -> str:
+def explain_fireworks_issue(info: Any) -> str:
     """Return a concise, user-facing explanation for Fireworks AI errors.
 
     Accepts either an Exception or a response-like dict/object.
@@ -99,13 +98,13 @@ def _explain_fireworks_issue(info: Any) -> str:
     return "An unknown error occurred while contacting Fireworks AI."
 
 
-def _get_or_init_session(user_id: str) -> list[dict[str, str]]:
+def get_or_init_session(user_id: str) -> list[dict[str, str]]:
     if user_id not in SESSION_STORE:
         SESSION_STORE[user_id] = []
     return SESSION_STORE[user_id]
 
 
-def _trim_history(history: list[dict[str, str]], max_chars: int = MAX_HISTORY_CHARS) -> list[dict[str, str]]:
+def trim_history(history: list[dict[str, str]], max_chars: int = MAX_HISTORY_CHARS) -> list[dict[str, str]]:
     """Keep the most recent messages that fit within max_chars."""
     total = 0
     trimmed: list[dict[str, str]] = []
@@ -117,7 +116,7 @@ def _trim_history(history: list[dict[str, str]], max_chars: int = MAX_HISTORY_CH
     return trimmed
 
 
-async def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
+async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
     """
     Single LLM call → list of tool calls to execute in parallel.
     For conversational replies returns a single-item list with tool="none".
@@ -128,7 +127,7 @@ async def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | No
         messages.extend(history)
     messages.append({"role": "user", "content": user_message})
 
-    api_key = _get_api_key()
+    api_key = get_api_key()
     if not api_key:
         raise ValueError("FIREWORKS_API_KEY is not configured in your .env file.")
 
@@ -163,11 +162,11 @@ async def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | No
                 text = res_json["choices"][0]["message"]["content"] or ""
             except Exception as exc:
                 logger.error("Fireworks AI chat.completions.create failed: %s", exc, exc_info=True)
-                raise ValueError(_explain_fireworks_issue(exc)) from exc
+                raise ValueError(explain_fireworks_issue(exc)) from exc
 
             # Strip think blocks before any parsing or history injection
-            clean = _clean_text(text)
-            parsed = _extract_json_array(clean)
+            clean = clean_text(text)
+            parsed = extract_json_array(clean)
             if parsed:
                 return parsed
 
@@ -198,7 +197,7 @@ async def _plan_tool_calls(user_message: str, history: list[dict[str, str]] | No
     return [{"tool": "none", "tool_input": {}, "conversational_reply": "I'm sorry, I couldn't process that request. Please try rephrasing it."}]
 
 
-async def _compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tuple[str, str | None]:
+async def compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tuple[str, str | None]:
     """
     Second LLM call — summarises ALL tool results into one clean Markdown reply.
     Returns (reply_text, art_url) where art_url is present for media status queries.
@@ -243,7 +242,7 @@ async def _compose_final_reply(user_message: str, results: list[dict[str, Any]])
         for r in results
     )
     try:
-        api_key = _get_api_key()
+        api_key = get_api_key()
         if not api_key:
             raise ValueError("FIREWORKS_API_KEY is not configured in your .env file.")
 
@@ -276,12 +275,12 @@ async def _compose_final_reply(user_message: str, results: list[dict[str, Any]])
             text = res_json["choices"][0]["message"]["content"] or ""
     except Exception as exc:
         logger.error("Fireworks AI chat.completions.create failed: %s", exc, exc_info=True)
-        raise ValueError(_explain_fireworks_issue(exc)) from exc
-    return _clean_text(text), None
+        raise ValueError(explain_fireworks_issue(exc)) from exc
+    return clean_text(text), None
 
 
 
-def _split_think_stream(text: str):
+def split_think_stream(text: str):
     """
     Qwen3 and some models emit <think>...</think> inline in the content delta stream.
     This splits a single delta chunk into typed events so the streaming handlers
@@ -319,7 +318,7 @@ def _split_think_stream(text: str):
         remaining = remaining[close_idx + 8:]  # skip "</think>"
 
 
-async def _stream_llm_response(
+async def stream_llm_response(
         messages: list[dict[str, Any]],
         max_tokens: int = 1024,
         enable_thinking: bool = True,
@@ -333,7 +332,7 @@ async def _stream_llm_response(
     Thinking is enabled via the `thinking` parameter (V4 Flash compatible).
     This is NOT used for the tool planner (JSON mode is incompatible with streaming).
     """
-    api_key = _get_api_key()
+    api_key = get_api_key()
     if not api_key:
         yield {"type": "error", "text": "FIREWORKS_API_KEY is not configured in your .env file."}
         return
@@ -390,14 +389,14 @@ async def _stream_llm_response(
                         yield {"type": "thinking", "text": delta["reasoning_content"]}
                     # Visible content — may contain inline <think> blocks (Qwen3 style)
                     if delta.get("content"):
-                        for _evt in _split_think_stream(delta["content"]):
+                        for _evt in split_think_stream(delta["content"]):
                             yield _evt
     except Exception as exc:
         logger.error("Streaming LLM call failed: %s", exc, exc_info=True)
-        yield {"type": "error", "text": _explain_fireworks_issue(exc)}
+        yield {"type": "error", "text": explain_fireworks_issue(exc)}
 
 
-async def _plan_tool_calls_streaming(
+async def plan_tool_calls_streaming(
         user_message: str,
         history: list[dict[str, str]] | None = None,
 ) -> AsyncGenerator[dict[str, str] | list[dict[str, Any]], None]:
@@ -405,9 +404,9 @@ async def _plan_tool_calls_streaming(
     Streaming-aware tool planner.
 
     Yields:
-        {"type": "thinking", "text": "..."}  — live thinking deltas while planning
-        {"type": "planning_done"}             — planning finished, JSON parsed
-        list[dict]                            — the parsed tool_calls (single non-dict yield)
+        {"type": "thinking", "text": "..."} — live thinking deltas while planning
+        {"type": "planning_done"} — planning finished, JSON parsed
+        list[dict] — the parsed tool_calls (single non-dict yield)
 
     Falls back to the non-streaming planner if streaming JSON can't be assembled.
     Note: response_format/json_object is incompatible with stream=True on Fireworks,
@@ -418,7 +417,7 @@ async def _plan_tool_calls_streaming(
         messages.extend(history)
     messages.append({"role": "user", "content": user_message})
 
-    api_key = _get_api_key()
+    api_key = get_api_key()
     if not api_key:
         raise ValueError("FIREWORKS_API_KEY is not configured in your .env file.")
 
@@ -467,7 +466,7 @@ async def _plan_tool_calls_streaming(
                             yield {"type": "thinking", "text": delta["reasoning_content"]}
                         if delta.get("content"):
                             # Buffer raw content; also stream any <think> prefix as thinking
-                            for evt in _split_think_stream(delta["content"]):
+                            for evt in split_think_stream(delta["content"]):
                                 if evt["type"] == "thinking":
                                     yield evt
                                 # content parts go into the buffer for JSON parsing, not streamed
@@ -475,9 +474,9 @@ async def _plan_tool_calls_streaming(
                                     content_buf += evt["text"]
         except Exception as exc:
             logger.error("Streaming tool planner failed: %s", exc, exc_info=True)
-            raise ValueError(_explain_fireworks_issue(exc)) from exc
+            raise ValueError(explain_fireworks_issue(exc)) from exc
 
-        parsed = _extract_json_array(_clean_text(content_buf))
+        parsed = extract_json_array(clean_text(content_buf))
         if parsed:
             yield {"type": "planning_done"}
             yield parsed  # type: ignore[misc]
@@ -504,12 +503,12 @@ async def _plan_tool_calls_streaming(
     yield [{"tool": "none", "tool_input": {}, "conversational_reply": "I'm sorry, I couldn't process that request. Please try rephrasing it."}]  # type: ignore[misc]
 
 
-def _extract_json_array(text: str) -> list[dict[str, Any]] | None:
+def extract_json_array(text: str) -> list[dict[str, Any]] | None:
     """
     Extract a JSON array from the model's response.
     Falls back to wrapping a single object in a list for robustness.
     """
-    cleaned = _clean_text(text)
+    cleaned = clean_text(text)
 
     match = re.search(r"\[.*\]", cleaned, flags=re.DOTALL)
     if match:
@@ -622,7 +621,7 @@ async def _execute_tool(
     return data
 
 
-async def _execute_tool_safe(
+async def execute_tool_safe(
         app: FastAPI,
         tool_name: str,
         tool_input: dict[str, Any],

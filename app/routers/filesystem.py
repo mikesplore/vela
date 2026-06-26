@@ -3,7 +3,6 @@ import shutil
 import subprocess
 import zipfile
 from typing import Optional
-from pydantic import BaseModel, Field
 from pathlib import Path
 from typing import Any, List
 
@@ -14,111 +13,13 @@ from pydantic import BaseModel, Field
 
 from app.config import Config
 from app.dependencies import get_current_user
+from domain.filesystem import FileListResponse, FileEntry, FileActionResponse, PathRequest, RenameRequest
+from services.filesystem import validate_path, file_entry, is_allowed
 
 config = Config()
 router = APIRouter(prefix="/fs", tags=["filesystem"])
 
 
-def _resolve_path(path_str: str) -> Path:
-    # Expand user (~) first, then treat relative paths as relative to cwd
-    path = Path(path_str).expanduser()
-    if not path.is_absolute():
-        path = Path.cwd() / path
-    return path.resolve()
-
-
-def _is_allowed(path: Path) -> bool:
-    allowed_dirs = [Path(p).expanduser().resolve() for p in config.allowed_base_dirs]
-    if not allowed_dirs:
-        return True
-    return any(path == base or path.is_relative_to(base) for base in allowed_dirs)
-
-
-def _validate_path(path_str: str, must_exist: bool = False) -> Path:
-    if not path_str:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Path is required")
-    path = _resolve_path(path_str)
-    if not _is_allowed(path):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Path is outside allowed base directories")
-    if must_exist and not path.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Path not found")
-    return path
-
-
-def _file_entry(path: Path, include_tree_meta: bool = True) -> dict[str, Any]:
-    """Create a file/folder entry with optional tree metadata."""
-    stat = path.stat()
-    is_dir = path.is_dir()
-    entry = {
-        "name": path.name,
-        "path": str(path),
-        "type": "directory" if is_dir else "file",
-        "size": stat.st_size,
-        "modified": stat.st_mtime,
-    }
-    
-    # Add tree navigation metadata
-    if include_tree_meta:
-        if is_dir:
-            try:
-                # Count immediate children (files and folders)
-                children = list(path.iterdir())
-                entry["has_children"] = len(children) > 0
-                entry["children_count"] = len(children)
-            except (OSError, PermissionError):
-                entry["has_children"] = False
-                entry["children_count"] = 0
-        else:
-            # For files, add extension info for better filtering
-            entry["extension"] = path.suffix.lower() if path.suffix else ""
-    
-    return entry
-
-
-class FileEntry(BaseModel):
-    name: str
-    path: str
-    type: str  # "file" or "directory"
-    size: int
-    modified: float
-    has_children: bool | None = None  # Only for directories
-    children_count: int | None = None  # Only for directories
-    extension: str | None = None  # Only for files
-
-
-class FileListResponse(BaseModel):
-    files: List[FileEntry]
-    current_path: str  # The path being listed
-    parent_path: str | None  # Parent directory path for navigation
-    total_items: int  # Total items in the current directory
-
-
-class FileActionResponse(BaseModel):
-    success: bool
-    message: str
-
-
-class PathRequest(BaseModel):
-    path: str
-
-
-class RenameRequest(BaseModel):
-    from_path: str = Field(..., alias="from")
-    to_path: str = Field(..., alias="to")
-
-    model_config = {
-        "populate_by_name": True,
-    }
-
-
-class ZipRequest(BaseModel):
-    paths: List[str]
-    output: str
-
-
-class UnzipRequest(BaseModel):
-    path: str
-    destination: str
 
 
 @router.get("/list", response_model=FileListResponse, dependencies=[Depends(get_current_user)])
@@ -127,7 +28,7 @@ async def list_files(
     show_hidden: bool = Query(False)  # 👈 1. Accept the boolean toggle parameter here
 ) -> Any:
     """List directory contents (files and folders) for tree navigation."""
-    target = _validate_path(path, must_exist=True)
+    target = validate_path(path, must_exist=True)
     if not target.is_dir():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Path must be a directory")
     
@@ -135,7 +36,7 @@ async def list_files(
     parent_path = None
     try:
         parent = target.parent
-        if parent != target and _is_allowed(parent):  # Not root and is allowed
+        if parent != target and is_allowed(parent):  # Not root and is allowed
             parent_path = str(parent)
     except (OSError, ValueError):
         pass
@@ -150,7 +51,7 @@ async def list_files(
                 continue
                 
             try:
-                entry_dict = _file_entry(child, include_tree_meta=True)
+                entry_dict = file_entry(child, include_tree_meta=True)
                 items.append(FileEntry(**entry_dict))
             except (OSError, PermissionError):
                 # Skip items we can't access
@@ -194,7 +95,7 @@ async def get_directory_tree(path: str = Query("."), max_depth: int = Query(1, g
     
     max_depth: How many levels deep to traverse (1-3 for performance).
     """
-    target = _validate_path(path, must_exist=True)
+    target = validate_path(path, must_exist=True)
     if not target.is_dir():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Path must be a directory")
     
@@ -210,7 +111,7 @@ async def get_directory_tree(path: str = Query("."), max_depth: int = Query(1, g
         current = current.parent
     
     # Create root node
-    root_entry = _file_entry(target, include_tree_meta=True)
+    root_entry = file_entry(target, include_tree_meta=True)
     root_node = TreeNode(
         name=target.name or str(target),
         path=str(target),
@@ -224,7 +125,7 @@ async def get_directory_tree(path: str = Query("."), max_depth: int = Query(1, g
         items = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
         for child in items:
             try:
-                entry_dict = _file_entry(child, include_tree_meta=True)
+                entry_dict = file_entry(child, include_tree_meta=True)
                 children.append(TreeNode(
                     name=child.name,
                     path=str(child),
@@ -246,7 +147,7 @@ async def get_directory_tree(path: str = Query("."), max_depth: int = Query(1, g
 @router.get("/download", dependencies=[Depends(get_current_user)])
 async def download_file(path: str = Query(...)) -> FileResponse:
     """Download a file from the filesystem."""
-    target = _validate_path(path, must_exist=True)
+    target = validate_path(path, must_exist=True)
     if target.is_dir():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Path must be a file")
     return FileResponse(path=target, filename=target.name, media_type="application/octet-stream")
@@ -255,12 +156,12 @@ async def download_file(path: str = Query(...)) -> FileResponse:
 @router.post("/upload", response_model=FileActionResponse, dependencies=[Depends(get_current_user)])
 async def upload_file(path: str = Form(...), file: UploadFile = File(...)) -> Any:
     """Upload a file to the given destination path."""
-    target = _validate_path(path)
+    target = validate_path(path)
     if target.exists() and target.is_dir():
         target_path = target / file.filename
     else:
         target_path = target
-    if not _is_allowed(target_path.parent):
+    if not is_allowed(target_path.parent):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Destination is outside allowed base directories")
     target_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -275,7 +176,7 @@ async def upload_file(path: str = Form(...), file: UploadFile = File(...)) -> An
 @router.delete("/delete", response_model=FileActionResponse, dependencies=[Depends(get_current_user)])
 async def delete_path(request: PathRequest) -> Any:
     """Permanently delete a file, symlink, or directory safely."""
-    target = _validate_path(request.path, must_exist=True)
+    target = validate_path(request.path, must_exist=True)
     
     try:
         # Check if it's a directory, but ensure it's NOT a symlink
@@ -304,7 +205,7 @@ async def delete_path(request: PathRequest) -> Any:
 @router.post("/mkdir", response_model=FileActionResponse, dependencies=[Depends(get_current_user)])
 async def make_directory(request: PathRequest) -> Any:
     """Create a new directory."""
-    target = _validate_path(request.path)
+    target = validate_path(request.path)
     if target.exists():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Directory already exists")
     try:
@@ -317,8 +218,8 @@ async def make_directory(request: PathRequest) -> Any:
 @router.post("/rename", response_model=FileActionResponse, dependencies=[Depends(get_current_user)])
 async def rename_path(request: RenameRequest) -> Any:
     """Rename or move a file or directory."""
-    source = _validate_path(request.from_path, must_exist=True)
-    destination = _validate_path(request.to_path)
+    source = validate_path(request.from_path, must_exist=True)
+    destination = validate_path(request.to_path)
     if destination.exists():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Destination already exists")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -346,7 +247,7 @@ async def get_system_config() -> Any:
 @router.get("/search", response_model=FileListResponse, dependencies=[Depends(get_current_user)])
 async def search_files(query: str = Query(...), path: str = Query(".")) -> Any:
     """Search for files and directories by name with tree-enabled results."""
-    target = _validate_path(path, must_exist=True)
+    target = validate_path(path, must_exist=True)
     if not target.is_dir():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Path must be a directory")
         
@@ -357,12 +258,12 @@ async def search_files(query: str = Query(...), path: str = Query(".")) -> Any:
             # Search in files
             for name in files:
                 if query.lower() in name.lower():
-                    entry_dict = _file_entry(Path(root) / name)
+                    entry_dict = file_entry(Path(root) / name)
                     matches.append(FileEntry(**entry_dict))
             # Search in directories
             for name in dirs:
                 if query.lower() in name.lower():
-                    entry_dict = _file_entry(Path(root) / name)
+                    entry_dict = file_entry(Path(root) / name)
                     matches.append(FileEntry(**entry_dict))
     except (OSError, PermissionError) as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Search failed: {exc}")
@@ -421,14 +322,14 @@ class ZipRequest(BaseModel):
 @router.post("/zip", response_model=FileActionResponse, dependencies=[Depends(get_current_user)])
 async def zip_paths(request: ZipRequest) -> Any:
     """Create a zip archive from files and directories."""
-    output = _validate_path(request.output)
+    output = validate_path(request.output)
     if output.suffix.lower() != ".zip":
         output = output.with_suffix(".zip")
     output.parent.mkdir(parents=True, exist_ok=True)
     try:
         with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for path_str in request.paths:
-                source = _validate_path(path_str, must_exist=True)
+                source = validate_path(path_str, must_exist=True)
                 if source.is_file():
                     archive.write(source, arcname=source.name)
                 else:
@@ -449,8 +350,8 @@ class UnzipRequest(BaseModel):
 @router.post("/unzip", response_model=FileActionResponse, dependencies=[Depends(get_current_user)])
 async def unzip_path(request: UnzipRequest) -> Any:
     """Extract a zip archive to a destination directory."""
-    source = _validate_path(request.path, must_exist=True)
-    destination = _validate_path(request.destination)
+    source = validate_path(request.path, must_exist=True)
+    destination = validate_path(request.destination)
     if source.suffix.lower() != ".zip":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Source file must be a .zip archive")
     destination.mkdir(parents=True, exist_ok=True)
@@ -465,7 +366,7 @@ async def unzip_path(request: UnzipRequest) -> Any:
 @router.post("/open", response_model=FileActionResponse, dependencies=[Depends(get_current_user)])
 async def open_path(request: PathRequest) -> Any:
     """Open a file or directory with the default system application."""
-    target = _validate_path(request.path, must_exist=True)
+    target = validate_path(request.path, must_exist=True)
     process = subprocess.run(["xdg-open", str(target)], capture_output=True, text=True, timeout=10, check=False)
     if process.returncode != 0:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=process.stderr or "Could not open path")

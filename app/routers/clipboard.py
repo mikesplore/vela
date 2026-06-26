@@ -1,56 +1,29 @@
-from typing import Any, Dict
+from typing import Any
 
-import pyperclip
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends
 
 from app.dependencies import get_current_user
+from domain.clipboard import ClipboardData, StatusResponse, ClipboardWriteRequest
+from services.clipboard import read_clipboard as read, write_clipboard as write
 
 router = APIRouter(prefix="/clipboard", tags=["clipboard"])
-
-
-class ClipboardData(BaseModel):
-    text: str
-
-
-class ClipboardWriteRequest(BaseModel):
-    text: str
-
-
-class StatusResponse(BaseModel):
-    success: bool
-    message: str
-
-
-def _read_clipboard() -> str:
-    try:
-        return pyperclip.paste()
-    except pyperclip.PyperclipException as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-def _write_clipboard(text: str) -> None:
-    try:
-        pyperclip.copy(text)
-    except pyperclip.PyperclipException as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.get("/read", response_model=ClipboardData, dependencies=[Depends(get_current_user)])
 async def read_clipboard() -> Any:
     """Read the current clipboard contents."""
-    return ClipboardData(text=_read_clipboard())
+    return ClipboardData(text=read())
 
 
 @router.post("/write", response_model=StatusResponse, dependencies=[Depends(get_current_user)])
 async def write_clipboard(request: ClipboardWriteRequest) -> Any:
     """Write text to the clipboard."""
-    _write_clipboard(request.text)
+    write(request.text)
     return StatusResponse(success=True, message="clipboard updated")
 
 
 @router.post("/clear", response_model=StatusResponse, dependencies=[Depends(get_current_user)])
 async def clear_clipboard() -> Any:
     """Clear the clipboard contents."""
-    _write_clipboard("")
+    write("")
     return StatusResponse(success=True, message="clipboard cleared")
