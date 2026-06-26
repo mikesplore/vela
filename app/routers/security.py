@@ -6,10 +6,10 @@ from typing import Any, List
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.dependencies import get_current_user
-from domain.audio import ActionResponse
-from services.security import lock_screen_with_fallback, WebcamSnapshotResponse, run_command_bytes, LoginEvent, \
+from app.domain.audio import ActionResponse
+from app.services.security import lock_screen_with_fallback, WebcamSnapshotResponse, run_command_bytes, LoginEvent, \
     LoginHistoryResponse, SSHSession, SSHSessionsResponse
-from utils.run_command import run_command
+from app.utils.run_command import run_command
 
 router = APIRouter(prefix="/security", tags=["security"])
 

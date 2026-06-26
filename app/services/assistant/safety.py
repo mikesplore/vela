@@ -8,7 +8,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from app.config import Config
-from app.models import PendingAction
+from db.models import PendingAction
 
 config = Config()
 
@@ -133,7 +133,7 @@ HIGH_RISK_TOOLS = {
 PIN_MAX_ATTEMPTS = 3
 
 # Initialize database on module load
-from app.pending_actions_db import init_db, get_pending_action_from_db, save_pending_action, \
+from app.db.pending_actions import init_db, get_pending_action_from_db, save_pending_action, \
     delete_pending_action as db_delete_pending_action
 
 init_db()

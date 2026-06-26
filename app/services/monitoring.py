@@ -6,10 +6,10 @@ from typing import Any, Dict, List, Optional
 import psutil
 from fastapi.responses import JSONResponse
 
-from domain.monitoring import CPUUsage, DiskIOMetric, NetworkIOMetric, TemperatureEntry, BatteryInfo, FanEntry, \
+from app.domain.monitoring import CPUUsage, DiskIOMetric, NetworkIOMetric, TemperatureEntry, BatteryInfo, FanEntry, \
     BatteryHealthInfo, SingleBatteryHealth, ProcessMetrics, ProcessInfo
-from services.system_info import RAMInfo, GPUInfo
-from utils.run_command import run_command
+from app.services.system_info import RAMInfo, GPUInfo
+from app.utils.run_command import run_command
 
 
 

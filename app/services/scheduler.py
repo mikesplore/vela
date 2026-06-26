@@ -5,10 +5,8 @@ from typing import List, Optional
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
-
-from domain.scheduler import SchedulerJobInfo
-from services.system_info import run_command
+from app.domain.scheduler import SchedulerJobInfo
+from app.services.system_info import run_command
 
 scheduler_db = Path.cwd() / "scheduler_jobs.sqlite"
 jobstore = {"default": SQLAlchemyJobStore(url=f"sqlite:///{scheduler_db}")}

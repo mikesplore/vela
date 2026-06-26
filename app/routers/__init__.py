@@ -14,7 +14,6 @@ from .scheduler import router as scheduler_router
 from .security import router as security_router
 from .system_info import router as system_info_router
 from .assistant import router as assistant_router
-from .assistant_stream import router as assistant_stream_router
 
 all_routers = [
     display_router,
@@ -33,5 +32,4 @@ all_routers = [
     media_router,
     clipboard_router,
     assistant_router,
-    assistant_stream_router,
 ]

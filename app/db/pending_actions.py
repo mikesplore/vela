@@ -1,14 +1,13 @@
 """Database management for pending actions."""
 from __future__ import annotations
 
-from datetime import datetime, timezone, UTC
+from datetime import datetime, UTC
 from pathlib import Path
-from typing import Optional
 
 from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
-from app.models import PendingAction
+from db.models import PendingAction
 
 
 class Base(DeclarativeBase):

@@ -13,8 +13,8 @@ from pydantic import BaseModel, Field
 
 from app.config import Config
 from app.dependencies import get_current_user
-from domain.filesystem import FileListResponse, FileEntry, FileActionResponse, PathRequest, RenameRequest
-from services.filesystem import validate_path, file_entry, is_allowed
+from app.domain.filesystem import FileListResponse, FileEntry, FileActionResponse, PathRequest, RenameRequest
+from app.services.filesystem import validate_path, file_entry, is_allowed
 
 config = Config()
 router = APIRouter(prefix="/fs", tags=["filesystem"])

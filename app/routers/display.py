@@ -4,13 +4,13 @@ import tempfile
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from app.dependencies import get_current_user
-from domain.display import ScreenshotResponse, RecordRequest, MUTTER_POWER_SAVE_MODE_OFF, ValueResponse, \
+from app.domain.display import ScreenshotResponse, RecordRequest, MUTTER_POWER_SAVE_MODE_OFF, ValueResponse, \
     MUTTER_POWER_SAVE_MODE_ON, PowerSaveState, BrightnessInfo, BrightnessRequest, ResolutionInfo, ResolutionRequest, \
     RotateRequest, NightLightRequest
-from services.display import capture_screenshot_with_flameshot, get_display_info, set_mutter_power_save_mode, \
+from app.services.display import capture_screenshot_with_flameshot, get_display_info, set_mutter_power_save_mode, \
     get_mutter_power_save_mode, get_brightness, set_brightness_with_backlight, first_connected_output, run_lock, \
     run_night_light
-from utils.run_command import run_command
+from app.utils.run_command import run_command
 
 router = APIRouter(prefix="/display", tags=["display"])
 

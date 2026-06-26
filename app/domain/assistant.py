@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from services.assistant.safety import ConfirmationCard
+from app.services.assistant.safety import ConfirmationCard
 
 
 class AssistantRequest(BaseModel):

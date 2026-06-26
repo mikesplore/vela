@@ -1,8 +1,8 @@
 from typing import Any
 from fastapi import APIRouter, Depends
 from app.dependencies import get_current_user
-from domain.media import MediaStatus, SeekRequest, NowPlayingInfo
-from services.media import media_action, choose_player, query_metadata, query_status, query_position, query_length
+from app.domain.media import MediaStatus, SeekRequest, NowPlayingInfo
+from app.services.media import media_action, choose_player, query_metadata, query_status, query_position, query_length
 
 router = APIRouter(prefix="/media", tags=["media"])
 

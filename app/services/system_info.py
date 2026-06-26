@@ -7,8 +7,8 @@ from typing import List, Optional
 
 import psutil
 from fastapi.responses import JSONResponse
-from domain.system_info import CPUInfo, RAMInfo, GPUInfo, DiskPartitionInfo, OSInfo, USBDevice, MonitorInfo, BIOSInfo
-from utils.run_command import run_command
+from app.domain.system_info import CPUInfo, RAMInfo, GPUInfo, DiskPartitionInfo, OSInfo, USBDevice, MonitorInfo, BIOSInfo
+from app.utils.run_command import run_command
 
 
 

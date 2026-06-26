@@ -3,8 +3,8 @@ from typing import Any
 from fastapi import APIRouter, Depends
 
 from app.dependencies import get_current_user
-from domain.clipboard import ClipboardData, StatusResponse, ClipboardWriteRequest
-from services.clipboard import read_clipboard as read, write_clipboard as write
+from app.domain.clipboard import ClipboardData, StatusResponse, ClipboardWriteRequest
+from app.services.clipboard import read_clipboard as read, write_clipboard as write
 
 router = APIRouter(prefix="/clipboard", tags=["clipboard"])
 

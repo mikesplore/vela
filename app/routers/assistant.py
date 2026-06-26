@@ -1,21 +1,15 @@
-import asyncio
-import json
-from datetime import datetime, UTC
-
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from app.dependencies import get_current_user
-from domain.assistant import AssistantResponse, AssistantRequest
+from app.domain.assistant import AssistantResponse, AssistantRequest
 from app.services.assistant.core import (
     SESSION_STORE,
-    compose_final_reply,
-    execute_tool_safe,
     config,
     logger, get_api_key, get_or_init_session, trim_history, plan_tool_calls,
 )
 from app.services.assistant.safety import (
     PIN_MAX_ATTEMPTS,
-    PendingAction,
     build_confirmation_card,
     cancel_pending_action_by_ai,
     clear_pending_action,
@@ -28,74 +22,11 @@ from app.services.assistant.safety import (
     requires_auth,
     requires_gate,
 )
+from app.services.assistant.helpers import extract_session_id, execute_tool_calls, expires_in_s
+from app.services.assistant.stream import StreamRequest
+from app.services.assistant.stream import stream_chat as s_c
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
-
-
-def _extract_session_id(request: Request) -> str:
-    """Extract a persistent session ID from request headers.
-
-    Each client/app should generate a unique session ID (any string) once,
-    store it persistently, and include it in every request via X-Session-ID header.
-    This ensures multi-step confirmations (pending actions) work correctly.
-
-    Session IDs must be consistent across multiple requests from the same device/client.
-    """
-    session_id = _extract_session_id(request)
-    if not session_id:
-        raise HTTPException(status_code=400, detail="X-Session-ID header is required")
-    return session_id
-
-
-
-def _expires_in_seconds(expires_at: datetime) -> int:
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=UTC)
-    return max(0, int((expires_at - datetime.now(UTC)).total_seconds()))
-
-
-def _pending_response(pending: PendingAction) -> AssistantResponse:
-    expires_in_seconds = _expires_in_seconds(pending.expires_at)
-    confirmation_card = build_confirmation_card(
-        pending.tool_calls,
-        pending.requires_auth,
-        pin_attempts=pending.pin_attempts,
-    )
-    return AssistantResponse(
-        reply=pending.prompt,
-        pending_action_id=pending.action_id,
-        requires_confirmation=not pending.requires_auth,
-        requires_auth=pending.requires_auth,
-        expires_in_seconds=expires_in_seconds,
-        confirmation=confirmation_card,
-    )
-
-
-async def _execute_tool_calls(request: Request, tool_calls: list[dict[str, object]], auth_header: str | None,
-                              user_message: str = "", confirmed: bool = False) -> AssistantResponse:
-    tasks = [
-        execute_tool_safe(request.app, tc["tool"], tc.get("tool_input") or {}, auth_header, confirmed=confirmed)
-        for tc in tool_calls
-        if tc.get("tool") and tc["tool"] != "none"
-    ]
-    tool_results = list(await asyncio.gather(*tasks))
-
-    if len(tool_results) == 1 and tool_results[0].get("tool") == "display_screenshot":
-        result = tool_results[0].get("result") or {}
-        image_base64 = result.get("image_base64") if isinstance(result, dict) else None
-        if image_base64:
-            return AssistantResponse(reply="Screenshot captured.", image_base64=image_base64)
-
-    try:
-        reply_text, art_url = await compose_final_reply(user_message, tool_results)
-    except Exception as exc:
-        logger.error("Final response composition failed: %s", exc, exc_info=True)
-        reply_text = "\n".join(
-            f"- **{r['tool']}**: {r['error'] or json.dumps(r['result'], separators=(',', ':'))}"
-            for r in tool_results
-        )
-        art_url = None
-    return AssistantResponse(reply=reply_text, art_url=art_url)
 
 
 @router.post("/chat", response_model=AssistantResponse, dependencies=[Depends(get_current_user)])
@@ -107,7 +38,7 @@ async def chat(
     if not get_api_key():
         raise HTTPException(status_code=503, detail="FIREWORKS_API_KEY is unavailable")
 
-    session_id = _extract_session_id(request)
+    session_id = extract_session_id(request)
     auth_header = request.headers.get("authorization")
     history = get_or_init_session(current_user)
 
@@ -126,8 +57,8 @@ async def chat(
         if pending.requires_auth:
             if matches_assistant_pin(message):
                 clear_pending_action(current_user, session_id)
-                tool_response = await _execute_tool_calls(request, pending.tool_calls, auth_header,
-                                                          user_message=pending.user_message, confirmed=True)
+                tool_response = await execute_tool_calls(request, pending.tool_calls, auth_header,
+                                                         user_message=pending.user_message, confirmed=True)
                 history.append({"role": "assistant", "content": tool_response.reply})
                 SESSION_STORE[current_user] = trim_history(history)
                 return tool_response
@@ -142,7 +73,7 @@ async def chat(
                     pending_action_id=pending.action_id,
                     requires_confirmation=False,
                     requires_auth=True,
-                    expires_in_seconds=_expires_in_seconds(pending.expires_at),
+                    expires_in_seconds=expires_in_s(pending.expires_at),
                     confirmation=confirmation_card,
                 )
 
@@ -163,13 +94,13 @@ async def chat(
                 pending_action_id=pending.action_id,
                 requires_confirmation=False,
                 requires_auth=True,
-                expires_in_seconds=_expires_in_seconds(pending.expires_at),
+                expires_in_seconds=expires_in_s(pending.expires_at),
                 confirmation=confirmation_card,
             )
         if is_affirmative(message):
             clear_pending_action(current_user, session_id)
-            tool_response = await _execute_tool_calls(request, pending.tool_calls, auth_header,
-                                                      user_message=pending.user_message, confirmed=True)
+            tool_response = await execute_tool_calls(request, pending.tool_calls, auth_header,
+                                                     user_message=pending.user_message, confirmed=True)
             history.append({"role": "assistant", "content": tool_response.reply})
             SESSION_STORE[current_user] = trim_history(history)
             return tool_response
@@ -211,12 +142,12 @@ async def chat(
                 pending_action_id=pending.action_id,
                 requires_confirmation=not pending.requires_auth,
                 requires_auth=pending.requires_auth,
-                expires_in_seconds=_expires_in_seconds(pending.expires_at),
+                expires_in_seconds=expires_in_s(pending.expires_at),
                 confirmation=confirmation_card,
             )
 
-        tool_response = await _execute_tool_calls(request, tool_calls, auth_header, user_message=body.message,
-                                                  confirmed=False)
+        tool_response = await execute_tool_calls(request, tool_calls, auth_header, user_message=body.message,
+                                                 confirmed=False)
         tool_response.reply = tool_response.reply.strip()
         history.append({"role": "assistant", "content": tool_response.reply})
         SESSION_STORE[current_user] = trim_history(history)
@@ -227,3 +158,31 @@ async def chat(
     SESSION_STORE[current_user] = trim_history(history)
 
     return AssistantResponse(reply=reply_text)
+
+
+@router.post("/stream", dependencies=[Depends(get_current_user)])
+async def stream_chat(
+        body: StreamRequest,
+        request: Request,
+        current_user: str = Depends(get_current_user),
+) -> StreamingResponse:
+    """
+    Streaming version of /assistant/chat. Returns SSE instead of JSON.
+
+    curl -N -s -X POST https://host/assistant/stream \\
+      -H "X-Secret: ..." \\
+      -H "Content-Type: application/json" \\
+      -H "X-Session-ID: my-client-002" \\
+      -d '{"message": "max out the volume"}'
+    """
+    return StreamingResponse(
+        s_c(request, body.message, current_user),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # prevent nginx from buffering SSE
+            "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )

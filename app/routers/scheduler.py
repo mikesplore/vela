@@ -7,8 +7,8 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.dependencies import get_current_user
-from domain.scheduler import SchedulerActionResponse, SchedulerCreateRequest, SchedulerListResponse
-from services.scheduler import command_runner, serialize_job
+from app.domain.scheduler import SchedulerActionResponse, SchedulerCreateRequest, SchedulerListResponse
+from app.services.scheduler import command_runner, serialize_job
 
 scheduler_db = Path.cwd() / "scheduler_jobs.sqlite"
 jobstore = {"default": SQLAlchemyJobStore(url=f"sqlite:///{scheduler_db}")}

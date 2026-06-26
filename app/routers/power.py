@@ -2,9 +2,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from app.dependencies import get_current_user
-from domain.display import ValueResponse
-from domain.power import ScheduleShutdownRequest, PowerProfileResponse, PowerProfileRequest
-from services.power import power_action, power_profile_action, cancel_scheduled_shutdown
+from app.domain.display import ValueResponse
+from app.domain.power import ScheduleShutdownRequest, PowerProfileResponse, PowerProfileRequest
+from app.services.power import power_action, power_profile_action, cancel_scheduled_shutdown, get_power_profile as get_p_p
 
 router = APIRouter(prefix="/power", tags=["power"])
 
@@ -48,7 +48,7 @@ async def cancel_shutdown() -> Any:
 @router.get("/profile", response_model=PowerProfileResponse, dependencies=[Depends(get_current_user)])
 async def get_power_profile() -> Any:
     """Get the current power profile."""
-    return get_power_profile()
+    return get_p_p()
 
 
 @router.post("/profile", response_model=PowerProfileResponse, dependencies=[Depends(get_current_user)])

@@ -8,9 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.dependencies import get_current_user
-from domain.monitoring import ProcessInfo
-from domain.processes import ProcessList, ActionResponse, LaunchRequest, ApplicationRequest, ApplicationCloseRequest
-from utils.run_command import run_command
+from app.domain.processes import ProcessInfo
+from app.domain.processes import ProcessList, ActionResponse, LaunchRequest, ApplicationRequest, ApplicationCloseRequest
+from app.utils.run_command import run_command
 
 router = APIRouter(prefix="/processes", tags=["processes"])
 

@@ -30,7 +30,6 @@ from datetime import datetime, UTC
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.dependencies import get_current_user
@@ -205,7 +204,7 @@ async def _run_tools_and_reply(
 
 # ── Main stream generator ─────────────────────────────────────────────────────
 
-async def _stream_chat(request: Request, message: str, current_user: str) -> AsyncGenerator[str, None]:
+async def stream_chat(request: Request, message: str, current_user: str) -> AsyncGenerator[str, None]:
     if not get_api_key():
         yield _sse_error("FIREWORKS_API_KEY is unavailable.")
         yield _sse_done()
@@ -325,31 +324,4 @@ async def _stream_chat(request: Request, message: str, current_user: str) -> Asy
         yield chunk
 
 
-# ── Route — POST, same shape as /chat ────────────────────────────────────────
 
-@router.post("/stream", dependencies=[Depends(get_current_user)])
-async def stream_chat(
-        body: StreamRequest,
-        request: Request,
-        current_user: str = Depends(get_current_user),
-) -> StreamingResponse:
-    """
-    Streaming version of /assistant/chat. Returns SSE instead of JSON.
-
-    curl -N -s -X POST https://host/assistant/stream \\
-      -H "X-Secret: ..." \\
-      -H "Content-Type: application/json" \\
-      -H "X-Session-ID: my-client-002" \\
-      -d '{"message": "max out the volume"}'
-    """
-    return StreamingResponse(
-        _stream_chat(request, body.message, current_user),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",  # prevent nginx from buffering SSE
-            "Connection": "keep-alive",
-            "Transfer-Encoding": "chunked",
-            "Access-Control-Allow-Origin": "*",
-        },
-    )

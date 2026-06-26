@@ -2,8 +2,8 @@ import time
 from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException
 from app.dependencies import get_current_user
-from domain.notifications import notifications
-from domain.notifications import NotificationRecord, NotificationRequest, NotificationList
+from app.domain.notifications import notifications
+from app.domain.notifications import NotificationRecord, NotificationRequest, NotificationList
 from app.services.notifications import send_notification as s_notification, list_system_notifications
 from app.services.notifications import clear_notifications as c_notifications
 

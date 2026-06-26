@@ -1,9 +1,9 @@
 from typing import Any, List
 from fastapi import APIRouter, Depends
 from app.dependencies import get_current_user
-from domain.audio import VolumeInfo, ActionResponse, MuteRequest, AudioDevice, \
+from app.domain.audio import VolumeInfo, ActionResponse, MuteRequest, AudioDevice, \
     OutputDeviceRequest, StepRequest, VolumeRequest
-from services.audio import get_volume, audio_command, list_devices, play_beep
+from app.services.audio import get_volume, audio_command, list_devices, play_beep
 
 router = APIRouter(prefix="/audio", tags=["audio"])
 

@@ -2,8 +2,8 @@ from typing import List, Optional
 
 from fastapi import HTTPException
 
-from domain.media import MediaStatus
-from utils.run_command import run_command
+from app.domain.media import MediaStatus
+from app.utils.run_command import run_command
 
 
 def playerctl_command(args: List[str], player: Optional[str] = None) -> tuple[str, str, int]:

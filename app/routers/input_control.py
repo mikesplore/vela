@@ -2,11 +2,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.dependencies import get_current_user
-from domain.audio import ActionResponse
-from domain.input_control import MouseMoveRequest, MouseClickRequest, MouseDoubleClickRequest, MouseScrollRequest, \
+from app.domain.audio import ActionResponse
+from app.domain.input_control import MouseMoveRequest, MouseClickRequest, MouseDoubleClickRequest, MouseScrollRequest, \
     KeyboardTypeRequest, KeyboardKeyRequest
-from utils.input_header import confirm_input_header
-from utils.run_command import run_command
+from app.utils.input_header import confirm_input_header
+from app.utils.run_command import run_command
 
 router = APIRouter(prefix="/input", tags=["input"])
 

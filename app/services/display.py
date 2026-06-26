@@ -3,8 +3,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from domain.display import ResolutionInfo
-from utils.run_command import run_command
+from app.domain.display import ResolutionInfo
+from app.utils.run_command import run_command
 
 
 

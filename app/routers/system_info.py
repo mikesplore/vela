@@ -1,7 +1,7 @@
 from typing import Any
 from fastapi import APIRouter, Depends
 from app.dependencies import get_current_user
-from services.system_info import get_cpu_info, get_ram_info, get_gpu_info, get_disk_info, get_os_info, get_usb_devices, \
+from app.services.system_info import get_cpu_info, get_ram_info, get_gpu_info, get_disk_info, get_os_info, get_usb_devices, \
     get_monitors, get_bios_info, error_response, CPUInfo, RAMInfo, BIOSInfo, OSInfo
 
 router = APIRouter(prefix="/system", tags=["system_info"], dependencies=[Depends(get_current_user)])

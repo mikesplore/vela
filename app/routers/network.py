@@ -4,11 +4,11 @@ from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from domain.network import IPResponse, LocationResponse, GeoLocation, WifiNetwork, WifiStatusResponse, \
+from app.domain.network import IPResponse, LocationResponse, GeoLocation, WifiNetwork, WifiStatusResponse, \
     WifiConnectRequest, ToggleRequest, BluetoothDevice, BluetoothDevicesResponse, BluetoothActionResponse, \
     BluetoothActionRequest, PingResponse, PingRequest, SpeedTestResponse
-from services.network import local_ip, public_ip as p_ip, geolocate_ip, run_command_input
-from utils.run_command import run_command
+from app.services.network import local_ip, public_ip as p_ip, geolocate_ip, run_command_input
+from app.utils.run_command import run_command
 
 try:
     import speedtest

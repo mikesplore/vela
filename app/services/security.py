@@ -6,7 +6,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel
 
-from utils.run_command import run_command
+from app.utils.run_command import run_command
 
 
 def run_command_bytes(cmd: list[str], timeout: int = 10) -> tuple[bytes, str, int]:

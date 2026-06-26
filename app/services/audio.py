@@ -3,8 +3,8 @@ from pathlib import Path
 from typing import Dict, List
 from fastapi import  HTTPException
 
-from domain.audio import VolumeInfo, AudioDevice
-from utils.run_command import run_command
+from app.domain.audio import VolumeInfo, AudioDevice
+from app.utils.run_command import run_command
 
 
 

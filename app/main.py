@@ -12,12 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-
-from services.assistant.agent import start_agent_loop
 from app.auth import router as auth_router
 from app.config import Config
 from app.dependencies import get_current_user
-from utils.errors import ErrorResponse
+from app.services.assistant.agent import start_agent_loop
+from app.utils.errors import ErrorResponse
 from app.middleware import RequestLoggerMiddleware
 from app.rate_limiter import limiter, limit_route
 from app.routers import all_routers
@@ -224,7 +223,7 @@ async def read_current_user(current_user: str = Depends(get_current_user)) -> di
 
 @app.get("/ping")
 @limit_route("/ping")
-async def ping(request: Request) -> dict[str, bool]:
+async def ping() -> dict[str, bool]:
     return {"pong": True}
 
 

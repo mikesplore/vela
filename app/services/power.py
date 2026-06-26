@@ -3,9 +3,9 @@ from typing import List
 
 from fastapi import HTTPException
 
-from domain.display import ValueResponse
-from domain.power import PowerProfileResponse
-from utils.run_command import run_command
+from app.domain.display import ValueResponse
+from app.domain.power import PowerProfileResponse
+from app.utils.run_command import run_command
 
 
 def power_action(cmd: List[str], success_message: str) -> ValueResponse:

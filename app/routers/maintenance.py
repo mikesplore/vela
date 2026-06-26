@@ -6,10 +6,10 @@ from typing import Any, List
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.dependencies import get_current_user
-from domain.audio import ActionResponse
-from domain.maintenance import LogResponse, UpdateEntry, UpdateResponse, ServiceListResponse, ServiceEntry
-from services.maintenance import detect_package_manager
-from utils.run_command import run_command
+from app.domain.audio import ActionResponse
+from app.domain.maintenance import LogResponse, UpdateEntry, UpdateResponse, ServiceListResponse, ServiceEntry
+from app.services.maintenance import detect_package_manager
+from app.utils.run_command import run_command
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
 

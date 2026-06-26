@@ -2,9 +2,9 @@ import re
 import time
 from typing import List
 
-from domain.notifications import notifications
-from domain.notifications import NotificationRecord, NotificationRequest
-from services.system_info import run_command
+from app.domain.notifications import notifications
+from app.domain.notifications import NotificationRecord, NotificationRequest
+from app.services.system_info import run_command
 
 
 

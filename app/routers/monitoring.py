@@ -3,9 +3,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from app.auth import verify_websocket_token
 from app.dependencies import get_current_user
-from domain.monitoring import CPUUsage, BatteryInfo, BatteryHealthInfo, ProcessMetrics
-from domain.system_info import RAMInfo
-from services.monitoring import get_snapshot, error_response, get_cpu_usage, get_ram_status, get_gpu_usage, get_disk_io, \
+from app.domain.monitoring import CPUUsage, BatteryInfo, BatteryHealthInfo, ProcessMetrics
+from app.domain.system_info import RAMInfo
+from app.services.monitoring import get_snapshot, error_response, get_cpu_usage, get_ram_status, get_gpu_usage, get_disk_io, \
     get_network_io, get_temperatures, get_fan_speeds, get_battery_status, get_battery_health, get_top_processes
 
 router = APIRouter(prefix="/monitor", tags=["monitoring"])
