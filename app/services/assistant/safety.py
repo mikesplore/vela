@@ -251,18 +251,22 @@ def build_confirmation_card(tool_calls: list[dict[str, Any]], requires_an_auth: 
     )
 
 
+from typing import Any
+
 def build_pending_prompt(tool_calls: list[dict[str, Any]], requires_an_auth: bool) -> str:
     if not tool_calls:
         return "No actions pending."
-
-    # Parse summaries for every tool call in the batch
     summaries = [
-        _tool_summary(tc.get("tool", "unknown"), tc.get("tool_input") or {})
-        for tc in tool_calls
+        _tool_summary(tc.get("tool") or "unknown", tc.get("tool_input") or {})
+        for tc in tool_calls if tc  # 'if tc' protects against empty dicts/None elements
     ]
 
-    # Join them with commas: "toggle Bluetooth, mute volume"
-    all_actions = ", ".join(summaries)
+    valid_actions = [s for s in summaries if s and str(s).lower() != "none"]
+
+    if not valid_actions:
+        return "No actions pending."
+
+    all_actions = ", ".join(valid_actions)
 
     if requires_an_auth:
         return f"To {all_actions}: Enter PIN to continue."

@@ -124,16 +124,29 @@ def trim_history(history: list[dict[str, str]], max_chars: int = MAX_HISTORY_CHA
     return trimmed
 
 
+def _build_planner_messages(
+    user_message: str,
+    history: list[dict[str, str]] | None = None,
+) -> list[dict[str, str]]:
+    """Build the message list for the tool planner, injecting the Vela system prompt
+    alongside the tool-router prompt so the model knows its domain boundaries."""
+    messages = [
+        {"role": "system", "content": config.assistant_system_prompt},
+        {"role": "system", "content": SYSTEM_TOOL_PROMPT},
+    ]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
+    return messages
+
+
 async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
     """
     Single LLM call → list of tool calls to execute in parallel.
     For conversational replies returns a single-item list with tool="none".
     Token cost is the same whether the user asks for 1 or 5 simultaneous actions.
     """
-    messages = [{"role": "system", "content": SYSTEM_TOOL_PROMPT}]
-    if history:
-        messages.extend(history)
-    messages.append({"role": "user", "content": user_message})
+    messages = _build_planner_messages(user_message, history)
 
     api_key = get_api_key()
     if not api_key:
@@ -351,15 +364,6 @@ async def stream_llm_response(
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
-    payload: dict[str, Any] = {
-        "model": config.fireworks_model,
-        "max_tokens": max_tokens,
-        "stream": True,
-        "messages": messages,
-    }
-    if enable_thinking:
-        payload["thinking"] = {"type": "enabled", "budget_tokens": 2048}
-
     # Optimized payload for token efficiency
     payload: dict[str, Any] = {
         "model": config.fireworks_model,
@@ -372,7 +376,7 @@ async def stream_llm_response(
         "safe_tokenization": True,
     }
     if enable_thinking:
-        payload["thinking"] = {"type": "enabled", "budget_tokens": 1024}  # Hard cap to stop overthinking
+        payload["thinking"] = {"type": "enabled", "budget_tokens": 150}  # Hard cap to stop overthinking
 
     try:
         # 300 second timeout for streaming LLM responses (5 minutes)
@@ -420,10 +424,7 @@ async def plan_tool_calls_streaming(
     Note: response_format/json_object is incompatible with stream=True on Fireworks,
     so we stream with thinking enabled and buffer the content for JSON parsing.
     """
-    messages = [{"role": "system", "content": SYSTEM_TOOL_PROMPT}]
-    if history:
-        messages.extend(history)
-    messages.append({"role": "user", "content": user_message})
+    messages = _build_planner_messages(user_message, history)
 
     api_key = get_api_key()
     if not api_key:

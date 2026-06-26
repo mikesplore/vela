@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from pydantic import field_validator, Field, AliasChoices
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 
-from services.assistant.prompts import DEFAULT_ASSISTANT_SYSTEM_PROMPT
+from app.prompts import DEFAULT_ASSISTANT_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
