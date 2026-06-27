@@ -47,6 +47,11 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "path": "/system/bios",
         "description": "BIOS vendor, version, release date, and motherboard.",
     },
+    "get_device_info": {
+        "method": "GET",
+        "path": "/system/device",
+        "description": "High-level device identification: laptop model (e.g. ThinkPad X1 Carbon Gen 9), hardware vendor (e.g. Lenovo), OS distribution name and version, kernel, architecture, and hostname.",
+    },
     # ── Network ──────────────────────────────────────────────────────────────
     "get_network_ip": {
         "method": "GET",

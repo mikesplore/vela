@@ -2,7 +2,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from app.dependencies import get_current_user
 from app.services.system_info import get_cpu_info, get_ram_info, get_gpu_info, get_disk_info, get_os_info, get_usb_devices, \
-    get_monitors, get_bios_info, error_response, CPUInfo, RAMInfo, BIOSInfo, OSInfo
+    get_monitors, get_bios_info, get_device_info, error_response, CPUInfo, RAMInfo, BIOSInfo, OSInfo, DeviceInfo
 
 router = APIRouter(prefix="/system", tags=["system_info"], dependencies=[Depends(get_current_user)])
 
@@ -84,5 +84,13 @@ async def system_monitors() -> Any:
 async def system_bios() -> Any:
     try:
         return get_bios_info()
+    except Exception as exc:
+        return error_response(str(exc))
+
+
+@router.get("/device", response_model=DeviceInfo)
+async def system_device() -> Any:
+    try:
+        return get_device_info()
     except Exception as exc:
         return error_response(str(exc))

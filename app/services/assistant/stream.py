@@ -132,6 +132,7 @@ async def _run_tools_and_reply(
         history: list[dict],
         current_user: str,
         confirmed: bool,
+        enable_thinking: bool = False,
 ) -> AsyncGenerator[str, None]:
     real_calls = [tc for tc in tool_calls if tc.get("tool") and tc["tool"] != "none"]
 
@@ -191,8 +192,8 @@ async def _run_tools_and_reply(
     ]
 
     full_reply = ""
-    async for delta in stream_llm_response(reply_messages, max_tokens=1024, enable_thinking=True):
-        if delta["type"] == "thinking":
+    async for delta in stream_llm_response(reply_messages, max_tokens=1024, enable_thinking=enable_thinking):
+        if enable_thinking and delta["type"] == "thinking":
             yield _sse_thinking(delta["text"])
         elif delta["type"] == "content":
             full_reply += delta["text"]
@@ -238,6 +239,7 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
                 async for chunk in _run_tools_and_reply(
                     request, pending.tool_calls, auth_header,
                     pending.user_message, history, current_user, confirmed=True,
+                    enable_thinking=config.assistant_enable_thinking,
                 ):
                     yield chunk
                 return
@@ -267,6 +269,7 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
             async for chunk in _run_tools_and_reply(
                 request, pending.tool_calls, auth_header,
                 pending.user_message, history, current_user, confirmed=True,
+                enable_thinking=config.assistant_enable_thinking,
             ):
                 yield chunk
             return
@@ -283,12 +286,14 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
     history = trim_history(history)
 
     tool_calls: list[dict] = []
+    thinking_on = config.assistant_enable_thinking
     try:
-        async for item in plan_tool_calls_streaming(message, history[:-1]):
+        async for item in plan_tool_calls_streaming(message, history[:-1], enable_thinking=thinking_on):
             if isinstance(item, dict):
-                if item["type"] == "thinking":
+                if thinking_on and item["type"] == "thinking":
                     yield _sse_thinking(item["text"])
                 # planning_done is internal bookkeeping, not surfaced to client
+                pass
             elif isinstance(item, list):
                 tool_calls = item
     except Exception as exc:
@@ -325,6 +330,7 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
     # ── Execute tools + stream reply ──────────────────────────────────────────
     async for chunk in _run_tools_and_reply(
         request, tool_calls, auth_header, message, history, current_user, confirmed=False,
+        enable_thinking=config.assistant_enable_thinking,
     ):
         yield chunk
 

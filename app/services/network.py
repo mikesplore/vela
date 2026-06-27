@@ -1,6 +1,7 @@
 import json
 import socket
 import subprocess
+import time
 import urllib.request
 from typing import Any, Dict, Optional
 
@@ -8,6 +9,11 @@ try:
     import speedtest
 except ImportError:  # pragma: no cover
     speedtest = None
+
+# In-memory cache for geo-location to avoid ip-api.com rate limiting
+# ip-api.com allows 45 req/min from a single IP
+_geo_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_GEO_CACHE_TTL = 30  # seconds
 
 
 def run_command_input(cmd: list[str], input_text: str, timeout: int = 10) -> tuple[str, str, int]:
@@ -51,6 +57,13 @@ def public_ip() -> str:
 def geolocate_ip(ip: str) -> Optional[Dict[str, Any]]:
     if not ip:
         return None
+
+    # Return cached result if still fresh
+    now = time.time()
+    cached = _geo_cache.get(ip)
+    if cached and (now - cached[0]) < _GEO_CACHE_TTL:
+        return cached[1]
+
     try:
         url = (
             f"http://ip-api.com/json/{ip}"
@@ -61,7 +74,7 @@ def geolocate_ip(ip: str) -> Optional[Dict[str, Any]]:
         data = json.loads(raw)
         if not isinstance(data, dict):
             return None
-        return {
+        result = {
             "status": data.get("status", "fail"),
             "query": data.get("query"),
             "country": data.get("country"),
@@ -75,5 +88,7 @@ def geolocate_ip(ip: str) -> Optional[Dict[str, Any]]:
             "lon": data.get("lon"),
             "message": data.get("message"),
         }
+        _geo_cache[ip] = (time.time(), result)
+        return result
     except Exception:
         return None

@@ -65,3 +65,15 @@ class BIOSInfo(BaseModel):
     version: Optional[str]
     release_date: Optional[str]
     motherboard: Optional[str]
+
+
+class DeviceInfo(BaseModel):
+    """High-level device identification: laptop model, vendor, OS distribution."""
+    laptop_model: str
+    hardware_vendor: str
+    os_distro: str
+    os_distro_version: str
+    kernel: str
+    architecture: str
+    hostname: str
+    pretty_hostname: str

@@ -396,13 +396,15 @@ async def stream_llm_response(
                     except json.JSONDecodeError:
                         continue
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    # Dedicated reasoning_content field (DeepSeek / R1 style)
-                    if delta.get("reasoning_content"):
+                    if enable_thinking and delta.get("reasoning_content"):
                         yield {"type": "thinking", "text": delta["reasoning_content"]}
                     # Visible content — may contain inline <think> blocks (Qwen3 style)
                     if delta.get("content"):
                         for _evt in split_think_stream(delta["content"]):
-                            yield _evt
+                            if enable_thinking and _evt["type"] == "thinking":
+                                yield _evt
+                            elif _evt["type"] == "content":
+                                yield _evt
     except Exception as exc:
         logger.error("Streaming LLM call failed: %s", exc, exc_info=True)
         yield {"type": "error", "text": explain_fireworks_issue(exc)}
@@ -411,6 +413,7 @@ async def stream_llm_response(
 async def plan_tool_calls_streaming(
         user_message: str,
         history: list[dict[str, str]] | None = None,
+        enable_thinking: bool = False,
 ) -> AsyncGenerator[dict[str, str] | list[dict[str, Any]], None]:
     """
     Streaming-aware tool planner.
@@ -442,12 +445,13 @@ async def plan_tool_calls_streaming(
         "max_tokens": 512,
         "max_completion_tokens": 800,  # Safety cap for planning responses
         "stream": True,
-        "thinking": {"type": "enabled", "budget_tokens": 1024},
         "messages": messages,
         "top_k": 1,  # More deterministic, reduces token waste
         "reasoning_history": "disabled",  # Keeps inputs from snowballing in cost
         "safe_tokenization": True,
     }
+    if enable_thinking:
+        payload["thinking"] = {"type": "enabled", "budget_tokens": 1024}
 
     content_buf = ""
     max_retries = 4
@@ -471,14 +475,13 @@ async def plan_tool_calls_streaming(
                         except json.JSONDecodeError:
                             continue
                         delta = chunk.get("choices", [{}])[0].get("delta", {})
-                        if delta.get("reasoning_content"):
+                        if enable_thinking and delta.get("reasoning_content"):
                             yield {"type": "thinking", "text": delta["reasoning_content"]}
                         if delta.get("content"):
-                            # Buffer raw content; also stream any <think> prefix as thinking
+                            # Buffer raw content for JSON parsing
                             for evt in split_think_stream(delta["content"]):
-                                if evt["type"] == "thinking":
+                                if enable_thinking and evt["type"] == "thinking":
                                     yield evt
-                                # content parts go into the buffer for JSON parsing, not streamed
                                 elif evt["type"] == "content":
                                     content_buf += evt["text"]
         except Exception as exc:

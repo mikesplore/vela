@@ -58,6 +58,7 @@ class Config(BaseSettings):
     password_hash: str
     assistant_action_pin: str | None = None
     assistant_action_timeout_seconds: int = 120
+    assistant_enable_thinking: bool = False
     fireworks_api_key: str | None = None
     fireworks_model: str = "accounts/fireworks/models/deepseek-v4-flash"
     fireworks_api_url: str = "https://api.fireworks.ai/inference/v1"

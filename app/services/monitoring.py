@@ -40,16 +40,16 @@ def get_ram_status() -> RAMInfo:
 
 
 def get_gpu_usage() -> List[GPUInfo]:
-    output = run_command([
+    stdout, _, returncode = run_command([
         "nvidia-smi",
         "--query-gpu=name,utilization.gpu,memory.used,memory.total",
         "--format=csv,noheader,nounits",
     ])
-    if not output:
+    if returncode != 0 or not stdout:
         return []
 
     usage_list: List[GPUInfo] = []
-    for line in output.splitlines():
+    for line in stdout.splitlines():
         parts = [part.strip() for part in line.split(",")]
         if len(parts) >= 4:
             name = parts[0]

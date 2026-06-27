@@ -7,7 +7,7 @@ from typing import List, Optional
 
 import psutil
 from fastapi.responses import JSONResponse
-from app.domain.system_info import CPUInfo, RAMInfo, GPUInfo, DiskPartitionInfo, OSInfo, USBDevice, MonitorInfo, BIOSInfo
+from app.domain.system_info import CPUInfo, RAMInfo, GPUInfo, DiskPartitionInfo, OSInfo, USBDevice, MonitorInfo, BIOSInfo, DeviceInfo
 from app.utils.run_command import run_command
 
 
@@ -189,6 +189,74 @@ def get_bios_info() -> BIOSInfo:
         version=version,
         release_date=release_date,
         motherboard=motherboard,
+    )
+
+
+def get_device_info() -> DeviceInfo:
+    """Gather high-level device identification (laptop model, vendor, OS distro)."""
+    import subprocess
+    vendor = "unknown"
+    model = "unknown"
+    os_distro = platform.system()
+    os_version = platform.version()
+    kernel = platform.release()
+    arch = platform.machine()
+    hostname = platform.node()
+    pretty_hostname = hostname
+
+    # Read DMI product info
+    # product_version gives the human-readable model (e.g. "ThinkPad X1 Carbon Gen 9")
+    # while product_name is the SKU number (e.g. "20XWS0J800")
+    for path, attr in [("/sys/class/dmi/id/product_version", "model"),
+                       ("/sys/class/dmi/id/product_family", "model"),
+                       ("/sys/class/dmi/id/product_name", "model"),
+                       ("/sys/class/dmi/id/sys_vendor", "vendor")]:
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                val = f.read().strip()
+                if attr == "model":
+                    if val and val.lower() != "none" and val.lower() != "unknown" and model == "unknown":
+                        model = val
+                else:
+                    vendor = val
+        except OSError:
+            pass
+
+    # OS release info
+    os_release = "/etc/os-release"
+    if os.path.exists(os_release):
+        try:
+            with open(os_release, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if line.startswith("PRETTY_NAME="):
+                        os_distro = line.split("=", 1)[1].strip().strip('"')
+                    elif line.startswith("VERSION_ID="):
+                        os_version = line.split("=", 1)[1].strip().strip('"')
+                    elif line.startswith("VERSION="):
+                        os_version = line.split("=", 1)[1].strip().strip('"')
+        except OSError:
+            pass
+
+    # Pretty hostname via hostnamectl or /etc/hostname
+    try:
+        result = subprocess.run(
+            ["hostnamectl", "status", "--pretty"],
+            capture_output=True, text=True, timeout=2
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            pretty_hostname = result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    return DeviceInfo(
+        laptop_model=model,
+        hardware_vendor=vendor,
+        os_distro=os_distro,
+        os_distro_version=os_version,
+        kernel=kernel,
+        architecture=arch,
+        hostname=hostname,
+        pretty_hostname=pretty_hostname,
     )
 
 
