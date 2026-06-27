@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ---------------------------------------------------------------------------
+# Vela RemotePC Agent — setup script
+# ---------------------------------------------------------------------------
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$ROOT_DIR/.venv"
 CONFIG_FILE="$ROOT_DIR/config.yaml"
@@ -12,274 +16,286 @@ SERVICE_PATH="$SERVICE_DIR/$SERVICE_NAME"
 AGENT_SERVICE_PATH="$SERVICE_DIR/$AGENT_SERVICE_NAME"
 DESKTOP_ENV_FILE="$HOME/.config/vela/desktop.env"
 
-echo "Setting up Vela RemotePC Agent in $ROOT_DIR"
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
 
-# Do not source existing .env to avoid parse errors; we regenerate it fresh
-echo "Starting fresh setup — existing $ENV_FILE will be overwritten"
+section() { echo; echo "── $* ──"; }
+info()    { echo "  $*"; }
+warn()    { echo "  WARNING: $*" >&2; }
+die()     { echo "  ERROR: $*" >&2; exit 1; }
 
+# ---------------------------------------------------------------------------
+# Prompt helpers
+# ---------------------------------------------------------------------------
+
+# prompt_value VAR "Label" ["default"]
+# Reads into $VAR. If $VAR is already set in the environment, that becomes
+# the default. Accepts empty input only when no default exists.
 prompt_value() {
   local var_name="$1"
-  local prompt="$2"
-  local default_value="${3:-}"
-  local current_value="${!var_name:-}"
-  local answer=""
+  local label="$2"
+  local default="${3:-${!var_name:-}}"
+  local answer
 
-  if [[ -n "$current_value" ]]; then
-    default_value="$current_value"
-  fi
-
-  if [[ -n "$default_value" ]]; then
-    read -rp "$prompt [$default_value]: " answer
-    printf -v "$var_name" '%s' "${answer:-$default_value}"
+  if [[ -n "$default" ]]; then
+    read -rp "  $label [$default]: " answer
+    printf -v "$var_name" '%s' "${answer:-$default}"
   else
-    read -rp "$prompt: " answer
+    read -rp "  $label: " answer
     printf -v "$var_name" '%s' "$answer"
   fi
 }
 
+# prompt_required VAR "Label" ["default"]  — loops until non-empty
 prompt_required() {
   local var_name="$1"
-  local prompt="$2"
-  local default_value="${3:-}"
+  local label="$2"
+  local default="${3:-${!var_name:-}}"
 
   while true; do
-    prompt_value "$var_name" "$prompt" "$default_value"
-    if [[ -n "${!var_name}" ]]; then
-      break
-    fi
-    echo "$prompt is required." >&2
+    prompt_value "$var_name" "$label" "$default"
+    [[ -n "${!var_name}" ]] && return
+    warn "$label is required."
   done
 }
 
-prompt_secret_required() {
+# prompt_secret VAR "Label"  — silent input, loops until non-empty.
+# Skips if $VAR is already set (env pre-seed).
+prompt_secret() {
   local var_name="$1"
-  local prompt="$2"
-  local current_value="${!var_name:-}"
-  local answer=""
+  local label="$2"
+  local answer
 
-  if [[ -n "$current_value" ]]; then
+  if [[ -n "${!var_name:-}" ]]; then
     return
   fi
 
   while true; do
-    read -rsp "$prompt: " answer
-    echo
-    if [[ -n "$answer" ]]; then
-      printf -v "$var_name" '%s' "$answer"
-      break
-    fi
-    echo "$prompt is required." >&2
+    read -rsp "  $label: " answer; echo
+    [[ -n "$answer" ]] && break
+    warn "$label is required."
+  done
+  printf -v "$var_name" '%s' "$answer"
+}
+
+# confirm_secret VAL  — prompts for confirmation, loops on mismatch
+confirm_secret() {
+  local expected="$1"
+  local confirm
+
+  while true; do
+    read -rsp "  Confirm password: " confirm; echo
+    [[ "$confirm" == "$expected" ]] && return
+    warn "Passwords do not match. Try again."
   done
 }
 
-confirm_secret() {
-  local first="$1"
-  local second=""
+# ---------------------------------------------------------------------------
+# Collect configuration
+# ---------------------------------------------------------------------------
 
-  read -rsp "Confirm password: " second
-  echo
-  if [[ "$first" != "$second" ]]; then
-    echo "Passwords do not match." >&2
-    exit 1
-  fi
-}
+section "Vela RemotePC Agent setup"
+info "Installing to: $ROOT_DIR"
+info "Existing $ENV_FILE will be overwritten."
 
-if [[ ! -d "$VENV_DIR" ]]; then
-  python3 -m venv "$VENV_DIR"
-fi
-
-source "$VENV_DIR/bin/activate"
-python -m pip install --upgrade pip > /dev/null 2>&1 || { echo "Failed to upgrade pip"; exit 1; }
-python -m pip install -e "$ROOT_DIR" > /dev/null 2>&1 || { echo "Failed to install Vela package"; exit 1; }
+section "Local service credentials"
 
 DEFAULT_USERNAME="${USERNAME:-${LOCAL_SERVICE_USERNAME:-$(id -un)}}"
-prompt_required USERNAME "Local service username" "$DEFAULT_USERNAME"
+prompt_required USERNAME "Username" "$DEFAULT_USERNAME"
 
 PASSWORD="${PASSWORD:-${LOCAL_SERVICE_PASSWORD:-}}"
 if [[ -z "$PASSWORD" ]]; then
-  prompt_secret_required PASSWORD "Local service password"
+  prompt_secret PASSWORD "Password"
   confirm_secret "$PASSWORD"
 fi
 LOCAL_SERVICE_USERNAME="$USERNAME"
 LOCAL_SERVICE_PASSWORD="$PASSWORD"
 
+section "VPS relay"
+
 VPS_URL="${VPS_URL:-${RELAY_URL:-}}"
-prompt_required VPS_URL "VPS relay URL, including http:// or https://"
+prompt_required VPS_URL "Relay URL (include http:// or https://)"
 
 DEFAULT_AGENT_ID="${AGENT_ID:-$(hostname | tr -cs 'A-Za-z0-9_.-' '-')}"
-prompt_required AGENT_ID "Agent ID registered with the VPS relay" "$DEFAULT_AGENT_ID"
+prompt_required AGENT_ID "Agent ID" "$DEFAULT_AGENT_ID"
 
-# AGENT_SECRET is obtained from the VPS relay during registration — do not prompt for it
+# AGENT_SECRET is issued by the relay on first registration; users don't set it.
 AGENT_SECRET="${AGENT_SECRET:-${SECRET:-}}"
 
-# Optional: Public address and metadata for first-time agent registration
-PUBLIC_ADDRESS="${PUBLIC_ADDRESS:-}"
-read -rp "Public address of this agent (optional, for first registration): " answer
-if [[ -n "$answer" ]]; then
-  PUBLIC_ADDRESS="$answer"
-fi
+prompt_value PUBLIC_ADDRESS "Public address of this agent (optional, for first registration)"
+prompt_value METADATA       "Agent metadata as JSON (optional, e.g. {\"os\":\"linux\"})"
 
-METADATA="${METADATA:-}"
-read -rp "Agent metadata as JSON string (optional, e.g. {\"os\": \"linux\"}): " answer
-if [[ -n "$answer" ]]; then
-  METADATA="$answer"
-fi
+section "Local API server"
 
 SERVER_HOST="${SERVER_HOST:-127.0.0.1}"
 SERVER_PORT="${SERVER_PORT:-8765}"
-prompt_required SERVER_HOST "Local API bind host" "$SERVER_HOST"
-prompt_required SERVER_PORT "Local API port" "$SERVER_PORT"
+prompt_required SERVER_HOST "Bind host" "$SERVER_HOST"
+prompt_required SERVER_PORT "Port"      "$SERVER_PORT"
 
 if [[ "$SERVER_HOST" != "127.0.0.1" && "$SERVER_HOST" != "localhost" && "$SERVER_HOST" != "::1" ]]; then
-  echo "Refusing to bind the API to '$SERVER_HOST'. Vela's local API must only listen on localhost." >&2
-  exit 1
+  die "Refusing to bind the API to '$SERVER_HOST'. Vela's local API must only listen on localhost."
 fi
+
+section "Filesystem access"
 
 ALLOWED_BASE_DIRS="${ALLOWED_BASE_DIRS:-$HOME}"
-prompt_required ALLOWED_BASE_DIRS "Filesystem base directories the agent may access, comma-separated" "$ALLOWED_BASE_DIRS"
+prompt_required ALLOWED_BASE_DIRS "Directories the agent may access (comma-separated)" "$ALLOWED_BASE_DIRS"
+
 if [[ "$ALLOWED_BASE_DIRS" == "/" ]]; then
-  read -rp "Allow filesystem access to the entire host? Type 'I understand': " CONFIRM_ROOT_FS
-  if [[ "$CONFIRM_ROOT_FS" != "I understand" ]]; then
-    echo "Setup cancelled. Choose narrower allowed base directories." >&2
-    exit 1
-  fi
+  local confirm_root
+  read -rp "  Allow access to the entire filesystem? Type 'I understand': " confirm_root
+  [[ "$confirm_root" == "I understand" ]] || die "Setup cancelled. Choose narrower base directories."
 fi
+
+section "Security (optional)"
 
 ASSISTANT_ACTION_PIN="${ASSISTANT_ACTION_PIN:-${VELA_ASSISTANT_ACTION_PIN:-}}"
-read -rp "Assistant action PIN for high-risk actions (shutdown, delete, kill process, etc.) - press Enter to skip: " answer
-if [[ -n "$answer" ]]; then
-  ASSISTANT_ACTION_PIN="$answer"
+if [[ -z "$ASSISTANT_ACTION_PIN" ]]; then
+  read -rp "  Assistant action PIN for high-risk operations (press Enter to skip): " answer
+  ASSISTANT_ACTION_PIN="${answer:-}"
 fi
 
-export USERNAME PASSWORD LOCAL_SERVICE_USERNAME LOCAL_SERVICE_PASSWORD
-export VPS_URL AGENT_ID AGENT_SECRET PUBLIC_ADDRESS METADATA SERVER_HOST SERVER_PORT ALLOWED_BASE_DIRS ASSISTANT_ACTION_PIN ENV_FILE
-export FIREWORKS_API_KEY VELA_FIREWORKS_API_URL VELA_FIREWORKS_MODEL
+# ---------------------------------------------------------------------------
+# Install Python package
+# ---------------------------------------------------------------------------
 
-AGENT_SECRET_FILE=$(mktemp)
+section "Installing Python environment"
+
+if [[ ! -d "$VENV_DIR" ]]; then
+  info "Creating virtualenv at $VENV_DIR"
+  python3 -m venv "$VENV_DIR"
+fi
+
+source "$VENV_DIR/bin/activate"
+python -m pip install --upgrade pip              -q || die "Failed to upgrade pip."
+python -m pip install -e "$ROOT_DIR"             -q || die "Failed to install Vela package."
+info "Package installed."
+
+# ---------------------------------------------------------------------------
+# Register with VPS relay and validate inputs
+# ---------------------------------------------------------------------------
+
+section "Connecting to VPS relay"
+
+export USERNAME PASSWORD LOCAL_SERVICE_USERNAME LOCAL_SERVICE_PASSWORD
+export VPS_URL AGENT_ID AGENT_SECRET PUBLIC_ADDRESS METADATA
+export SERVER_HOST SERVER_PORT ALLOWED_BASE_DIRS ASSISTANT_ACTION_PIN
+export CONFIG_FILE ENV_FILE
+# Fireworks vars are optional; export whatever is already in the environment.
+export FIREWORKS_API_KEY="${FIREWORKS_API_KEY:-}"
+export VELA_FIREWORKS_API_URL="${VELA_FIREWORKS_API_URL:-}"
+export VELA_FIREWORKS_MODEL="${VELA_FIREWORKS_MODEL:-}"
+
+# Use a tempfile to pass AGENT_SECRET / AGENT_ID back from the Python subprocess.
+AGENT_SECRET_FILE="$(mktemp)"
 export AGENT_SECRET_FILE
+trap 'rm -f "$AGENT_SECRET_FILE"' EXIT
 
 python - <<'PY'
 import os
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
+
 import requests
+
+# --- Validate inputs -------------------------------------------------------
 
 vps_url = os.environ["VPS_URL"].strip()
 parsed = urlparse(vps_url)
 if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-    raise SystemExit("VPS relay URL must include http:// or https:// and a host.")
-
-agent_secret = os.environ.get("AGENT_SECRET", "").strip()
-agent_id = os.environ.get("AGENT_ID", "").strip()
-env_file = os.environ.get("ENV_FILE", str(Path.cwd() / ".env"))
-
-print(f"Testing connectivity to VPS at {vps_url}/register...")
-try:
-    url = f"{vps_url.rstrip('/')}/register"
-    payload = {"agent_id": agent_id}
-    headers = {}
-
-    if agent_secret:
-        # Authenticated test (re-registration)
-        payload["public_address"] = "http://127.0.0.1:0"
-        headers["X-API-Key"] = agent_secret
-        resp = requests.post(url, json=payload, headers=headers, timeout=10)
-    else:
-        # First-time registration test
-        payload["public_address"] = "http://127.0.0.1:0"
-        resp = requests.post(url, json=payload, timeout=10)
-
-    if resp.status_code == 200:
-        data = resp.json()
-        print("Successfully connected to VPS.")
-        issued_secret = data.get("secret")
-        if issued_secret:
-            print(f"Issued Agent Secret: {issued_secret}")
-            print("IMPORTANT: Save this secret. It authenticates your agent to the VPS relay.")
-            os.environ["AGENT_SECRET"] = issued_secret
-        returned_agent = data.get("agent", {})
-        returned_agent_id = returned_agent.get("agent_id")
-        if returned_agent_id:
-            os.environ["AGENT_ID"] = returned_agent_id
-    elif resp.status_code == 201:
-        data = resp.json()
-        print("Successfully connected to VPS.")
-        issued_secret = data.get("secret")
-        if issued_secret:
-            print(f"Issued Agent Secret: {issued_secret}")
-            print("IMPORTANT: Save this secret. It authenticates your agent to the VPS relay.")
-            os.environ["AGENT_SECRET"] = issued_secret
-        returned_agent = data.get("agent", {})
-        returned_agent_id = returned_agent.get("agent_id")
-        if returned_agent_id:
-            os.environ["AGENT_ID"] = returned_agent_id
-    elif resp.status_code == 401:
-        raise SystemExit("Failed to verify credentials: VPS returned 401 Unauthorized. Check your Agent Secret.")
-    elif resp.status_code == 404:
-        raise SystemExit(f"Failed to reach registration endpoint: VPS returned 404 Not Found at {url}.")
-    else:
-        raise SystemExit(f"Failed to connect to VPS: Status {resp.status_code} - {resp.text}")
-except requests.exceptions.ConnectionError:
-    raise SystemExit(f"Could not connect to {vps_url}. Ensure the VPS is running and reachable.")
-except requests.exceptions.Timeout:
-    raise SystemExit(f"Connection to {vps_url} timed out after 10 seconds.")
-except requests.exceptions.RequestException as e:
-    raise SystemExit(f"Failed to connect to VPS at {vps_url}: {e}")
+    sys.exit("VPS relay URL must include http:// or https:// and a hostname.")
 
 port = int(os.environ["SERVER_PORT"])
 if not 1 <= port <= 65535:
-    raise SystemExit("Local API port must be between 1 and 65535.")
+    sys.exit("Local API port must be between 1 and 65535.")
 
-for value in os.environ["ALLOWED_BASE_DIRS"].split(","):
-    path = Path(value.strip()).expanduser()
+for entry in os.environ["ALLOWED_BASE_DIRS"].split(","):
+    path = Path(entry.strip()).expanduser()
     if not path.is_absolute():
-        raise SystemExit(f"Allowed base directory must be absolute: {value}")
+        sys.exit(f"Allowed base directory must be an absolute path: {entry!r}")
 
-    import os
-    secret_file = os.environ.get("AGENT_SECRET_FILE", "")
-    if secret_file:
-        with open(secret_file, "w") as f:
-            f.write(f"AGENT_SECRET={os.environ.get('AGENT_SECRET', '')}\n")
-            f.write(f"AGENT_ID={os.environ.get('AGENT_ID', '')}\n")
+# --- Register with VPS -----------------------------------------------------
+
+agent_secret = os.environ.get("AGENT_SECRET", "").strip()
+agent_id = os.environ["AGENT_ID"].strip()
+
+url = f"{vps_url.rstrip('/')}/register"
+payload = {"agent_id": agent_id, "public_address": "http://127.0.0.1:0"}
+headers = {"X-API-Key": agent_secret} if agent_secret else {}
+
+print(f"  Registering at {url} …")
+try:
+    resp = requests.post(url, json=payload, headers=headers, timeout=10)
+except requests.exceptions.ConnectionError:
+    sys.exit(f"Could not connect to {vps_url}. Ensure the VPS is running and reachable.")
+except requests.exceptions.Timeout:
+    sys.exit(f"Connection to {vps_url} timed out after 10 seconds.")
+except requests.exceptions.RequestException as exc:
+    sys.exit(f"Request failed: {exc}")
+
+if resp.status_code in {200, 201}:
+    data = resp.json()
+    print("  Connected to VPS.")
+    issued_secret = data.get("secret")
+    if issued_secret:
+        print(f"  Issued Agent Secret: {issued_secret}")
+        print("  IMPORTANT: Save this secret — it authenticates your agent to the relay.")
+        agent_secret = issued_secret
+    returned = data.get("agent", {})
+    if returned.get("agent_id"):
+        agent_id = returned["agent_id"]
+elif resp.status_code == 401:
+    sys.exit("VPS returned 401 Unauthorized. Check your Agent Secret.")
+elif resp.status_code == 404:
+    sys.exit(f"VPS returned 404 Not Found at {url}. Check your relay URL.")
+else:
+    sys.exit(f"VPS returned {resp.status_code}: {resp.text}")
+
+# --- Write updated values back to the tempfile (read by bash) --------------
+
+secret_file = os.environ.get("AGENT_SECRET_FILE", "")
+if secret_file:
+    Path(secret_file).write_text(
+        f"AGENT_SECRET={agent_secret}\nAGENT_ID={agent_id}\n",
+        encoding="utf-8",
+    )
 PY
 
-if [[ -f "$AGENT_SECRET_FILE" ]]; then
-    source "$AGENT_SECRET_FILE"
-    rm -f "$AGENT_SECRET_FILE"
-    unset AGENT_SECRET_FILE
-    export AGENT_SECRET AGENT_ID
-fi
+# Absorb any updated AGENT_SECRET / AGENT_ID written by the Python block.
+# shellcheck disable=SC1090
+source "$AGENT_SECRET_FILE"
+export AGENT_SECRET AGENT_ID
 
-SECRET_KEY="$(python - <<'PY'
-from secrets import token_urlsafe
-print(token_urlsafe(32))
-PY
-)"
+# ---------------------------------------------------------------------------
+# Generate config.yaml and .env
+# ---------------------------------------------------------------------------
 
-PASSWORD_HASH="$(VELA_PASSWORD="$PASSWORD" python - <<'PY'
-import bcrypt, os
-pw = os.environ['VELA_PASSWORD'].encode('utf-8')
-hash = bcrypt.hashpw(pw, bcrypt.gensalt()).decode('utf-8')
-print(hash)
-PY
-)"
+section "Writing configuration"
 
-VELA_CONFIG_FILE="$CONFIG_FILE" \
-VELA_SECRET_KEY_VALUE="$SECRET_KEY" \
-VELA_PASSWORD_HASH_VALUE="$PASSWORD_HASH" \
 python - <<'PY'
 import os
+import sys
 from pathlib import Path
+from secrets import token_urlsafe
 
+import bcrypt
 import yaml
+
+# Generate derived secrets
+secret_key   = token_urlsafe(32)
+pw           = os.environ["PASSWORD"].encode()
+password_hash = bcrypt.hashpw(pw, bcrypt.gensalt()).decode()
 
 def csv_list(name: str) -> list[str]:
     return [item.strip() for item in os.environ[name].split(",") if item.strip()]
 
+# ── config.yaml ────────────────────────────────────────────────────────────
 config = {
     "host": os.environ["SERVER_HOST"],
     "port": int(os.environ["SERVER_PORT"]),
-    "secret_key": os.environ["VELA_SECRET_KEY_VALUE"],
+    "secret_key": secret_key,
     "token_expire_minutes": 1440,
     "allowed_origins": [],
     "allowed_base_dirs": csv_list("ALLOWED_BASE_DIRS"),
@@ -289,39 +305,89 @@ config = {
         "/ping": "60/minute",
     },
     "feature_flags": {
-        "display": True,
-        "audio": True,
-        "power": True,
+        "display":       True,
+        "audio":         True,
+        "power":         True,
         "notifications": True,
-        "network": True,
-        "filesystem": True,
+        "network":       True,
+        "filesystem":    True,
         "input_control": True,
-        "system_info": True,
-        "monitoring": True,
-        "processes": True,
-        "security": True,
-        "scheduler": True,
-        "maintenance": True,
-        "media": True,
-        "clipboard": True,
+        "system_info":   True,
+        "monitoring":    True,
+        "processes":     True,
+        "security":      True,
+        "scheduler":     True,
+        "maintenance":   True,
+        "media":         True,
+        "clipboard":     True,
     },
     "username": os.environ["USERNAME"],
-    "password_hash": os.environ["VELA_PASSWORD_HASH_VALUE"],
+    "password_hash": password_hash,
     "log_level": "INFO",
 }
 
-assistant_action_pin = os.environ.get("ASSISTANT_ACTION_PIN", "").strip()
-if assistant_action_pin:
-    config["assistant_action_pin"] = assistant_action_pin
+if pin := os.environ.get("ASSISTANT_ACTION_PIN", "").strip():
+    config["assistant_action_pin"] = pin
 
-Path(os.environ["VELA_CONFIG_FILE"]).write_text(
-    yaml.safe_dump(config, sort_keys=False),
-    encoding="utf-8",
+Path(os.environ["CONFIG_FILE"]).write_text(
+    yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
 )
+print(f"  config.yaml written to {os.environ['CONFIG_FILE']}")
+
+# ── .env ───────────────────────────────────────────────────────────────────
+local_service_url = f"http://127.0.0.1:{os.environ['SERVER_PORT']}"
+
+fw_url   = (os.environ.get("VELA_FIREWORKS_API_URL") or
+            os.environ.get("FIREWORKS_API_URL") or
+            "https://api.fireworks.ai/inference/v1")
+fw_model = (os.environ.get("VELA_FIREWORKS_MODEL") or
+            os.environ.get("FIREWORKS_MODEL") or
+            "accounts/fireworks/models/deepseek-v4-flash")
+
+lines = [
+    f"USERNAME={os.environ['USERNAME']}",
+    f"PASSWORD={os.environ['PASSWORD']}",
+    f"LOCAL_SERVICE_USERNAME={os.environ['LOCAL_SERVICE_USERNAME']}",
+    f"LOCAL_SERVICE_PASSWORD={os.environ['LOCAL_SERVICE_PASSWORD']}",
+    f"LOCAL_SERVICE_URL={local_service_url}",
+    f"LOCAL_SERVICE_TOKEN_PATH=/auth/token",
+    f"LOCAL_SERVICE_AUTH_TOKEN=",
+    f"LOCAL_SERVICE_AUTH_TOKEN_EXPIRES=",
+    f"VPS_URL={os.environ['VPS_URL']}",
+    f"AGENT_ID={os.environ['AGENT_ID']}",
+    f"AGENT_SECRET={os.environ['AGENT_SECRET']}",
+    f"ASSISTANT_ACTION_PIN={os.environ.get('ASSISTANT_ACTION_PIN', '')}",
+    f"VELA_FIREWORKS_API_URL={fw_url}",
+    f"VELA_FIREWORKS_MODEL={fw_model}",
+]
+
+if addr := os.environ.get("PUBLIC_ADDRESS", "").strip():
+    lines.append(f"PUBLIC_ADDRESS={addr}")
+if meta := os.environ.get("METADATA", "").strip():
+    lines.append(f"METADATA={meta}")
+if fw_key := os.environ.get("FIREWORKS_API_KEY", "").strip():
+    lines.append(f"FIREWORKS_API_KEY={fw_key}")
+
+env_path = Path(os.environ["ENV_FILE"])
+env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+env_path.chmod(0o600)
+print(f"  .env written to {env_path}")
 PY
 
-mkdir -p "$SERVICE_DIR"
-mkdir -p "$(dirname "$DESKTOP_ENV_FILE")"
+CONFIG_FILE="$CONFIG_FILE" python -c "
+import os; from pathlib import Path
+p = Path(os.environ['CONFIG_FILE'])
+if not p.exists(): raise SystemExit('config.yaml was not created')
+"
+
+[[ -f "$ENV_FILE" ]] || die ".env was not created."
+
+# ---------------------------------------------------------------------------
+# Write desktop environment snapshot
+# ---------------------------------------------------------------------------
+
+mkdir -p "$SERVICE_DIR" "$(dirname "$DESKTOP_ENV_FILE")"
+
 cat > "$DESKTOP_ENV_FILE" <<EOF
 DISPLAY=${DISPLAY:-}
 WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}
@@ -334,70 +400,11 @@ DESKTOP_SESSION=${DESKTOP_SESSION:-}
 EOF
 chmod 600 "$DESKTOP_ENV_FILE"
 
-LOCAL_SERVICE_URL="http://127.0.0.1:$SERVER_PORT"
-export LOCAL_SERVICE_URL
+# ---------------------------------------------------------------------------
+# Install systemd user services
+# ---------------------------------------------------------------------------
 
-# Rewrite .env cleanly as plain text to avoid malformed lines
-ENV_FILE="$ENV_FILE" python - <<'PY'
-import os
-from pathlib import Path
-
-env_file = os.environ["ENV_FILE"]
-lines = []
-
-def add(key, value):
-    lines.append(f"{key}={value}")
-
-add("USERNAME", os.environ["USERNAME"])
-add("PASSWORD", os.environ["PASSWORD"])
-add("LOCAL_SERVICE_USERNAME", os.environ["LOCAL_SERVICE_USERNAME"])
-add("LOCAL_SERVICE_PASSWORD", os.environ["LOCAL_SERVICE_PASSWORD"])
-add("LOCAL_SERVICE_URL", os.environ["LOCAL_SERVICE_URL"])
-add("VPS_URL", os.environ["VPS_URL"])
-add("AGENT_ID", os.environ["AGENT_ID"])
-add("AGENT_SECRET", os.environ["AGENT_SECRET"])
-add("ASSISTANT_ACTION_PIN", os.environ["ASSISTANT_ACTION_PIN"])
-
-public_address = os.environ.get("PUBLIC_ADDRESS", "").strip()
-if public_address:
-    add("PUBLIC_ADDRESS", public_address)
-
-metadata = os.environ.get("METADATA", "").strip()
-if metadata:
-    add("METADATA", metadata)
-
-add("LOCAL_SERVICE_TOKEN_PATH", "/auth/token")
-add("LOCAL_SERVICE_AUTH_TOKEN", "")
-add("LOCAL_SERVICE_AUTH_TOKEN_EXPIRES", "")
-
-fireworks_api_key = os.environ.get("FIREWORKS_API_KEY", "").strip()
-if fireworks_api_key:
-    add("FIREWORKS_API_KEY", fireworks_api_key)
-
-fireworks_api_url = os.environ.get("VELA_FIREWORKS_API_URL", "").strip()
-if not fireworks_api_url:
-    fireworks_api_url = os.environ.get("FIREWORKS_API_URL", "").strip()
-if not fireworks_api_url:
-    fireworks_api_url = "https://api.fireworks.ai/inference/v1"
-add("VELA_FIREWORKS_API_URL", fireworks_api_url)
-
-fireworks_model = os.environ.get("VELA_FIREWORKS_MODEL", "").strip()
-if not fireworks_model:
-    fireworks_model = os.environ.get("FIREWORKS_MODEL", "").strip()
-if not fireworks_model:
-    fireworks_model = "accounts/fireworks/models/deepseek-v4-flash"
-add("VELA_FIREWORKS_MODEL", fireworks_model)
-
-Path(env_file).write_text("\n".join(lines) + "\n", encoding="utf-8")
-PY
-
-if [[ ! -f "$ENV_FILE" ]]; then
-    echo "ERROR: $ENV_FILE was not created" >&2
-    exit 1
-fi
-chmod 600 "$ENV_FILE"
-
-echo "Generated environment file at $ENV_FILE"
+section "Installing systemd services"
 
 cat > "$SERVICE_PATH" <<EOF
 [Unit]
@@ -438,14 +445,18 @@ StandardError=journal
 WantedBy=default.target
 EOF
 
-echo "Reloading systemd user daemon..."
 systemctl --user daemon-reload
 systemctl --user enable --now "$SERVICE_NAME"
 systemctl --user enable --now "$AGENT_SERVICE_NAME"
+info "Services enabled and started."
 
-echo "Setup complete."
-echo "Config path: $CONFIG_FILE"
-echo "Service: $SERVICE_PATH"
-echo "Agent service: $AGENT_SERVICE_PATH"
+# ---------------------------------------------------------------------------
+# Done
+# ---------------------------------------------------------------------------
 
-echo "Local access URL: http://127.0.0.1:$SERVER_PORT"
+section "Setup complete"
+info "Config:        $CONFIG_FILE"
+info "Environment:   $ENV_FILE"
+info "Service:       $SERVICE_PATH"
+info "Agent service: $AGENT_SERVICE_PATH"
+info "Local API:     http://127.0.0.1:$SERVER_PORT"
