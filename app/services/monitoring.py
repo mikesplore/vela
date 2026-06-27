@@ -251,14 +251,14 @@ def get_top_processes(limit: int = 20) -> ProcessMetrics:
                     username=proc.info.get("username"),
                     cpu_percent=cpu_percent,
                     memory_percent=memory_percent,
-                    memory_rss=memory_rss,
+                    memory_mb=memory_rss / (1024 * 1024),
                 )
             )
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return ProcessMetrics(
-        top_by_cpu=sorted(processes, key=lambda item: item.cpu_percent, reverse=True)[:limit],
-        top_by_memory=sorted(processes, key=lambda item: item.memory_percent, reverse=True)[:limit],
+        by_cpu=sorted(processes, key=lambda item: item.cpu_percent, reverse=True)[:limit],
+        by_memory=sorted(processes, key=lambda item: item.memory_percent, reverse=True)[:limit],
     )
 
 
