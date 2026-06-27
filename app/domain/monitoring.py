@@ -24,13 +24,8 @@ class TemperatureEntry(BaseModel):
     sensor: str
     label: str
     current: float
-    high: Optional[float]
-    critical: Optional[float]
-
-
-class FanEntry(BaseModel):
-    sensor: str
-    speed_rpm: Optional[int]
+    high: Optional[float] = None
+    critical: Optional[float] = None
 
 
 class BatteryInfo(BaseModel):
@@ -39,40 +34,42 @@ class BatteryInfo(BaseModel):
     secs_left: Optional[int]
 
 
-class SingleBatteryHealth(BaseModel):
-    name: str
-    path: str
-    present: bool
-    cycle_count: Optional[int]
-    design_capacity_wh: Optional[float]
-    current_max_capacity_wh: Optional[float]
-    health_percent: Optional[float]
-    manufacturer: Optional[str]
-    model_name: Optional[str]
-    serial_number: Optional[str]
-    technology: Optional[str]
-    voltage_now_uv: Optional[int]
-    charge_control_start_threshold: Optional[int]
-    charge_control_stop_threshold: Optional[int]
-
-
-class BatteryHealthInfo(BaseModel):
-    """Aggregated battery health across all detected batteries."""
-
-    batteries: List[SingleBatteryHealth]
-    total_cycle_count: Optional[int]
-    overall_health_percent: Optional[float]
+class FanEntry(BaseModel):
+    sensor: str
+    speed_rpm: Optional[float]
 
 
 class ProcessInfo(BaseModel):
     pid: int
     name: str
-    username: Optional[str]
     cpu_percent: float
     memory_percent: float
-    memory_rss: int
+    memory_mb: float
 
 
 class ProcessMetrics(BaseModel):
-    top_by_cpu: List[ProcessInfo]
-    top_by_memory: List[ProcessInfo]
+    by_cpu: List[ProcessInfo]
+    by_memory: List[ProcessInfo]
+
+
+class SingleBatteryHealth(BaseModel):
+    name: str
+    present: bool
+    cycle_count: Optional[int] = None
+    design_capacity_wh: Optional[float] = None
+    current_capacity_wh: Optional[float] = None
+
+
+class BatteryHealthInfo(BaseModel):
+    batteries: List[SingleBatteryHealth]
+    total_cycle_count: Optional[int] = None
+    average_health: Optional[float] = None
+
+
+class UptimeInfo(BaseModel):
+    """Human-readable system uptime."""
+    seconds: int
+    minutes: int
+    hours: int
+    days: int
+    formatted: str

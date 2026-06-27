@@ -3,10 +3,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from app.auth import verify_websocket_token
 from app.dependencies import get_current_user
-from app.domain.monitoring import CPUUsage, BatteryInfo, BatteryHealthInfo, ProcessMetrics
+from app.domain.monitoring import CPUUsage, BatteryInfo, BatteryHealthInfo, ProcessMetrics, UptimeInfo
 from app.domain.system_info import RAMInfo
 from app.services.monitoring import get_snapshot, error_response, get_cpu_usage, get_ram_status, get_gpu_usage, get_disk_io, \
-    get_network_io, get_temperatures, get_fan_speeds, get_battery_status, get_battery_health, get_top_processes
+    get_network_io, get_temperatures, get_fan_speeds, get_battery_status, get_battery_health, get_top_processes, get_uptime
 
 router = APIRouter(prefix="/monitor", tags=["monitoring"])
 
@@ -79,6 +79,14 @@ async def monitor_fans() -> Any:
 async def monitor_battery() -> Any:
     try:
         return get_battery_status()
+    except Exception as exc:
+        return error_response(str(exc))
+
+
+@router.get("/uptime", response_model=UptimeInfo, dependencies=[Depends(get_current_user)])
+async def monitor_uptime() -> Any:
+    try:
+        return get_uptime()
     except Exception as exc:
         return error_response(str(exc))
 

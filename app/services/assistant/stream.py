@@ -32,6 +32,8 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
+from app.services.assistant.tools import TOOL_DISPLAY_NAMES
+
 from app.services.assistant.helpers import (
     SESSION_STORE,
     get_or_init_session,
@@ -76,8 +78,13 @@ def _sse_thinking(text: str) -> str:
 def _sse_content(text: str) -> str:
     return _sse("content", {"text": text})
 
+def _friendly_tool_name(raw: str) -> str:
+    """Map a raw tool identifier to a human-readable display name."""
+    return TOOL_DISPLAY_NAMES.get(raw, raw.replace("_", " ").title())
+
+
 def _sse_tool(name: str, status: str, result: dict | None = None, error: str | None = None) -> str:
-    payload: dict = {"name": name, "status": status}
+    payload: dict = {"name": _friendly_tool_name(name), "status": status}
     if result is not None:
         payload["result"] = result
     if error is not None:

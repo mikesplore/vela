@@ -7,7 +7,7 @@ import psutil
 from fastapi.responses import JSONResponse
 
 from app.domain.monitoring import CPUUsage, DiskIOMetric, NetworkIOMetric, TemperatureEntry, BatteryInfo, FanEntry, \
-    BatteryHealthInfo, SingleBatteryHealth, ProcessMetrics, ProcessInfo
+    BatteryHealthInfo, SingleBatteryHealth, ProcessMetrics, ProcessInfo, UptimeInfo
 from app.services.system_info import RAMInfo, GPUInfo
 from app.utils.run_command import run_command
 
@@ -259,6 +259,34 @@ def get_top_processes(limit: int = 20) -> ProcessMetrics:
     return ProcessMetrics(
         top_by_cpu=sorted(processes, key=lambda item: item.cpu_percent, reverse=True)[:limit],
         top_by_memory=sorted(processes, key=lambda item: item.memory_percent, reverse=True)[:limit],
+    )
+
+
+def get_uptime() -> UptimeInfo:
+    """Get system uptime in human-readable format."""
+    import datetime
+    boot_time = psutil.boot_time()
+    uptime_seconds = int(time.time() - boot_time)
+    days, remainder = divmod(uptime_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if seconds or not parts:
+        parts.append(f"{seconds}s")
+
+    return UptimeInfo(
+        seconds=uptime_seconds,
+        minutes=minutes + hours * 60 + days * 1440,
+        hours=hours + days * 24,
+        days=days,
+        formatted=" ".join(parts),
     )
 
 
