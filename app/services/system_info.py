@@ -52,7 +52,7 @@ def get_ram_info() -> RAMInfo:
 
 
 def parse_lspci() -> List[GPUInfo]:
-    output = run_command(["lspci", "-nnk"])
+    output, _, _ = run_command(["lspci", "-nnk"])
     if not output:
         return []
 
@@ -67,7 +67,7 @@ def parse_lspci() -> List[GPUInfo]:
 
 
 def parse_nvidia_smi() -> List[GPUInfo]:
-    output = run_command([
+    output, _, _ = run_command([
         "nvidia-smi",
         "--query-gpu=name,memory.total,driver_version",
         "--format=csv,noheader,nounits",
@@ -125,7 +125,7 @@ def get_os_info() -> OSInfo:
 
 
 def get_usb_devices() -> List[USBDevice]:
-    output = run_command(["lsusb"])
+    output, _, _ = run_command(["lsusb"])
     devices: List[USBDevice] = []
     for line in output.splitlines():
         match = re.match(r"Bus (\d{3}) Device (\d{3}): ID ([0-9a-fA-F:]+) (.*)$", line)
@@ -136,7 +136,7 @@ def get_usb_devices() -> List[USBDevice]:
 
 
 def get_monitors() -> List[MonitorInfo]:
-    output = run_command(["xrandr", "--query"])
+    output, _, _ = run_command(["xrandr", "--query"])
     monitors: List[MonitorInfo] = []
     if not output:
         return monitors
@@ -169,7 +169,7 @@ def get_bios_info() -> BIOSInfo:
     version = None
     release_date = None
     motherboard = None
-    output = run_command(["dmidecode", "-t", "0"])
+    output, _, _ = run_command(["dmidecode", "-t", "0"])
     if output:
         for line in output.splitlines():
             if line.strip().startswith("Vendor:"):
@@ -178,7 +178,7 @@ def get_bios_info() -> BIOSInfo:
                 version = line.split(":", 1)[1].strip()
             elif line.strip().startswith("Release Date:"):
                 release_date = line.split(":", 1)[1].strip()
-    baseboard = run_command(["dmidecode", "-t", "2"])
+    baseboard, _, _ = run_command(["dmidecode", "-t", "2"])
     if baseboard:
         for line in baseboard.splitlines():
             if line.strip().startswith("Product Name:"):
