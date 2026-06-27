@@ -378,6 +378,7 @@ async def stream_llm_response(
     if enable_thinking:
         payload["thinking"] = {"type": "enabled", "budget_tokens": 1024}  # Hard cap to stop overthinking
 
+    yielded_anything = False
     try:
         # 300 second timeout for streaming LLM responses (5 minutes)
         async with AsyncClient(timeout=300.0) as client:
@@ -389,6 +390,8 @@ async def stream_llm_response(
                         continue
                     data = line[5:].strip()
                     if data == "[DONE]":
+                        if not yielded_anything:
+                            yield {"type": "content", "text": ""}
                         yield {"type": "done"}
                         return
                     try:
@@ -398,16 +401,23 @@ async def stream_llm_response(
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
                     if enable_thinking and delta.get("reasoning_content"):
                         yield {"type": "thinking", "text": delta["reasoning_content"]}
+                        yielded_anything = True
                     # Visible content — may contain inline <think> blocks (Qwen3 style)
-                    if delta.get("content"):
-                        for _evt in split_think_stream(delta["content"]):
+                    c = delta.get("content")
+                    if c:
+                        yielded_anything = True
+                        for _evt in split_think_stream(c):
                             if enable_thinking and _evt["type"] == "thinking":
                                 yield _evt
                             elif _evt["type"] == "content":
                                 yield _evt
+        if not yielded_anything:
+            yield {"type": "content", "text": ""}
+        yield {"type": "done"}
     except Exception as exc:
         logger.error("Streaming LLM call failed: %s", exc, exc_info=True)
         yield {"type": "error", "text": explain_fireworks_issue(exc)}
+        yield {"type": "done"}
 
 
 async def plan_tool_calls_streaming(

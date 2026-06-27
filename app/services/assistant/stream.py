@@ -199,16 +199,25 @@ async def _run_tools_and_reply(
     ]
 
     full_reply = ""
+    got_content = False
     async for delta in stream_llm_response(reply_messages, max_tokens=1024, enable_thinking=enable_thinking):
-        if enable_thinking and delta["type"] == "thinking":
-            yield _sse_thinking(delta["text"])
+        if delta["type"] == "thinking":
+            if enable_thinking:
+                yield _sse_thinking(delta["text"])
         elif delta["type"] == "content":
+            got_content = True
             full_reply += delta["text"]
             yield _sse_content(delta["text"])
         elif delta["type"] == "error":
             yield _sse_error(delta["text"])
             yield _sse_done()
+            history.append({"role": "assistant", "content": ""})
+            SESSION_STORE[current_user] = trim_history(history)
             return
+
+    # Ensure we always produce at least an empty content event so the client isn't left hanging
+    if not got_content:
+        yield _sse_content("")
 
     history.append({"role": "assistant", "content": full_reply.strip()})
     SESSION_STORE[current_user] = trim_history(history)
