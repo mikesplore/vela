@@ -14,12 +14,8 @@ DESKTOP_ENV_FILE="$HOME/.config/vela/desktop.env"
 
 echo "Setting up Vela RemotePC Agent in $ROOT_DIR"
 
-if [[ -f "$ENV_FILE" ]]; then
-  set -o allexport
-  source "$ENV_FILE"
-  set +o allexport
-  echo "Loaded environment values from $ENV_FILE"
-fi
+# Do not source existing .env to avoid parse errors; we regenerate it fresh
+echo "Starting fresh setup — existing $ENV_FILE will be overwritten"
 
 prompt_value() {
   local var_name="$1"
@@ -113,16 +109,8 @@ prompt_required VPS_URL "VPS relay URL, including http:// or https://"
 DEFAULT_AGENT_ID="${AGENT_ID:-$(hostname | tr -cs 'A-Za-z0-9_.-' '-')}"
 prompt_required AGENT_ID "Agent ID registered with the VPS relay" "$DEFAULT_AGENT_ID"
 
-# AGENT_SECRET is now optional — the VPS issues one on first registration
+# AGENT_SECRET is obtained from the VPS relay during registration — do not prompt for it
 AGENT_SECRET="${AGENT_SECRET:-${SECRET:-}}"
-if [[ -z "$AGENT_SECRET" ]]; then
-  read -rp "Do you have an existing agent secret from a previous registration? (y/N): " has_secret
-  if [[ "$has_secret" == "y" || "$has_secret" == "Y" ]]; then
-    prompt_secret_required AGENT_SECRET "Agent registration secret from the VPS relay"
-  else
-    echo "No existing secret — will perform first-time registration with the VPS."
-  fi
-fi
 
 # Optional: Public address and metadata for first-time agent registration
 PUBLIC_ADDRESS="${PUBLIC_ADDRESS:-}"
@@ -164,7 +152,11 @@ if [[ -n "$answer" ]]; then
 fi
 
 export USERNAME PASSWORD LOCAL_SERVICE_USERNAME LOCAL_SERVICE_PASSWORD
-export VPS_URL AGENT_ID AGENT_SECRET PUBLIC_ADDRESS METADATA SERVER_HOST SERVER_PORT ALLOWED_BASE_DIRS ASSISTANT_ACTION_PIN
+export VPS_URL AGENT_ID AGENT_SECRET PUBLIC_ADDRESS METADATA SERVER_HOST SERVER_PORT ALLOWED_BASE_DIRS ASSISTANT_ACTION_PIN ENV_FILE
+export FIREWORKS_API_KEY VELA_FIREWORKS_API_URL VELA_FIREWORKS_MODEL
+
+AGENT_SECRET_FILE=$(mktemp)
+export AGENT_SECRET_FILE
 
 python - <<'PY'
 import os
@@ -179,6 +171,7 @@ if parsed.scheme not in {"http", "https"} or not parsed.netloc:
 
 agent_secret = os.environ.get("AGENT_SECRET", "").strip()
 agent_id = os.environ.get("AGENT_ID", "").strip()
+env_file = os.environ.get("ENV_FILE", str(Path.cwd() / ".env"))
 
 print(f"Testing connectivity to VPS at {vps_url}/register...")
 try:
@@ -203,8 +196,23 @@ try:
         if issued_secret:
             print(f"Issued Agent Secret: {issued_secret}")
             print("IMPORTANT: Save this secret. It authenticates your agent to the VPS relay.")
-            # Export it so it gets saved to .env
             os.environ["AGENT_SECRET"] = issued_secret
+        returned_agent = data.get("agent", {})
+        returned_agent_id = returned_agent.get("agent_id")
+        if returned_agent_id:
+            os.environ["AGENT_ID"] = returned_agent_id
+    elif resp.status_code == 201:
+        data = resp.json()
+        print("Successfully connected to VPS.")
+        issued_secret = data.get("secret")
+        if issued_secret:
+            print(f"Issued Agent Secret: {issued_secret}")
+            print("IMPORTANT: Save this secret. It authenticates your agent to the VPS relay.")
+            os.environ["AGENT_SECRET"] = issued_secret
+        returned_agent = data.get("agent", {})
+        returned_agent_id = returned_agent.get("agent_id")
+        if returned_agent_id:
+            os.environ["AGENT_ID"] = returned_agent_id
     elif resp.status_code == 401:
         raise SystemExit("Failed to verify credentials: VPS returned 401 Unauthorized. Check your Agent Secret.")
     elif resp.status_code == 404:
@@ -226,7 +234,21 @@ for value in os.environ["ALLOWED_BASE_DIRS"].split(","):
     path = Path(value.strip()).expanduser()
     if not path.is_absolute():
         raise SystemExit(f"Allowed base directory must be absolute: {value}")
+
+    import os
+    secret_file = os.environ.get("AGENT_SECRET_FILE", "")
+    if secret_file:
+        with open(secret_file, "w") as f:
+            f.write(f"AGENT_SECRET={os.environ.get('AGENT_SECRET', '')}\n")
+            f.write(f"AGENT_ID={os.environ.get('AGENT_ID', '')}\n")
 PY
+
+if [[ -f "$AGENT_SECRET_FILE" ]]; then
+    source "$AGENT_SECRET_FILE"
+    rm -f "$AGENT_SECRET_FILE"
+    unset AGENT_SECRET_FILE
+    export AGENT_SECRET AGENT_ID
+fi
 
 SECRET_KEY="$(python - <<'PY'
 from secrets import token_urlsafe
@@ -314,38 +336,65 @@ chmod 600 "$DESKTOP_ENV_FILE"
 
 LOCAL_SERVICE_URL="http://127.0.0.1:$SERVER_PORT"
 export LOCAL_SERVICE_URL
+
+# Rewrite .env cleanly as plain text to avoid malformed lines
 ENV_FILE="$ENV_FILE" python - <<'PY'
 import os
-from dotenv import set_key
+from pathlib import Path
 
 env_file = os.environ["ENV_FILE"]
-open(env_file, "a", encoding="utf-8").close()
-for key in (
-    "USERNAME",
-    "PASSWORD",
-    "LOCAL_SERVICE_USERNAME",
-    "LOCAL_SERVICE_PASSWORD",
-    "LOCAL_SERVICE_URL",
-    "VPS_URL",
-    "AGENT_ID",
-    "AGENT_SECRET",
-    "ASSISTANT_ACTION_PIN",
-):
-    set_key(env_file, key, os.environ[key])
+lines = []
 
-# Set optional registration fields if provided
+def add(key, value):
+    lines.append(f"{key}={value}")
+
+add("USERNAME", os.environ["USERNAME"])
+add("PASSWORD", os.environ["PASSWORD"])
+add("LOCAL_SERVICE_USERNAME", os.environ["LOCAL_SERVICE_USERNAME"])
+add("LOCAL_SERVICE_PASSWORD", os.environ["LOCAL_SERVICE_PASSWORD"])
+add("LOCAL_SERVICE_URL", os.environ["LOCAL_SERVICE_URL"])
+add("VPS_URL", os.environ["VPS_URL"])
+add("AGENT_ID", os.environ["AGENT_ID"])
+add("AGENT_SECRET", os.environ["AGENT_SECRET"])
+add("ASSISTANT_ACTION_PIN", os.environ["ASSISTANT_ACTION_PIN"])
+
 public_address = os.environ.get("PUBLIC_ADDRESS", "").strip()
 if public_address:
-    set_key(env_file, "PUBLIC_ADDRESS", public_address)
+    add("PUBLIC_ADDRESS", public_address)
 
 metadata = os.environ.get("METADATA", "").strip()
 if metadata:
-    set_key(env_file, "METADATA", metadata)
+    add("METADATA", metadata)
 
-set_key(env_file, "LOCAL_SERVICE_TOKEN_PATH", "/auth/token")
-set_key(env_file, "LOCAL_SERVICE_AUTH_TOKEN", "")
-set_key(env_file, "LOCAL_SERVICE_AUTH_TOKEN_EXPIRES", "")
+add("LOCAL_SERVICE_TOKEN_PATH", "/auth/token")
+add("LOCAL_SERVICE_AUTH_TOKEN", "")
+add("LOCAL_SERVICE_AUTH_TOKEN_EXPIRES", "")
+
+fireworks_api_key = os.environ.get("FIREWORKS_API_KEY", "").strip()
+if fireworks_api_key:
+    add("FIREWORKS_API_KEY", fireworks_api_key)
+
+fireworks_api_url = os.environ.get("VELA_FIREWORKS_API_URL", "").strip()
+if not fireworks_api_url:
+    fireworks_api_url = os.environ.get("FIREWORKS_API_URL", "").strip()
+if not fireworks_api_url:
+    fireworks_api_url = "https://api.fireworks.ai/inference/v1"
+add("VELA_FIREWORKS_API_URL", fireworks_api_url)
+
+fireworks_model = os.environ.get("VELA_FIREWORKS_MODEL", "").strip()
+if not fireworks_model:
+    fireworks_model = os.environ.get("FIREWORKS_MODEL", "").strip()
+if not fireworks_model:
+    fireworks_model = "accounts/fireworks/models/deepseek-v4-flash"
+add("VELA_FIREWORKS_MODEL", fireworks_model)
+
+Path(env_file).write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
+
+if [[ ! -f "$ENV_FILE" ]]; then
+    echo "ERROR: $ENV_FILE was not created" >&2
+    exit 1
+fi
 chmod 600 "$ENV_FILE"
 
 echo "Generated environment file at $ENV_FILE"

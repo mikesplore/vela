@@ -140,6 +140,13 @@ async def wait_for_local_service(timeout: int = 60):
 
 
 def register():
+    """Register with the VPS relay server.
+    
+    Handles first-time registration (stores agent_id and secret) 
+    and re-registration for token refresh.
+    
+    Returns ws_token from response.
+    """
     vps_url = _normalise_vps_url(_require_env("VPS_URL"))
     agent_id = config.agent_id
 
@@ -185,8 +192,16 @@ def register():
 
     print(f"VPS register status: {resp.status_code}")
 
-    if resp.status_code == 200:
+    if resp.status_code in (200, 201):
         data = resp.json()
+
+        # Store agent_id in .env if not present (defensive)
+        if not config.agent_id and data.get("agent", {}).get("agent_id"):
+            try:
+                set_key(config.dotenv_path, "AGENT_ID", data["agent"]["agent_id"])
+                print(f"Persisted AGENT_ID to {config.dotenv_path}")
+            except Exception as env_exc:
+                print(f"Failed to persist AGENT_ID to .env: {env_exc}")
 
         # If the server returned a new secret, persist it to .env
         new_secret = data.get("secret")
@@ -202,17 +217,62 @@ def register():
     raise Exception(f"Registration failed: {resp.text}")
 
 
+def refresh_ws_token():
+    """Get a fresh WebSocket token using the agent's secret.
+    
+    Uses POST /agents/{agent_id}/ws-token with X-Secret header.
+    This is the preferred method for token refresh after initial registration.
+    """
+    vps_url = _normalise_vps_url(_require_env("VPS_URL"))
+    agent_id = config.agent_id
+    agent_secret = config.agent_secret
+
+    if not agent_secret:
+        raise RuntimeError("Cannot refresh ws_token: AGENT_SECRET not configured")
+
+    url = f"{vps_url.rstrip('/')}/agents/{agent_id}/ws-token"
+    headers = {"X-Secret": agent_secret}
+
+    print(f"Refreshing ws_token for agent '{agent_id}'...")
+    resp = requests.post(
+        url,
+        headers=headers,
+        timeout=config.local_service_timeout,
+    )
+
+    print(f"VPS ws-token refresh status: {resp.status_code}")
+
+    if resp.status_code == 200:
+        data = resp.json()
+        return data.get("ws_token")
+
+    raise Exception(f"Token refresh failed: {resp.text}")
+
+
 
 async def start_agent_loop() -> None:
+    """Main agent loop.
+    
+    Expects the device to already be registered (AGENT_ID and AGENT_SECRET in .env).
+    Uses the refresh token endpoint (POST /agents/{id}/ws-token) for connection.
+    
+    The /register endpoint should only be used by setup.sh for initial registration.
+    """
     await wait_for_local_service()
+
+    if not config.agent_id or not config.agent_secret:
+        raise RuntimeError(
+            "Agent not configured. Run setup.sh to register this device first, "
+            "or ensure AGENT_ID and AGENT_SECRET are set in .env"
+        )
 
     backoff = 5
     max_backoff = 60
 
     while True:
         try:
-            token = await asyncio.to_thread(register)
-            print(f"Registered. Token: {token[:10]}...")
+            token = await asyncio.to_thread(refresh_ws_token)
+            print(f"Refreshed ws_token: {token[:10]}...")
             await tunnel(token)
             # Tunnel exited cleanly — reset backoff
             backoff = 5

@@ -13,8 +13,11 @@ config = Config()
 _local_token: str | None = None
 _local_token_expires = datetime.min.replace(tzinfo=timezone.utc)
 
+HEARTBEAT_INTERVAL = 30  # seconds
+
 
 async def tunnel(token):
+    """Maintain WebSocket tunnel to relay server with heartbeat and request forwarding."""
     # Lazy imports to break circular dependency with app.agent.helpers
     from app.agent.helpers import agent_settings, websocket_tunnel_url, async_get_local_auth_token
 
@@ -30,6 +33,9 @@ async def tunnel(token):
         ) as websocket:
             print("Tunnel established. Waiting for requests...")
 
+            # Start heartbeat sender
+            heartbeat_task = asyncio.create_task(_heartbeat_loop(websocket))
+
             while True:
                 try:
                     message = await asyncio.wait_for(websocket.recv(), timeout=config.relay_read_timeout)
@@ -40,6 +46,16 @@ async def tunnel(token):
                 request_id = None  # Reset per message so error handler always has it
                 try:
                     req_data = json.loads(message)
+                    msg_type = req_data.get("type")
+
+                    if msg_type == "heartbeat":
+                        # Heartbeat received from relay (or echo of our own), ignore
+                        continue
+
+                    if msg_type != "forward_request":
+                        print(f"Unexpected message type: {msg_type}")
+                        continue
+
                     request_id = req_data.get("request_id") or req_data.get("id")
                     method = req_data.get("method", "GET")
                     path = req_data.get("path", "/")
@@ -124,7 +140,7 @@ async def tunnel(token):
                     print(f"Sending response payload for request_id={request_id}, status_code={resp.status_code}")
                     await websocket.send(json.dumps(response_payload))
 
-                # --- FIX 1: except blocks are now correctly at the same level as try ---
+                # --- except blocks at same level as try ---
                 except requests.exceptions.Timeout:
                     print(f"Local request timed out after {config.local_service_timeout}s: {local_url}")
                     await websocket.send(json.dumps({
@@ -135,8 +151,6 @@ async def tunnel(token):
                     }))
                 except requests.exceptions.ConnectionError as e:
                     print(f"Connection error to local service: {e}")
-                    # If we can't connect, maybe the service is down or there's a network issue.
-                    # We should probably notify the relay.
                     await websocket.send(json.dumps({
                         "type": "forward_response",
                         "status_code": 502,
@@ -158,3 +172,17 @@ async def tunnel(token):
     except Exception as tunnel_exc:
         print(f"Tunnel connection error: {tunnel_exc}")
         raise
+
+
+async def _heartbeat_loop(websocket):
+    """Send periodic heartbeats to keep connection alive."""
+    try:
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
+            try:
+                heartbeat_msg = json.dumps({"type": "heartbeat"})
+                await websocket.send(heartbeat_msg)
+            except Exception:
+                break
+    except Exception as e:
+        print(f"Heartbeat loop error: {e}")
