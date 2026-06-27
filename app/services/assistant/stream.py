@@ -160,7 +160,7 @@ async def _run_tools_and_reply(
             yield _sse_tool(r["tool"], "done", result=r.get("result"))
 
     # Fast-path: media status (no second LLM call needed)
-    if len(tool_results) == 1 and tool_results[0].get("tool") == "get_media_status":
+    if len(tool_results) == 1 and tool_results[0].get("tool") == "get_currently_playing_song":
         try:
             reply_text, art_url = await compose_final_reply(user_message, tool_results)
         except Exception as exc:

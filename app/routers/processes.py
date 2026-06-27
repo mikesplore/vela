@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from app.dependencies import get_current_user
 from app.domain.processes import ProcessInfo
 from app.domain.processes import ProcessList, ActionResponse, LaunchRequest, ApplicationRequest, ApplicationCloseRequest
+from app.services.processes import kill_processes_by_name as kill_processes_by_name_svc
 from app.utils.run_command import run_command
 
 router = APIRouter(prefix="/processes", tags=["processes"])
@@ -64,10 +65,20 @@ async def kill_process(pid: int) -> Any:
 @router.delete("/name/{name}", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
 async def kill_processes_by_name(name: str) -> Any:
     """Terminate all processes matching a name."""
-    killed_count = kill_processes_by_name(name)
-    if killed_count == 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No matching processes found")
-    return ActionResponse(success=True, message=f"Killed {killed_count} process(es).", killed_count=killed_count)
+    killed_count = kill_processes_by_name_svc(name)
+
+    # Dynamic message based on whether anything was actually terminated
+    if killed_count > 0:
+        message = f"Killed {killed_count} process(es)."
+    else:
+        message = "No matching processes found; 0 processes killed."
+
+    # Always return a successful 200 OK status containing the count
+    return ActionResponse(
+        success=True,
+        message=message,
+        killed_count=killed_count
+    )
 
 
 @router.post("/launch", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
@@ -97,7 +108,7 @@ async def open_application(request: ApplicationRequest) -> Any:
 @router.post("/app/close", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
 async def close_application(request: ApplicationCloseRequest) -> Any:
     """Close an application by process name."""
-    killed_count = kill_processes_by_name(request.name)
+    killed_count = kill_processes_by_name_svc(request.name)
     if killed_count == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No matching application processes found")
     return ActionResponse(success=True, message=f"Closed {killed_count} process(es).", killed_count=killed_count)

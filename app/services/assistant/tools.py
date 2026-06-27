@@ -207,7 +207,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "input": {"device_id": "string"},
     },
     # ── Media playback ────────────────────────────────────────────────────────
-    "get_media_status": {
+    "get_currently_playing_song": {
         "method": "GET",
         "path": "/media/now-playing",
         "description": "Current playback status, title, artist, album, album art URL, and position.",
@@ -745,7 +745,7 @@ Intent → Tool mappings (infer from natural language):
 - "turn off screen/display/monitor" → monitor_off
 - "lock"/"lock screen" → lock_screen_display
 - "screenshot" → display_screenshot
-- "what's playing"/"now playing" → get_media_status
+- "what's playing"/"now playing" → get_currently_playing_song
 - "battery"/"how much battery" → get_battery
 - "battery health"/"battery condition"/"is my battery healthy"/"battery wear" → monitor_battery_health
 - "how's my pc"/"system status" → get_snapshot

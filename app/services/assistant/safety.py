@@ -52,7 +52,7 @@ LOW_RISK_TOOLS = {
     "volume_down",
     "mute_audio",
     "audio_devices",
-    "get_media_status",
+    "get_currently_playing_song",
     "toggle_play_pause",
     "next_track",
     "previous_track",

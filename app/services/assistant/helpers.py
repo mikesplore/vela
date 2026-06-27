@@ -224,7 +224,7 @@ async def compose_final_reply(user_message: str, results: list[dict[str, Any]]) 
     Returns (reply_text, art_url) where art_url is present for media status queries.
     Called only when at least one real tool was executed.
     """
-    if len(results) == 1 and results[0].get("tool") == "get_media_status":
+    if len(results) == 1 and results[0].get("tool") == "get_currently_playing_song":
         media = results[0].get("result") or {}
         title = media.get("title") or "The current track"
         artist = media.get("artist")

@@ -204,7 +204,7 @@ def test_compose_final_reply_formats_media_elapsed_time():
         "What is the elapsed time of the current music?",
         [
             {
-                "tool": "get_media_status",
+                "tool": "get_currently_playing_song",
                 "result": {
                     "title": "Chikwere",
                     "artist": "Bien",
@@ -228,7 +228,7 @@ def test_compose_final_reply_includes_art_url():
         "What is now playing?",
         [
             {
-                "tool": "get_media_status",
+                "tool": "get_currently_playing_song",
                 "result": {
                     "title": "Song Title",
                     "artist": "Artist Name",
