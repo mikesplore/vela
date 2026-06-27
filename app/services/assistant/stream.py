@@ -150,14 +150,20 @@ async def _run_tools_and_reply(
     for r in tool_results:
         if r.get("error"):
             yield _sse_tool(r["tool"], "error", error=r["error"])
-        elif r["tool"] == "display_screenshot":
-            result = r.get("result") or {}
-            img = result.get("image_base64") if isinstance(result, dict) else None
-            yield _sse("screenshot", {"image_base64": img})
-            yield _sse_done()
-            return
         else:
             yield _sse_tool(r["tool"], "done", result=r.get("result"))
+
+    # Fast-path: screenshot only (no second LLM call — image data is too large)
+    if len(tool_results) == 1 and tool_results[0].get("tool") == "display_screenshot":
+        result = tool_results[0].get("result") or {}
+        img = result.get("image_base64") if isinstance(result, dict) else None
+        if img:
+            yield _sse("screenshot", {"image_base64": img})
+        yield _sse_content("Screenshot captured.")
+        history.append({"role": "assistant", "content": "Screenshot captured."})
+        SESSION_STORE[current_user] = trim_history(history)
+        yield _sse_done()
+        return
 
     # Fast-path: media status (no second LLM call needed)
     if len(tool_results) == 1 and tool_results[0].get("tool") == "get_currently_playing_song":
