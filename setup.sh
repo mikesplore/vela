@@ -357,6 +357,8 @@ lines = [
     f"AGENT_ID={os.environ['AGENT_ID']}",
     f"AGENT_SECRET={os.environ['AGENT_SECRET']}",
     f"ASSISTANT_ACTION_PIN={os.environ.get('ASSISTANT_ACTION_PIN', '')}",
+    f"FIREWORKS_API_KEY='paste_your_key_here'",
+    f"VELA_ASSISTANT_ENABLE_THINKING='false'",
     f"VELA_FIREWORKS_API_URL={fw_url}",
     f"VELA_FIREWORKS_MODEL={fw_model}",
 ]
