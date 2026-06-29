@@ -115,7 +115,12 @@ LOCAL_SERVICE_PASSWORD="$PASSWORD"
 section "VPS relay"
 
 VPS_URL="${VPS_URL:-${RELAY_URL:-}}"
-prompt_required VPS_URL "Relay URL (include http:// or https://)"
+prompt_required VPS_URL "Relay URL (domain or full URL)" ""
+# Auto-prepend https:// if no scheme provided
+if [[ "$VPS_URL" != http://* && "$VPS_URL" != https://* ]]; then
+  VPS_URL="https://$VPS_URL"
+  info "Using HTTPS: $VPS_URL"
+fi
 
 DEFAULT_AGENT_ID="${AGENT_ID:-$(hostname | tr -cs 'A-Za-z0-9_.-' '-')}"
 prompt_required AGENT_ID "Agent ID" "$DEFAULT_AGENT_ID"
@@ -152,7 +157,7 @@ section "Security (optional)"
 
 ASSISTANT_ACTION_PIN="${ASSISTANT_ACTION_PIN:-${VELA_ASSISTANT_ACTION_PIN:-}}"
 if [[ -z "$ASSISTANT_ACTION_PIN" ]]; then
-  read -rp "  Assistant action PIN for high-risk operations (press Enter to skip): " answer
+  read -rsp "  Assistant action PIN for high-risk operations (press Enter to skip): " answer; echo
   ASSISTANT_ACTION_PIN="${answer:-}"
 fi
 
@@ -462,3 +467,70 @@ info "Environment:   $ENV_FILE"
 info "Service:       $SERVICE_PATH"
 info "Agent service: $AGENT_SERVICE_PATH"
 info "Local API:     http://127.0.0.1:$SERVER_PORT"
+
+# ---------------------------------------------------------------------------
+# Service status
+# ---------------------------------------------------------------------------
+
+section "Service status"
+
+check_service() {
+  local name="$1"
+  if systemctl --user is-active --quiet "$name"; then
+    echo "  ✓  $name   →  running"
+  else
+    echo "  ✗  $name   →  NOT running"
+    warn "Start it with: systemctl --user start $name"
+  fi
+}
+
+check_service "$SERVICE_NAME"
+check_service "$AGENT_SERVICE_NAME"
+
+# ---------------------------------------------------------------------------
+# Aliases for service management
+# ---------------------------------------------------------------------------
+
+section "Service management aliases"
+
+ALIAS_BLOCK='
+# Vela service management
+alias vela-start="systemctl --user start vela.service vela-agent.service"
+alias vela-stop="systemctl --user stop vela.service vela-agent.service"
+alias vela-restart="systemctl --user restart vela.service vela-agent.service"
+alias vela-status="systemctl --user status vela.service vela-agent.service"
+alias vela-logs="journalctl --user -u vela.service -u vela-agent.service -f"
+'
+
+SHELL_RC="$HOME/.bashrc"
+[[ "${SHELL:-}" == */zsh ]] && SHELL_RC="$HOME/.zshrc"
+
+if grep -q "vela-start" "$SHELL_RC" 2>/dev/null; then
+  info "Aliases already present in $SHELL_RC — skipping."
+else
+  printf '%s\n' "$ALIAS_BLOCK" >> "$SHELL_RC"
+  info "Aliases added to $SHELL_RC."
+fi
+
+echo
+info "  vela-start    — start both services"
+info "  vela-stop     — stop both services"
+info "  vela-restart  — restart both services"
+info "  vela-status   — show service status"
+info "  vela-logs     — tail live logs"
+echo
+info "Run:  source $SHELL_RC   to activate aliases in this shell."
+
+# ---------------------------------------------------------------------------
+# Next steps — what to use on your device
+# ---------------------------------------------------------------------------
+
+section "Connect from your Android device"
+echo
+
+echo "  │  Relay URL   :  $VPS_URL/$AGENT_ID"
+echo "  │  Secret      :  $AGENT_SECRET"
+echo
+info "Open the Vela app then enter the"
+info "Relay URL, and Secret shown above."
+info "The secret is also saved in: $ENV_FILE"
