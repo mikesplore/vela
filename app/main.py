@@ -101,6 +101,17 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("Scheduler failed to start or was already running")
 
+    # Auto-start spike monitoring + daily summary if email is configured
+    try:
+        from app.services.alerts import setup_monitoring_schedule, RECIPIENT_EMAIL, RESEND_AVAILABLE
+        if RESEND_AVAILABLE and RECIPIENT_EMAIL:
+            setup_monitoring_schedule()
+            logger.info("Monitoring auto-started — spikes every 5min, daily summary at 18:00, email: %s", RECIPIENT_EMAIL)
+        else:
+            logger.info("Monitoring not auto-started: set RESEND_API_KEY + RECIPIENT_EMAIL in .env")
+    except Exception as e:
+        logger.warning("Could not auto-start monitoring: %s", e)
+
     app.state.agent_task = None
     if os.getenv("START_AGENT", "true").lower() in ("1", "true", "yes"):
         logger.info("Starting local tunnel agent in background")

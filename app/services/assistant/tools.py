@@ -701,44 +701,42 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": "Play a simple notification beep sound.",
     },
     # ── Alerts / Monitoring (new) ────────────────────────────────────────────
-    "setup_alert_monitoring": {
-        "method": "POST",
-        "path": "/alerts/setup",
-        "description": "Set up automatic CPU/memory spike alerts and daily system summary reports. Requires: recipient_email (email address to receive alerts). Optional: cpu_threshold (default 80%), memory_threshold (default 85%), spike_check_interval_minutes (how often to check, default 5), daily_summary_time (HH:MM, default 18:00). Use when the user wants to enable email alerts for high resource usage.",
-        "input": {"recipient_email": "string", "cpu_threshold": "float?", "memory_threshold": "float?", "spike_check_interval_minutes": "integer?", "daily_summary_time": "string?"},
-    },
     "check_alert_status": {
         "method": "GET",
         "path": "/alerts/status",
-        "description": "Get the current status of the monitoring system: whether spike alerts and daily summaries are scheduled, how many alerts fired today, and whether vnstat is available. Use when the user asks about alert/monitoring configuration.",
+        "description": "Check the monitoring system status: whether spike alerts and daily summaries are scheduled, alerts today, and recipient email from .env. No email input needed — reads RECIPIENT_EMAIL from .env.",
     },
     "send_test_spike_alert": {
         "method": "POST",
         "path": "/alerts/spike/check",
-        "description": "Manually check current CPU/memory usage and send an alert email if thresholds are exceeded. Useful for testing the alert system. Requires: recipient_email (email address). Optional: cpu_threshold (default 80%), memory_threshold (default 85%).",
-        "input": {"recipient_email": "string", "cpu_threshold": "float?", "memory_threshold": "float?"},
+        "description": "Manually check CPU/memory and send an alert email if thresholds are exceeded. Email goes to RECIPIENT_EMAIL from .env (no prompt). Optional: cpu_threshold (default 80%), memory_threshold (default 85%).",
+        "input": {"cpu_threshold": "float?", "memory_threshold": "float?"},
     },
     "send_daily_summary_now": {
         "method": "POST",
         "path": "/alerts/summary/send",
-        "description": "Manually trigger an immediate daily summary email with current system statistics (CPU, memory, disk, network via vnstat, top processes, alerts). Useful for on-demand reports or testing. Requires: recipient_email.",
-        "input": {"recipient_email": "string"},
+        "description": "Send the daily system summary email right now. Includes CPU, memory, vnstat network stats, top processes. Goes to RECIPIENT_EMAIL from .env — no email prompt.",
+    },
+    "send_test_email": {
+        "method": "GET",
+        "path": "/alerts/test",
+        "description": "Send a test spike alert email to RECIPIENT_EMAIL (from .env) to verify Resend is working. Always sends regardless of CPU/memory. No email input needed.",
     },
     "check_vnstat_status": {
         "method": "GET",
         "path": "/alerts/vnstat",
-        "description": "Check if vnstat is installed, its version, and which network interfaces it's monitoring. Use when diagnosing network data usage reporting or before setting up daily summaries.",
+        "description": "Check if vnstat is installed, its version, and which network interfaces it's monitoring.",
     },
-    "check_resend_status": {
+    "get_vnstat_data": {
         "method": "GET",
-        "path": "/alerts/resend/status",
-        "description": "Check whether the Resend email service is configured (RESEND_API_KEY set in .env). Use before attempting to send alerts or summaries to verify email delivery is working.",
+        "path": "/alerts/vnstat/data",
+        "description": "Get network usage from vnstat for a specific period. period: 'day' (today — default), 'month' (this month), 'hour' (current hour). Use when the user asks about their data usage or bandwidth.",
+        "input": {"period": "string?"},
     },
-    "send_test_alert": {
-        "method": "POST",
-        "path": "/alerts/test",
-        "description": "Send a test spike alert email immediately to verify Resend is configured correctly. Unlike send_test_spike_alert, this always sends an email regardless of CPU/memory levels. Receives: recipient_email (email address). Use to confirm email delivery is working end-to-end.",
-        "input": {"recipient_email": "string"},
+    "get_system_stats": {
+        "method": "GET",
+        "path": "/alerts/stats",
+        "description": "Get current system stats on demand: CPU usage, memory, vnstat network (today + month), top processes, uptime. Use when the user asks 'how's my system', 'give me stats', 'show system status'.",
     },
 }
 
@@ -877,13 +875,13 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_system_config": "Reading system config",
     "get_directory_tree": "Reading directory structure",
     "beep_audio": "Playing beep",
-    "setup_alert_monitoring": "Setting up system monitoring alerts",
     "check_alert_status": "Checking alert monitoring status",
     "send_test_spike_alert": "Checking CPU/memory and sending alerts",
     "send_daily_summary_now": "Sending daily summary report",
+    "send_test_email": "Sending test email",
     "check_vnstat_status": "Checking vnstat status",
-    "check_resend_status": "Checking Resend email configuration",
-    "send_test_alert": "Sending test email alert",
+    "get_vnstat_data": "Getting network usage data",
+    "get_system_stats": "Fetching system stats",
 }
 
 
