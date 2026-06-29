@@ -254,18 +254,26 @@ async def search_files(query: str = Query(...), path: str = Query(".")) -> Any:
     
     matches: List[FileEntry] = []
     try:
-        for root, dirs, files in os.walk(target):
-            # Search in files
-            for name in files:
-                if query.lower() in name.lower():
-                    entry_dict = file_entry(Path(root) / name)
+        # Use find command for efficient searching
+        process = subprocess.run(
+            ["find", str(target), "-iname", f"*{query}*"],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        if process.returncode != 0 and not process.stdout:
+            raise OSError(process.stderr.strip() if process.stderr else "Search failed")
+        
+        for line in process.stdout.strip().split('\n'):
+            if line:
+                found_path = Path(line)
+                # Only include paths within allowed base directories
+                if is_allowed(found_path):
+                    entry_dict = file_entry(found_path)
                     matches.append(FileEntry(**entry_dict))
-            # Search in directories
-            for name in dirs:
-                if query.lower() in name.lower():
-                    entry_dict = file_entry(Path(root) / name)
-                    matches.append(FileEntry(**entry_dict))
-    except (OSError, PermissionError) as exc:
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Search timed out")
+    except (OSError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Search failed: {exc}")
     
     # Sort results: folders first, then by name

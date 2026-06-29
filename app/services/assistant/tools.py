@@ -5,32 +5,32 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "get_system_info": {
         "method": "GET",
         "path": "/system/info",
-        "description": "Full system snapshot: CPU, RAM, GPU, disk, OS, USB, monitors, BIOS.",
+        "description": "Static hardware specs bundle: CPU model, RAM capacity, GPU model, disk partitions, OS version, USB devices, monitor config, and BIOS. Use when the user wants to know WHAT their machine is made of. Do NOT use for live usage — use get_snapshot for live metrics.",
     },
     "get_system_cpu": {
         "method": "GET",
         "path": "/system/cpu",
-        "description": "CPU model, core counts, base frequency, architecture.",
+        "description": "Static CPU specs: model name, core/thread counts, base clock, architecture. Use when the user asks WHAT CPU they have. Do NOT use for live CPU load — use monitor_cpu for current usage.",
     },
     "get_system_ram": {
         "method": "GET",
         "path": "/system/ram",
-        "description": "RAM and swap usage statistics.",
+        "description": "Static RAM capacity: total installed memory and swap size. Use when the user asks how much RAM they have. Do NOT use for live memory usage — use monitor_ram for that.",
     },
     "get_system_gpu": {
         "method": "GET",
         "path": "/system/gpu",
-        "description": "Detected GPU devices.",
+        "description": "Static GPU info: GPU device names and models. Use when the user asks WHAT GPU they have. Do NOT use for live GPU load — use monitor_gpu for that.",
     },
     "get_system_disk": {
         "method": "GET",
         "path": "/system/disk",
-        "description": "Disk partition usage information.",
+        "description": "Static disk layout: partition names, mount points, filesystem types, and total sizes. Use when the user asks about drive partitions or disk setup. Do NOT use for free space or usage stats — use get_disk_usage for that.",
     },
     "get_system_os": {
         "method": "GET",
         "path": "/system/os",
-        "description": "OS name, kernel, hostname, user, and uptime.",
+        "description": "OS identity: distro name, kernel version, hostname, current username. Use for OS/kernel-specific questions. For a full device summary including hardware vendor and model, use get_device_info instead.",
     },
     "get_system_usb": {
         "method": "GET",
@@ -40,7 +40,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "get_system_monitors": {
         "method": "GET",
         "path": "/system/monitors",
-        "description": "Connected monitor details.",
+        "description": "Static monitor hardware info: display names, resolutions, refresh rates. Use when the user asks about their monitor specs. Do NOT use to check if the monitor is on/off — use get_monitor_state for that.",
     },
     "get_system_bios": {
         "method": "GET",
@@ -50,7 +50,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "get_device_info": {
         "method": "GET",
         "path": "/system/device",
-        "description": "High-level device identification: laptop model (e.g. ThinkPad X1 Carbon Gen 9), hardware vendor (e.g. Lenovo), OS distribution name and version, kernel, architecture, and hostname.",
+        "description": "High-level device identity: laptop model (e.g. ThinkPad X1 Carbon Gen 9), vendor (e.g. Lenovo), OS distro, kernel, architecture, hostname. Use when the user asks 'what device/laptop/computer is this'. For deeper hardware specs use get_system_info; for OS-only details use get_system_os.",
     },
     # ── Network ──────────────────────────────────────────────────────────────
     "get_network_ip": {
@@ -66,12 +66,12 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "get_wifi_status": {
         "method": "GET",
         "path": "/network/wifi/status",
-        "description": "Current WiFi connection status and available networks.",
+        "description": "Current WiFi connection state only: connected/disconnected, active SSID, signal strength. Use when the user asks if they are connected or what network they are on. Do NOT use to browse nearby networks — use list_wifi_networks for that.",
     },
     "list_wifi_networks": {
         "method": "GET",
         "path": "/network/wifi/list",
-        "description": "List available WiFi networks.",
+        "description": "Scan and list all nearby WiFi networks with SSID and signal strength. Use when the user wants to see what networks are available nearby, not just their current connection.",
     },
     "connect_wifi": {
         "method": "POST",
@@ -123,22 +123,22 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "get_snapshot": {
         "method": "GET",
         "path": "/monitor/snapshot",
-        "description": "Live metrics snapshot: CPU, RAM, GPU, disk I/O, network I/O, temps, fans, battery, processes.",
+        "description": "Live system metrics snapshot: current CPU load, RAM usage, GPU usage, disk I/O rates, network I/O rates, temperatures, fan speeds, battery level, top processes. Use for 'how is my PC doing' or real-time status. Do NOT use for static hardware specs — use get_system_info for that.",
     },
     "monitor_cpu": {
         "method": "GET",
         "path": "/monitor/cpu",
-        "description": "CPU usage percentages overall and per core.",
+        "description": "Live CPU usage: current load percentage overall and per core. Use when the user asks how loaded their CPU is right now. Do NOT use for CPU specs or model — use get_system_cpu for that.",
     },
     "monitor_ram": {
         "method": "GET",
         "path": "/monitor/ram",
-        "description": "RAM and swap usage status.",
+        "description": "Live memory usage: how much RAM and swap is currently used vs free. Use when the user asks how much memory is being used right now. Do NOT use for total RAM capacity — use get_system_ram for that.",
     },
     "monitor_gpu": {
         "method": "GET",
         "path": "/monitor/gpu",
-        "description": "GPU utilization and memory usage.",
+        "description": "Live GPU usage: current GPU utilization percentage and VRAM used. Use when the user asks how hard their GPU is working right now. Do NOT use for GPU model info — use get_system_gpu for that.",
     },
     "monitor_disk_io": {
         "method": "GET",
@@ -168,7 +168,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "get_top_processes": {
         "method": "GET",
         "path": "/monitor/processes",
-        "description": "Top processes by CPU and memory.",
+        "description": "Top resource-consuming processes ranked by CPU and memory usage. Use when the user asks what is slowing down or eating up their system. Do NOT use to find a specific process by name — use list_processes for that.",
     },
     # ── Audio / volume ────────────────────────────────────────────────────────
     "get_volume": {
@@ -270,17 +270,17 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "monitor_off": {
         "method": "POST",
         "path": "/display/monitor/off",
-        "description": "Turn the monitor off using GNOME Mutter PowerSaveMode (with fallbacks).",
+        "description": "Turn the monitor/screen off (blank the display). Use when the user says 'turn off the screen', 'blank the display', or similar.",
     },
     "monitor_on": {
         "method": "POST",
         "path": "/display/monitor/on",
-        "description": "Turn the monitor on using GNOME Mutter PowerSaveMode (with fallbacks).",
+        "description": "Turn the monitor/screen back on. Use when the user says 'turn on the screen', 'wake the display', or similar.",
     },
     "get_monitor_state": {
         "method": "GET",
         "path": "/display/monitor/state",
-        "description": "Read the current GNOME Mutter PowerSaveMode so the agent can see whether the screen is on or off.",
+        "description": "Check whether the monitor is currently on or off. Use before toggling monitor state if unsure of the current state.",
     },
     "get_display_brightness": {
         "method": "GET",
@@ -313,7 +313,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "lock_screen_display": {
         "method": "POST",
         "path": "/display/lock",
-        "description": "Lock the screen session.",
+        "description": "Lock the screen via the display manager (fast path, no fallbacks). Prefer lock_screen_security unless you specifically need the display-manager lock.",
     },
     "set_night_light": {
         "method": "POST",
@@ -367,7 +367,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "get_disk_usage": {
         "method": "GET",
         "path": "/fs/disk-usage",
-        "description": "Disk usage statistics for mounted partitions.",
+        "description": "Disk space usage: how much free and used space each mounted partition has. Use when the user asks how much space is left or available. Do NOT use for partition layout or filesystem type — use get_system_disk for that.",
     },
     "zip_paths": {
         "method": "POST",
@@ -428,7 +428,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "list_processes": {
         "method": "GET",
         "path": "/processes/list",
-        "description": "List running processes.",
+        "description": "Full list of all running processes with PIDs. Use when the user wants to find a specific process by name or get a PID to kill. Do NOT use to see what is consuming the most resources — use get_top_processes for that.",
     },
     "kill_process": {
         "method": "DELETE",
@@ -491,13 +491,13 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "launch_process": {
         "method": "POST",
         "path": "/processes/launch",
-        "description": "Launch a new process with optional arguments.",
+        "description": "Launch a raw shell command or system binary with arguments (e.g. 'bash', 'python3', 'ffmpeg'). Use for scripts and CLI tools. Do NOT use for named desktop apps — use open_application for those.",
         "input": {"command": "string", "args": "array of strings"},
     },
     "open_application": {
         "method": "POST",
         "path": "/processes/app/open",
-        "description": "Open an application by name with optional arguments.",
+        "description": "Open a user-facing application by its common name (e.g. 'firefox', 'gedit', 'vlc'). Use for everyday app launches. Do NOT use for raw shell commands or system binaries — use launch_process for those.",
         "input": {"name": "string", "args": "array of strings"},
     },
     "close_application": {
@@ -550,7 +550,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "lock_screen_security": {
         "method": "POST",
         "path": "/security/lock",
-        "description": "Lock the screen session (security router with multiple fallbacks).",
+        "description": "Lock the screen with multiple fallbacks (most reliable). Use this when the user says 'lock', 'lock the screen', or 'lock my computer'. Prefer this over lock_screen_display.",
     },
     "logout_user": {
         "method": "POST",
@@ -607,12 +607,12 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "read_notifications": {
         "method": "GET",
         "path": "/notifications/read",
-        "description": "Read notifications sent through this agent.",
+        "description": "Read only the notifications that were sent by this agent in the current session. Do NOT use for system-wide notification history — use list_notifications for that.",
     },
     "list_notifications": {
         "method": "GET",
         "path": "/notifications/list",
-        "description": "List desktop notification history.",
+        "description": "List all desktop notification history system-wide (all apps). Use when the user asks to see recent notifications or missed alerts.",
     },
     # ── Maintenance ───────────────────────────────────────────────────────────
     "clear_cache": {
@@ -761,7 +761,6 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "write_clipboard": "Writing to clipboard",
     "clear_clipboard": "Clearing clipboard",
     "display_screenshot": "Taking a screenshot",
-    "display_record": "Recording screen",
     "monitor_off": "Turning monitor off",
     "monitor_on": "Turning monitor on",
     "get_monitor_state": "Checking monitor state",
@@ -875,27 +874,30 @@ VALID RESPONSE PATTERNS:
 - Tool call + text: [{{"tool":"mute_audio","tool_input":{{"muted":true}}}},{{"tool":"none","tool_input":{{}},"conversational_reply":"Muted. 🔇"}}]
 - Text ONLY (no action needed): [{{"tool":"none","tool_input":{{}},"conversational_reply":"Hello! How can I help?"}}]
 
-Intent → Tool mappings (infer from natural language):
-- "leaving"/"going out"/"stepping away"/"brb" → lock_screen_display + mute_audio(muted:true)
-- "nap"/"sleeping"/"going to sleep"/"bed" → set_display_brightness(0) + mute_audio(muted:true) + monitor_off
+Intent → Tool mappings (use these as a starting point — always reason about what the situation fully requires, do not limit yourself to the exact tools shown):
+- "leaving"/"going out"/"stepping away"/"brb" → lock_screen_security + mute_audio(muted:true) + monitor_off
+- "nap"/"sleeping"/"going to sleep"/"bed" → set_display_brightness(0) + mute_audio(muted:true) + monitor_off + power_sleep
 - "I'm back"/"back now"/"wake up" → monitor_on + mute_audio(muted:false)
 - "mute"/"silence"/"quiet" → mute_audio(muted:true)
 - "unmute"/"sound on" → mute_audio(muted:false)
 - "volume up/down a bit" → step of 10
 - "turn off screen/display/monitor" → monitor_off
-- "lock"/"lock screen" → lock_screen_display
+- "lock"/"lock screen" → lock_screen_security
 - "screenshot" → display_screenshot
 - "what's playing"/"now playing" → get_currently_playing_song
 - "battery"/"how much battery" → get_battery
 - "battery health"/"battery condition"/"is my battery healthy"/"battery wear" → monitor_battery_health
 - "how's my pc"/"system status" → get_snapshot
-- "bluetooth on/off"/"turn on bluetooth"/"turn off bluetooth" → toggle_bluetooth(enabled:true/false)
-- "kill process <PID>"/"terminate process <PID>"/"kill PID <number>" → kill_process(pid:<PID as integer>)
-- "kill <process name>"/"terminate <process name>"/"kill all <name>" → kill_process_by_name(name:<process name>)
+- "bluetooth on/off" → toggle_bluetooth(enabled:true/false)
+- "kill process <PID>" → kill_process(pid:<PID as integer>)
+- "kill <process name>"/"kill all <name>" → kill_process_by_name(name:<process name>)
 
-Valid response formats:
+IMPORTANT: The mappings above are common examples only. Always emit ALL tools a situation logically requires. A user saying "I'm heading out for the night" might need lock + mute + monitor off + even sleep depending on context. Reason about completeness, do not cap tool calls to match the number shown in any example.
+
+Valid response formats — these show structure only, not a limit on array length:
 - Single tool: [{{"tool":"get_battery","tool_input":{{}}}}]
-- Multiple tools: [{{"tool":"mute_audio","tool_input":{{"muted":true}}}},{{"tool":"lock_screen_display","tool_input":{{}}}}]
+- Two tools: [{{"tool":"mute_audio","tool_input":{{"muted":true}}}},{{"tool":"lock_screen_security","tool_input":{{}}}}]
+- Many tools: the array may contain as many tool objects as the situation requires
 - Conversation only: [{{"tool":"none","tool_input":{{}},"conversational_reply":"Your reply here"}}]
 
 Available tools:
