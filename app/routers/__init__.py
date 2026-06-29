@@ -1,3 +1,4 @@
+from .alerts import router as alerts_router
 from .audio import router as audio_router
 from .clipboard import router as clipboard_router
 from .display import router as display_router
@@ -16,6 +17,7 @@ from .system_info import router as system_info_router
 from .assistant import router as assistant_router
 
 all_routers = [
+    alerts_router,
     display_router,
     audio_router,
     power_router,
