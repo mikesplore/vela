@@ -319,6 +319,8 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
     tool_calls: list[dict] = []
     thinking_on = config.assistant_enable_thinking
     streamed_during_planning = False
+    planning_content_buffer: list[str] = []
+    real_tool_detected = False
     detected_tools: set[str] = set()
     try:
         async for item in plan_tool_calls_streaming(message, history[:-1], enable_thinking=thinking_on):
@@ -326,9 +328,11 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
                 if thinking_on and item["type"] == "thinking":
                     yield _sse_thinking(item["text"])
                 elif item["type"] == "content":
-                    yield _sse_content(item["text"])
-                    streamed_during_planning = True
+                    if not real_tool_detected:
+                        planning_content_buffer.append(item["text"])
                 elif item["type"] == "tool_detected":
+                    real_tool_detected = True
+                    planning_content_buffer = []
                     tname = item["text"]
                     # Only show "running" status early if no confirmation is needed
                     if not requires_gate(tname):
@@ -346,6 +350,10 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
 
     # ── Conversational reply (no tools needed) ────────────────────────────────
     if len(tool_calls) == 1 and tool_calls[0].get("tool") == "none":
+        if planning_content_buffer:
+            for chunk in planning_content_buffer:
+                yield _sse_content(chunk)
+            streamed_during_planning = True
         reply_text: str = tool_calls[0].get("conversational_reply") or "Hello! How can I help you today?"
         if not streamed_during_planning:
             yield _sse_content(reply_text)
