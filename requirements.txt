@@ -25,3 +25,5 @@ typing-extensions
 notify2
 starlette
 resend
+
+spotipy

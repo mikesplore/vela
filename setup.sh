@@ -148,9 +148,29 @@ ALLOWED_BASE_DIRS="${ALLOWED_BASE_DIRS:-$HOME}"
 prompt_required ALLOWED_BASE_DIRS "Directories the agent may access (comma-separated)" "$ALLOWED_BASE_DIRS"
 
 if [[ "$ALLOWED_BASE_DIRS" == "/" ]]; then
-  local confirm_root
   read -rp "  Allow access to the entire filesystem? Type 'I understand': " confirm_root
   [[ "$confirm_root" == "I understand" ]] || die "Setup cancelled. Choose narrower base directories."
+fi
+
+section "Spotify (optional)"
+
+# Preserve any existing Spotify settings from the current .env so rerunning
+# setup does not wipe manually-entered credentials.
+if [[ -f "$ENV_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$ENV_FILE" || true
+fi
+
+read -rp "  Do you want to configure Spotify? [y/N]: " answer
+if [[ "${answer:-N}es" =~ ^[Yy][Ee][Ss]$ ]]; then
+  prompt_required SPOTIFY_CLIENT_ID "Spotify Client ID"
+  prompt_required SPOTIFY_CLIENT_SECRET "Spotify Client Secret"
+  SPOTIFY_REDIRECT_URI="${SPOTIFY_REDIRECT_URI:-${VPS_URL}/relay/${AGENT_ID}/callback}"
+  info "Using Spotify redirect URI: $SPOTIFY_REDIRECT_URI"
+else
+  SPOTIFY_CLIENT_ID="${SPOTIFY_CLIENT_ID:-}"
+  SPOTIFY_CLIENT_SECRET="${SPOTIFY_CLIENT_SECRET:-}"
+  SPOTIFY_REDIRECT_URI="${SPOTIFY_REDIRECT_URI:-}"
 fi
 
 section "Security (optional)"
@@ -347,7 +367,7 @@ fw_url   = (os.environ.get("VELA_FIREWORKS_API_URL") or
             "https://api.fireworks.ai/inference/v1")
 fw_model = (os.environ.get("VELA_FIREWORKS_MODEL") or
             os.environ.get("FIREWORKS_MODEL") or
-            "accounts/fireworks/models/deepseek-v4-flash")
+            "accounts/fireworks/models/qwen3p7-plus")
 
 lines = [
     f"USERNAME={os.environ['USERNAME']}",
@@ -374,6 +394,9 @@ if meta := os.environ.get("METADATA", "").strip():
     lines.append(f"METADATA={meta}")
 if fw_key := os.environ.get("FIREWORKS_API_KEY", "").strip():
     lines.append(f"FIREWORKS_API_KEY={fw_key}")
+lines.append(f"SPOTIFY_CLIENT_ID={os.environ.get('SPOTIFY_CLIENT_ID', '') or 'your_spotify_client_id_here'}")
+lines.append(f"SPOTIFY_CLIENT_SECRET={os.environ.get('SPOTIFY_CLIENT_SECRET', '') or 'your_spotify_client_secret_here'}")
+lines.append(f"SPOTIFY_REDIRECT_URI={os.environ.get('SPOTIFY_REDIRECT_URI', '') or f'{os.environ['VPS_URL']}/relay/{os.environ['AGENT_ID']}/callback'}")
 
 env_path = Path(os.environ["ENV_FILE"])
 env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -528,7 +551,7 @@ info "Run:  source $SHELL_RC   to activate aliases in this shell."
 section "Connect from your Android device"
 echo
 
-echo "  │  Relay URL   :  $VPS_URL/$AGENT_ID"
+echo "  │  Relay URL   :  $VPS_URL/relay/$AGENT_ID"
 echo "  │  Secret      :  $AGENT_SECRET"
 echo
 info "Open the Vela app then enter the"
