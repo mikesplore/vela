@@ -379,6 +379,7 @@ async def stream_llm_response(
         payload["thinking"] = {"type": "enabled", "budget_tokens": 1024}  # Hard cap to stop overthinking
 
     yielded_anything = False
+    in_think_block = False
     try:
         # 300 second timeout for streaming LLM responses (5 minutes)
         async with AsyncClient(timeout=300.0) as client:
@@ -402,15 +403,32 @@ async def stream_llm_response(
                     if enable_thinking and delta.get("reasoning_content"):
                         yield {"type": "thinking", "text": delta["reasoning_content"]}
                         yielded_anything = True
-                    # Visible content — may contain inline <think> blocks (Qwen3 style)
                     c = delta.get("content")
                     if c:
                         yielded_anything = True
-                        for _evt in split_think_stream(c):
-                            if enable_thinking and _evt["type"] == "thinking":
-                                yield _evt
-                            elif _evt["type"] == "content":
-                                yield _evt
+                        chunk_rem = c
+                        while chunk_rem:
+                            if not in_think_block:
+                                open_idx = chunk_rem.lower().find("<think>")
+                                if open_idx == -1:
+                                    yield {"type": "content", "text": chunk_rem}
+                                    break
+                                if open_idx > 0:
+                                    yield {"type": "content", "text": chunk_rem[:open_idx]}
+                                in_think_block = True
+                                chunk_rem = chunk_rem[open_idx + 7:]
+                            else:
+                                close_idx = chunk_rem.lower().find("</think>")
+                                if close_idx == -1:
+                                    if enable_thinking:
+                                        yield {"type": "thinking", "text": chunk_rem}
+                                    chunk_rem = ""
+                                    break
+                                if close_idx > 0:
+                                    if enable_thinking:
+                                        yield {"type": "thinking", "text": chunk_rem[:close_idx]}
+                                in_think_block = False
+                                chunk_rem = chunk_rem[close_idx + 8:]
         if not yielded_anything:
             yield {"type": "content", "text": ""}
         yield {"type": "done"}
@@ -470,7 +488,8 @@ async def plan_tool_calls_streaming(
 
     for attempt in range(max_retries):
         content_buf = ""
-        detected_tools.clear()
+        # DO NOT clear detected_tools or last_unescaped here!
+        # They persist across retries to prevent duplicate events.
         try:
             # 300 second timeout for streaming tool planner (5 minutes)
             async with AsyncClient(timeout=300.0) as client:
@@ -498,27 +517,26 @@ async def plan_tool_calls_streaming(
                                 elif evt["type"] == "content":
                                     content_buf += evt["text"]
 
-                                    # Try to stream conversational_reply on the first attempt
-                                    if attempt == 0:
-                                        marker = '"conversational_reply":"'
-                                        m_idx = content_buf.find(marker)
-                                        if m_idx != -1:
-                                            start_pos = m_idx + len(marker)
-                                            val_part = content_buf[start_pos:]
-                                            # Find first unescaped "
-                                            end_match = re.search(r'(?<!\\)"', val_part)
-                                            if end_match:
-                                                val_part = val_part[:end_match.start()]
+                                    # Try to stream conversational_reply
+                                    marker = '"conversational_reply":"'
+                                    m_idx = content_buf.find(marker)
+                                    if m_idx != -1:
+                                        start_pos = m_idx + len(marker)
+                                        val_part = content_buf[start_pos:]
+                                        # Find first unescaped "
+                                        end_match = re.search(r'(?<!\\)"', val_part)
+                                        if end_match:
+                                            val_part = val_part[:end_match.start()]
 
-                                            try:
-                                                # Partial unescape logic
-                                                current_unescaped = json.loads('"' + (val_part[:-1] if val_part.endswith('\\') else val_part) + '"')
-                                                if len(current_unescaped) > len(last_unescaped):
-                                                    new_text = current_unescaped[len(last_unescaped):]
-                                                    yield {"type": "content", "text": new_text}
-                                                    last_unescaped = current_unescaped
-                                            except Exception:
-                                                pass
+                                        try:
+                                            # Partial unescape logic
+                                            current_unescaped = json.loads('"' + (val_part[:-1] if val_part.endswith('\\') else val_part) + '"')
+                                            if len(current_unescaped) > len(last_unescaped):
+                                                new_text = current_unescaped[len(last_unescaped):]
+                                                yield {"type": "content", "text": new_text}
+                                                last_unescaped = current_unescaped
+                                        except Exception:
+                                            pass
 
                                         # Try to detect tool calls early
                                         for tname in re.findall(r'"tool"\s*:\s*"([^"]+)"', content_buf):
@@ -526,8 +544,11 @@ async def plan_tool_calls_streaming(
                                                 yield {"type": "tool_detected", "text": tname}
                                                 detected_tools.add(tname)
         except Exception as exc:
-            logger.error("Streaming tool planner failed: %s", exc, exc_info=True)
-            raise ValueError(explain_fireworks_issue(exc)) from exc
+            logger.error("Streaming tool planner failed on attempt %d: %s", attempt + 1, exc, exc_info=True)
+            if attempt == max_retries - 1:
+                raise ValueError(explain_fireworks_issue(exc)) from exc
+            await asyncio.sleep(1)
+            continue
 
         parsed = extract_json_array(clean_text(content_buf))
         if parsed:

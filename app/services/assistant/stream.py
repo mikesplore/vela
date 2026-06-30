@@ -140,11 +140,16 @@ async def _run_tools_and_reply(
         current_user: str,
         confirmed: bool,
         enable_thinking: bool = False,
+        already_running: set[str] | None = None,
 ) -> AsyncGenerator[str, None]:
+    if already_running is None:
+        already_running = set()
+
     real_calls = [tc for tc in tool_calls if tc.get("tool") and tc["tool"] != "none"]
 
     for tc in real_calls:
-        yield _sse_tool(tc["tool"], "running")
+        if tc["tool"] not in already_running:
+            yield _sse_tool(tc["tool"], "running")
 
     tasks = [
         execute_tool_safe(
@@ -190,15 +195,21 @@ async def _run_tools_and_reply(
         return
 
     # Stream the final reply
-    results_text = "\n".join(
-        f"Tool: {r['tool']}\nResult: {json.dumps(r['result'], separators=(',', ':'))}"
-        + (f"\nError: {r['error']}" if r.get("error") else "")
-        for r in tool_results
-    )
-    reply_messages = [
-        {"role": "system", "content": config.assistant_system_prompt},
-        {"role": "user", "content": f"User request: {user_message}\n\n{results_text}\n\nAnswer in clean Markdown."},
-    ]
+    results_text = ""
+    for r in tool_results:
+        res_str = json.dumps(r['result'], separators=(',', ':'))
+        if len(res_str) > 5000:
+            res_str = res_str[:5000] + "... [TRUNCATED]"
+        results_text += f"\nTool: {r['tool']}\nResult: {res_str}"
+        if r.get("error"):
+            results_text += f"\nError: {r['error']}"
+
+    reply_messages = [{"role": "system", "content": config.assistant_system_prompt}]
+    reply_messages.extend(trim_history(history))
+    reply_messages.append({
+        "role": "user",
+        "content": f"Tool execution results:\n{results_text}\n\nPlease provide a final answer to my original request based on these results."
+    })
 
     full_reply = ""
     got_content = False
@@ -258,6 +269,7 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
                     request, pending.tool_calls, auth_header,
                     pending.user_message, history, current_user, confirmed=True,
                     enable_thinking=config.assistant_enable_thinking,
+                    already_running=set(),
                 ):
                     yield chunk
                 return
@@ -288,6 +300,7 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
                 request, pending.tool_calls, auth_header,
                 pending.user_message, history, current_user, confirmed=True,
                 enable_thinking=config.assistant_enable_thinking,
+                already_running=set(),
             ):
                 yield chunk
             return
@@ -306,6 +319,7 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
     tool_calls: list[dict] = []
     thinking_on = config.assistant_enable_thinking
     streamed_during_planning = False
+    detected_tools: set[str] = set()
     try:
         async for item in plan_tool_calls_streaming(message, history[:-1], enable_thinking=thinking_on):
             if isinstance(item, dict):
@@ -315,9 +329,11 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
                     yield _sse_content(item["text"])
                     streamed_during_planning = True
                 elif item["type"] == "tool_detected":
+                    tname = item["text"]
                     # Only show "running" status early if no confirmation is needed
-                    if not requires_gate(item["text"]):
-                        yield _sse_tool(item["text"], "running")
+                    if not requires_gate(tname):
+                        yield _sse_tool(tname, "running")
+                        detected_tools.add(tname)
                 # planning_done is internal bookkeeping, not surfaced to client
                 pass
             elif isinstance(item, list):
@@ -358,6 +374,7 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
     async for chunk in _run_tools_and_reply(
         request, tool_calls, auth_header, message, history, current_user, confirmed=False,
         enable_thinking=config.assistant_enable_thinking,
+        already_running=detected_tools,
     ):
         yield chunk
 
