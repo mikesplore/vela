@@ -153,9 +153,11 @@ async def _run_tools_and_reply(
         )
         for tc in real_calls
     ]
-    tool_results = list(await asyncio.gather(*tasks))
 
-    for r in tool_results:
+    tool_results = []
+    for coro in asyncio.as_completed(tasks):
+        r = await coro
+        tool_results.append(r)
         if r.get("error"):
             yield _sse_tool(r["tool"], "error", error=r["error"])
         else:
@@ -303,11 +305,19 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
 
     tool_calls: list[dict] = []
     thinking_on = config.assistant_enable_thinking
+    streamed_during_planning = False
     try:
         async for item in plan_tool_calls_streaming(message, history[:-1], enable_thinking=thinking_on):
             if isinstance(item, dict):
                 if thinking_on and item["type"] == "thinking":
                     yield _sse_thinking(item["text"])
+                elif item["type"] == "content":
+                    yield _sse_content(item["text"])
+                    streamed_during_planning = True
+                elif item["type"] == "tool_detected":
+                    # Only show "running" status early if no confirmation is needed
+                    if not requires_gate(item["text"]):
+                        yield _sse_tool(item["text"], "running")
                 # planning_done is internal bookkeeping, not surfaced to client
                 pass
             elif isinstance(item, list):
@@ -321,7 +331,8 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
     # ── Conversational reply (no tools needed) ────────────────────────────────
     if len(tool_calls) == 1 and tool_calls[0].get("tool") == "none":
         reply_text: str = tool_calls[0].get("conversational_reply") or "Hello! How can I help you today?"
-        yield _sse_content(reply_text)
+        if not streamed_during_planning:
+            yield _sse_content(reply_text)
         history.append({"role": "assistant", "content": reply_text})
         SESSION_STORE[current_user] = trim_history(history)
         yield _sse_done()

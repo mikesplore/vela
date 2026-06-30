@@ -465,9 +465,12 @@ async def plan_tool_calls_streaming(
 
     content_buf = ""
     max_retries = 4
+    last_unescaped = ""
+    detected_tools: set[str] = set()
 
     for attempt in range(max_retries):
         content_buf = ""
+        detected_tools.clear()
         try:
             # 300 second timeout for streaming tool planner (5 minutes)
             async with AsyncClient(timeout=300.0) as client:
@@ -494,6 +497,34 @@ async def plan_tool_calls_streaming(
                                     yield evt
                                 elif evt["type"] == "content":
                                     content_buf += evt["text"]
+
+                                    # Try to stream conversational_reply on the first attempt
+                                    if attempt == 0:
+                                        marker = '"conversational_reply":"'
+                                        m_idx = content_buf.find(marker)
+                                        if m_idx != -1:
+                                            start_pos = m_idx + len(marker)
+                                            val_part = content_buf[start_pos:]
+                                            # Find first unescaped "
+                                            end_match = re.search(r'(?<!\\)"', val_part)
+                                            if end_match:
+                                                val_part = val_part[:end_match.start()]
+
+                                            try:
+                                                # Partial unescape logic
+                                                current_unescaped = json.loads('"' + (val_part[:-1] if val_part.endswith('\\') else val_part) + '"')
+                                                if len(current_unescaped) > len(last_unescaped):
+                                                    new_text = current_unescaped[len(last_unescaped):]
+                                                    yield {"type": "content", "text": new_text}
+                                                    last_unescaped = current_unescaped
+                                            except Exception:
+                                                pass
+
+                                        # Try to detect tool calls early
+                                        for tname in re.findall(r'"tool"\s*:\s*"([^"]+)"', content_buf):
+                                            if tname not in detected_tools and tname != "none":
+                                                yield {"type": "tool_detected", "text": tname}
+                                                detected_tools.add(tname)
         except Exception as exc:
             logger.error("Streaming tool planner failed: %s", exc, exc_info=True)
             raise ValueError(explain_fireworks_issue(exc)) from exc
