@@ -99,6 +99,12 @@ section "Vela RemotePC Agent setup"
 info "Installing to: $ROOT_DIR"
 info "Existing $ENV_FILE will be overwritten."
 
+# Load existing .env to pre-seed defaults BEFORE prompting
+if [[ -f "$ENV_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$ENV_FILE" || true
+fi
+
 section "Local service credentials"
 
 DEFAULT_USERNAME="${USERNAME:-${LOCAL_SERVICE_USERNAME:-$(id -un)}}"
@@ -153,13 +159,6 @@ if [[ "$ALLOWED_BASE_DIRS" == "/" ]]; then
 fi
 
 section "Spotify (optional)"
-
-# Preserve any existing Spotify settings from the current .env so rerunning
-# setup does not wipe manually-entered credentials.
-if [[ -f "$ENV_FILE" ]]; then
-  # shellcheck disable=SC1090
-  source "$ENV_FILE" || true
-fi
 
 read -rp "  Do you want to configure Spotify? [y/N]: " answer
 if [[ "${answer:-N}es" =~ ^[Yy][Ee][Ss]$ ]]; then
@@ -386,9 +385,9 @@ lines = [
     f"VELA_ASSISTANT_ENABLE_THINKING='false'",
     f"VELA_FIREWORKS_API_URL={fw_url}",
     f"VELA_FIREWORKS_MODEL={fw_model}",
-    f"RECIPIENT_EMAIL='your_personal_email'
-    f"RESEND_API_KEY='your_resend_api_key'
-    f"RESEND_FROM_EMAIL='your_resend_email'
+    f"RECIPIENT_EMAIL='your_personal_email'",
+    f"RESEND_API_KEY='your_resend_api_key'",
+    f"RESEND_FROM_EMAIL='your_resend_email'",
 ]
 
 if addr := os.environ.get("PUBLIC_ADDRESS", "").strip():
