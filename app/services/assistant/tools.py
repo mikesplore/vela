@@ -745,23 +745,10 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": "Search Spotify for a song and immediately play it. Use when the user wants to hear a specific song.",
         "input": {"query": "string", "device_id": "string?"},
     },
-    "get_recommendations": {
-        "method": "POST",
-        "path": "/spotify/recommendations",
-        "description": "Get Spotify track recommendations based on a seed song. Use when the user asks for similar songs or recommendations.",
-        "input": {"seed_track_query": "string", "limit": "integer 1-100?", "auto_play": "boolean?", "device_id": "string?"},
-    },
-    "play_by_genre": {
-        "method": "POST",
-        "path": "/spotify/play-by-genre",
-        "description": "Play songs from a specific genre on Spotify. Use when the user asks for music of a certain genre.",
-        "input": {"genre": "string", "limit": "integer 1-100?", "device_id": "string?"},
-    },
-    "play_random_song": {
-        "method": "POST",
-        "path": "/spotify/play-random",
-        "description": "Play a random song on Spotify, optionally from a specific genre pool. Use when the user asks for something random or to surprise them.",
-        "input": {"genre_pool": "array of strings?", "device_id": "string?"},
+    "spotify_devices": {
+        "method": "GET",
+        "path": "/spotify/devices",
+        "description": "Get list of available Spotify playback devices (speakers, computers, phones). Use when the user asks what devices are available for playback.",
     },
     "spotify_auth": {
         "method": "GET",
@@ -919,9 +906,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_vnstat_data": "Getting network usage data",
     "get_system_stats": "Fetching system stats",
     "search_and_play": "Playing song on Spotify",
-    "get_recommendations": "Getting Spotify recommendations",
-    "play_by_genre": "Playing genre on Spotify",
-    "play_random_song": "Playing random song",
+    "spotify_devices": "Listing Spotify playback devices",
     "spotify_auth": "Starting Spotify sign-in",
     "spotify_callback": "Finishing Spotify sign-in",
 }

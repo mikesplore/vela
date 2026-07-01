@@ -15,7 +15,7 @@ from .scheduler import router as scheduler_router
 from .security import router as security_router
 from .system_info import router as system_info_router
 from .assistant import router as assistant_router
-from .spotify import router as spotify_router, root_router as spotify_root_router
+from .spotify import spotify_router
 
 all_routers = [
     alerts_router,
@@ -36,5 +36,4 @@ all_routers = [
     clipboard_router,
     assistant_router,
     spotify_router,
-    spotify_root_router,
 ]
