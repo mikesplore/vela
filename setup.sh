@@ -386,6 +386,9 @@ lines = [
     f"VELA_ASSISTANT_ENABLE_THINKING='false'",
     f"VELA_FIREWORKS_API_URL={fw_url}",
     f"VELA_FIREWORKS_MODEL={fw_model}",
+    f"RECIPIENT_EMAIL='your_personal_email'
+    f"RESEND_API_KEY='your_resend_api_key'
+    f"RESEND_FROM_EMAIL='your_resend_email'
 ]
 
 if addr := os.environ.get("PUBLIC_ADDRESS", "").strip():
