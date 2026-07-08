@@ -416,3 +416,43 @@ async def speed_test() -> Any:
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="No speed test tool available. Install speedtest-cli (`pip install speedtest-cli`) or the Ookla CLI.",
     )
+
+
+# ---------------------------------------------------------------------------
+# vnstat endpoints (daily, monthly, hourly) ──────────────────────────────────
+# ---------------------------------------------------------------------------
+
+@router.get("/vnstat")
+def vnstat_status(current_user: str = Depends(get_current_user)):
+    """Check if vnstat is installed and configured."""
+    from app.services.network import check_vnstat_installation
+    return check_vnstat_installation()
+
+
+@router.get("/usage")
+def network_usage(
+    period: str = "day",
+    interface: str | None = None,
+    current_user: str = Depends(get_current_user),
+):
+    """
+    Get network usage from vnstat.
+    period: 'day' (today), 'month' (this month), 'hour' (current hour)
+    """
+    from app.services.network import get_vnstat_data
+    try:
+        return get_vnstat_data(period=period, interface=interface)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── On-demand system stats ────────────────────────────────────────────────────
+
+@router.get("/stats")
+def system_stats(current_user: str = Depends(get_current_user)):
+    """
+    Return current system stats as plain text:
+    CPU, memory, network (today/month via vnstat), top processes, uptime.
+    """
+    from app.services.network import get_system_stats_text
+    return {"stats": get_system_stats_text()}

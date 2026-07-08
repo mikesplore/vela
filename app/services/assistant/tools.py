@@ -724,12 +724,12 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     },
     "check_vnstat_status": {
         "method": "GET",
-        "path": "/alerts/vnstat",
+        "path": "/network/vnstat",
         "description": "Check if vnstat is installed, its version, and which network interfaces it's monitoring.",
     },
     "get_vnstat_data": {
         "method": "GET",
-        "path": "/alerts/vnstat/data",
+        "path": "/network/usage",
         "description": "Get network usage from vnstat for a specific period. period: 'day' (today — default), 'month' (this month), 'hour' (current hour). Use when the user asks about their data usage or bandwidth.",
         "input": {"period": "string?"},
     },

@@ -6,14 +6,13 @@ Vela is a FastAPI-based remote PC agent for Linux. It exposes your desktop's cap
 
 ## Features
 
-- **Full system control API** — filesystem, audio, display, power, notifications, network, input control, system info, monitoring, processes, security, scheduler, maintenance, media, clipboard
-- **LLM-powered assistant** — natural language chat interface via DashScope's Qwen model with tool-calling
+- **Full system control API** — filesystem, audio, display, power, notifications, network, input control, system info, monitoring, processes, security, scheduler, maintenance, media, clipboard, Spotify, alerts
+- **LLM-powered assistant** — natural language chat interface via Fireworks AI with tool-calling
 - **WebSocket tunnel** — connect to a remote VPS relay to access your PC from anywhere
 - **Agent registration** — one-time registration with a VPS; automatic secret rotation
 - **JWT authentication** — bcrypt-hashed passwords, bearer token auth, rate-limited
-- **IP allowlisting** — restrict API access to specific IPs
 - **Filesystem access control** — whitelist-based directory permissions
-- **Rate limiting** — per-endpoint rate limits (default 100/min, auth endpoints 10/min)
+- **Rate limiting** — per-endpoint rate limits (default 150/min, auth endpoints 10/min)
 - **systemd integration** — runs as user services with auto-restart
 
 ## Architecture
@@ -48,7 +47,7 @@ sequenceDiagram
     participant VPS as VPS Relay
     participant Agent as Vela Agent (tunnel)
     participant API as Vela API Server
-    participant LLM as DashScope LLM
+    participant LLM as Fireworks AI LLM
     participant Desktop as Linux Desktop
 
     Phone->>VPS: POST /assistant/chat "How much storage?"
@@ -95,7 +94,7 @@ sequenceDiagram
 | **VPS Relay** | Routes requests via WebSocket, manages agent registration | Execute system operations, understand intent |
 | **Vela Agent (tunnel)** | Maintains WebSocket tunnel to VPS, forwards requests to local API server | Execute system operations, communicate with LLM |
 | **Vela API Server** | Executes system operations via routers, handles AI chat with LLM, enforces auth & safety | Connect to the VPS directly — the agent handles that |
-| **LLM (DashScope)** | Understands natural language, selects tools, summarizes results | Execute system calls — the API server handles that |
+| **LLM (Fireworks AI)** | Understands natural language, selects tools, summarizes results | Execute system calls — the API server handles that |
 | **Linux Desktop** | Runs the actual system (files, processes, audio, etc.) | Make decisions — it just follows OS calls |
 
 ## Quick Start
@@ -130,9 +129,11 @@ Most of these are typically pre-installed on a modern Linux desktop. Missing too
 > 💡 **Tip:** Run `which <command>` to check if a particular tool is already installed.
 > Missing tools won't crash the app — the corresponding endpoint will return an appropriate error.
 
-#### Optional Python Dependencies (for the assistant)
+#### Optional Dependencies
 
-- DashScope API key (for the LLM-powered assistant at `/assistant/chat`)
+- Fireworks AI API key (for the LLM-powered assistant at `/assistant/chat`)
+- Resend API key (for email alerts — CPU/memory spike alerts and daily summaries)
+- Spotify Developer credentials (for Spotify playback control)
 
 ### Development Setup
 
@@ -146,8 +147,9 @@ source .venv/bin/activate
 pip install -e .
 
 # Copy config and customize
-cp config.yaml.example config.yaml
-# Edit config.yaml with your settings
+cp .env.example .env
+# Edit .env with your settings
+# Create config.yaml (see Configuration section below)
 
 # Run
 vela
@@ -165,6 +167,7 @@ This will:
 - Prompt for credentials, VPS URL, agent ID
 - Generate a `config.yaml` and `.env`
 - Install `vela.service` and `vela-agent.service` as user systemd units
+- Register the agent with the VPS relay
 
 ## Agent Registration
 
@@ -225,6 +228,11 @@ The new secret is automatically persisted to `.env`.
 
 ## Configuration
 
+Vela uses two configuration sources:
+
+- **`config.yaml`** — server settings (host, port, secret key, feature flags, etc.)
+- **`.env`** — agent/credentials (VPS URL, agent secret, API keys, etc.)
+
 ### config.yaml
 
 ```yaml
@@ -236,11 +244,7 @@ username: admin
 password_hash: <bcrypt hash>
 log_level: INFO
 
-# Security
 allowed_origins: []
-allowed_ips:
-  - 127.0.0.1
-  - ::1
 allowed_base_dirs:
   - /home/youruser
 
@@ -268,13 +272,14 @@ feature_flags:
   media: true
   clipboard: true
 
-# DashScope assistant
-dashscope_api_url: https://dashscope-intl.aliyuncs.com/api/v1
-dashscope_api_key: <your-api-key>
-dashscope_model: qwen-plus
+# Fireworks AI assistant
+fireworks_api_url: https://api.fireworks.ai/inference/v1
+fireworks_api_key: <your-api-key>
+fireworks_model: accounts/fireworks/models/qwen3p7-plus
 assistant_system_prompt: "You are Vela..."
 assistant_action_pin: null
 assistant_action_timeout_seconds: 120
+assistant_enable_thinking: false
 ```
 
 ### Environment variables (.env)
@@ -288,6 +293,11 @@ See [.env.example](.env.example) for the full list. Key variables:
 | `AGENT_SECRET` | Agent authentication secret (auto-generated on first registration) |
 | `PUBLIC_ADDRESS` | Public address of this agent (optional, first registration) |
 | `METADATA` | JSON metadata for agent registration (optional) |
+| `FIREWORKS_API_KEY` | Fireworks AI API key for the LLM assistant |
+| `RESEND_API_KEY` | Resend API key for email alerts |
+| `RECIPIENT_EMAIL` | Email address for alert notifications |
+| `SPOTIFY_CLIENT_ID` | Spotify Developer client ID |
+| `SPOTIFY_CLIENT_SECRET` | Spotify Developer client secret |
 
 ## API Endpoints
 
@@ -315,21 +325,23 @@ See [.env.example](.env.example) for the full list. Key variables:
 | `/maintenance` | System maintenance tasks |
 | `/media` | Media playback control |
 | `/clipboard` | Clipboard read/write |
+| `/alerts` | Spike monitoring and email alerts |
+| `/spotify` | Spotify playback and search |
 
 ### Assistant
 
 - `POST /assistant/chat` — Natural language chat with LLM-powered tool calling
-- `GET /assistant/conversations` — List conversation history
-- `GET /assistant/conversations/{id}` — Get conversation details
+- `POST /assistant/stream` — Streaming (SSE) version of the chat endpoint
 
 ### Health
 
+- `GET /` — Root info (name, version, enabled modules)
 - `GET /health` — Service health check
 - `GET /ping` — Connectivity check
 
 ## Assistant (LLM Integration)
 
-Vela includes a DashScope-powered chat assistant at `/assistant/chat`. It uses Qwen models with tool-calling to map natural language to system operations.
+Vela includes a Fireworks AI-powered chat assistant at `/assistant/chat`. It uses Qwen models with tool-calling to map natural language to system operations.
 
 ```bash
 curl -X POST http://127.0.0.1:8765/assistant/chat \
@@ -342,14 +354,16 @@ The assistant:
 - Parses natural language into intent
 - Selects the appropriate system tool (filesystem, processes, etc.)
 - Returns a human-readable response with the result
+- Supports streaming responses via `/assistant/stream`
+- Requires PIN confirmation for destructive actions (configurable)
 
 ## Security
 
 - **JWT authentication** — all routes require a valid bearer token (except `/auth/token`)
-- **Rate limiting** — auth endpoints limited to 10 req/min
-- **IP allowlisting** — restrict to LAN IPs
+- **Rate limiting** — auth endpoints limited to 10 req/min, default 150/min
 - **Filesystem whitelist** — restrict directory access
 - **Destructive action confirmation** — file deletion, power operations require explicit action confirmation
+- **Optional PIN gate** — high-risk AI actions can require a PIN
 
 ## Development
 
@@ -358,39 +372,77 @@ The assistant:
 ```
 vela/
 ├── app/
+│   ├── __init__.py
 │   ├── main.py              # FastAPI application entry point
-│   ├── agent.py              # VPS registration & WebSocket tunnel agent
 │   ├── auth.py               # JWT authentication
-│   ├── config.py             # Configuration loading
 │   ├── dependencies.py       # FastAPI dependencies
-│   ├── errors.py             # Error response models
-│   ├── middleware.py          # Request logging, IP allowlisting
+│   ├── middleware.py          # Request logging
+│   ├── prompts.py            # Assistant system prompts
 │   ├── rate_limiter.py        # Rate limiting setup
-│   ├── routers/               # System operation routers
+│   ├── agent/
+│   │   ├── __init__.py
+│   │   ├── agent.py          # VPS registration & WebSocket tunnel agent entry point
+│   │   ├── helpers.py        # Agent connection helpers
+│   │   └── tunnel.py         # WebSocket tunnel implementation
+│   ├── db/
+│   │   ├── __init__.py
+│   │   ├── models.py         # Database models
+│   │   └── pending_actions.py # Pending action storage
+│   ├── domain/               # Domain models (schemas)
+│   │   ├── __init__.py
+│   │   ├── assistant.py
+│   │   ├── audio.py
+│   │   ├── ...
+│   │   └── system_info.py
+│   ├── routers/              # System operation routers
+│   │   ├── __init__.py
 │   │   ├── filesystem.py
 │   │   ├── audio.py
-│   │   ├── display.py
 │   │   ├── ...
-│   │   └── __init__.py
-│   └── prompts.py            # Assistant system prompts
+│   │   └── system_info.py
+│   ├── services/             # Business logic
+│   │   ├── __init__.py
+│   │   ├── filesystem.py
+│   │   ├── audio.py
+│   │   ├── ...
+│   │   └── system_info.py
+│   │   └── assistant/        # LLM assistant service
+│   │       ├── __init__.py
+│   │       ├── helpers.py
+│   │       ├── prompts.py
+│   │       ├── safety.py
+│   │       ├── stream.py
+│   │       └── tools.py
+│   └── utils/
+│       ├── __init__.py
+│       ├── config.py         # Configuration loading (pydantic-settings)
+│       ├── errors.py         # Error response models
+│       ├── input_header.py   # Input header helper
+│       ├── run_command.py    # Shell command execution
+│       └── spotify_client.py # Spotify API client
 ├── tests/                    # Test suite
-├── config.yaml               # Local configuration
+│   ├── routers/
+│   ├── services/
+│   └── db/
+├── .env.example              # Environment variable template
+├── config.yaml               # Local configuration (generated)
 ├── setup.sh                  # Setup script
-├── installer.py              # Package installer (vela-init)
-└── pyproject.toml            # Python package metadata
+├── pyproject.toml            # Python package metadata
+└── README.md
 ```
 
 ### Adding a Route
 
-1. Add a router file under `app/routers/`
-2. Export the router in `app/routers/__init__.py`
-3. Add `feature_flags` entry in `config.yaml` if needed
-4. Add tests under `tests/`
+1. Add a service file under `app/services/` for business logic (if needed)
+2. Add a router file under `app/routers/` with endpoint definitions
+3. Export the router in `app/routers/__init__.py`
+4. Add `feature_flags` entry in `config.yaml` if needed
+5. Add a domain model in `app/domain/` if new schemas are needed
+6. Add tests under `tests/`
 
 ## Running Tests
 
 ```bash
-cd tests
 python -m pytest
 ```
 

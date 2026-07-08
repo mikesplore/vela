@@ -16,8 +16,6 @@ from app.services.alerts import (
     send_daily_summary,
     get_system_stats_text,
     get_monitoring_status,
-    check_vnstat_installation,
-    get_vnstat_data,
     RECIPIENT_EMAIL,
     DEFAULT_CPU_THRESHOLD,
     DEFAULT_MEMORY_THRESHOLD,
@@ -92,30 +90,6 @@ def send_test_alert(current_user: str = Depends(get_current_user)):
     if result:
         return {"success": True, "message": f"Test email sent to {RECIPIENT_EMAIL}"}
     return {"success": False, "message": "Failed to send test email"}
-
-
-# ── vnstat endpoints (daily, monthly, hourly) ──────────────────────────────────
-
-@router.get("/vnstat")
-def vnstat_status(current_user: str = Depends(get_current_user)):
-    """Check if vnstat is installed and configured."""
-    return check_vnstat_installation()
-
-
-@router.get("/vnstat/data")
-def network_usage(
-    period: str = "day",
-    interface: str | None = None,
-    current_user: str = Depends(get_current_user),
-):
-    """
-    Get network usage from vnstat.
-    period: 'day' (today), 'month' (this month), 'hour' (current hour)
-    """
-    try:
-        return get_vnstat_data(period=period, interface=interface)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── On-demand system stats ────────────────────────────────────────────────────
