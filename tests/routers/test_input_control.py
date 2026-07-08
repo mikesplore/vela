@@ -1,6 +1,6 @@
 import pytest
-from auth import create_access_token
-from routers import input_control as input_control_module
+from app.auth import create_access_token
+from app.routers import input_control as input_control_module
 
 
 @pytest.mark.anyio

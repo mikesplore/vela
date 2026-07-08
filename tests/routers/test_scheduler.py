@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 
 import pytest
-from auth import create_access_token
-from routers import scheduler as scheduler_module
+from app.auth import create_access_token
+from app.routers import scheduler as scheduler_module
 
 
 class FakeJob:

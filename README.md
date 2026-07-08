@@ -76,14 +76,10 @@ sequenceDiagram
     VPS-->>Agent: {secret, ws_token, expires_at}
     Note right of Agent: Secret auto-saved to .env
 
-    Note over Agent,VPS: Subsequent reconnects
-    Agent->>VPS: POST /register {agent_id} + X-API-Key
+    Note over Agent,VPS: Subsequent reconnects (token refresh)
+    Agent->>VPS: POST /agents/{agent_id}/ws-token + X-Secret
     VPS-->>Agent: {ws_token, expires_at}
 
-    Note over Agent,VPS: Password change
-    Agent->>VPS: POST /register {agent_id, regenerate_secret: true} + X-API-Key
-    VPS-->>Agent: {secret, ws_token, expires_at}
-    Note right of Agent: New secret auto-saved to .env
 ```
 
 ### The role of each layer
@@ -135,39 +131,54 @@ Most of these are typically pre-installed on a modern Linux desktop. Missing too
 - Resend API key (for email alerts — CPU/memory spike alerts and daily summaries)
 - Spotify Developer credentials (for Spotify playback control)
 
-### Development Setup
+### Setup
 
 ```bash
 git clone https://github.com/mikesplore/vela.git
 cd vela
 
-# Create virtual environment and install
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-
-# Copy config and customize
-cp .env.example .env
-# Edit .env with your settings
-# Create config.yaml (see Configuration section below)
-
-# Run
-vela
-```
-
-OpenAPI docs available at `http://127.0.0.1:8765/docs`.
-
-### Production Setup
-
-```bash
+# Run the setup script — it will ask you a few questions
+# and generate everything automatically
 ./setup.sh
 ```
 
 This will:
 - Prompt for credentials, VPS URL, agent ID
-- Generate a `config.yaml` and `.env`
+- Install the Python package and create a virtual environment
+- Generate a `config.yaml` and `.env` with default values
+- Register the agent with the VPS relay (if reachable)
 - Install `vela.service` and `vela-agent.service` as user systemd units
-- Register the agent with the VPS relay
+
+> 💡 **VPS relay:** You can use the free relay at `vela.mikesplore.tech` or specify your own.
+
+### Post-Setup
+
+After running `setup.sh`, open the generated `.env` file and add your API keys:
+
+```bash
+nano .env
+```
+
+At minimum, set your **Fireworks AI API key** (required for the assistant):
+
+```
+FIREWORKS_API_KEY='your-actual-key-here'
+```
+
+If you want email alerts, also set:
+
+```
+RESEND_API_KEY='your-resend-key'
+RECIPIENT_EMAIL='your-email@example.com'
+```
+
+Then start the services:
+
+```bash
+vela-start
+```
+
+OpenAPI docs available at `http://127.0.0.1:8765/docs`.
 
 ## Agent Registration
 
@@ -194,37 +205,14 @@ curl -X POST http://<vps-url>:8000/register \
 
 The secret is automatically saved to `.env` and used for all subsequent connections. The `ws_token` is used to establish the WebSocket tunnel.
 
-### Re-registration (Normal Reconnect)
+### Token Refresh (Normal Reconnect)
 
-On subsequent startups, the agent already has an `AGENT_SECRET` and simply re-registers to get a fresh `ws_token`:
-
-```bash
-curl -X POST http://<vps-url>:8000/register \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <current-secret>" \
-  -d '{"agent_id": "my-agent"}'
-```
-
-### Password Change (Regenerate Secret)
-
-To rotate your agent secret (equivalent to changing your password):
+On startup, the agent uses its stored `AGENT_SECRET` to request a fresh WebSocket token from the dedicated token endpoint — it does not re-register:
 
 ```bash
-vela-agent --regenerate-secret
+curl -X POST http://<vps-url>:8000/agents/<agent-id>/ws-token \
+  -H "X-Secret: <current-secret>"
 ```
-
-Or via API:
-
-```bash
-curl -X POST http://<vps-url>:8000/register \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <current-secret>" \
-  -d '{"agent_id": "my-agent", "regenerate_secret": true}'
-
-# Response includes a new secret and ws_token
-```
-
-The new secret is automatically persisted to `.env`.
 
 ## Configuration
 

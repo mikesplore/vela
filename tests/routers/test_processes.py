@@ -3,8 +3,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
-from auth import create_access_token
-from routers import processes as processes_module
+from app.auth import create_access_token
+from app.routers import processes as processes_module
 
 
 class FakeProcess:

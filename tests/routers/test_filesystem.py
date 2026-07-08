@@ -1,8 +1,7 @@
 import json
-import zipfile
 
 import pytest
-from auth import create_access_token
+from app.auth import create_access_token
 
 
 @pytest.mark.anyio

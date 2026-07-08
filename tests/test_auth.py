@@ -1,10 +1,10 @@
 from datetime import timedelta
 
 import pytest
-from auth import create_access_token
+from app.auth import create_access_token
 from httpx import ASGITransport, AsyncClient
 
-from main import app
+from app.main import app
 
 
 @pytest.mark.anyio

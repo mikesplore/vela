@@ -1,7 +1,6 @@
 import pytest
-from auth import create_access_token
-from main import app
-from routers import monitoring as monitoring_module
+from app.auth import create_access_token
+from app.routers import monitoring as monitoring_module
 from starlette.testclient import TestClient
 
 

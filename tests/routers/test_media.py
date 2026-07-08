@@ -1,7 +1,7 @@
 import pytest
 
-from auth import create_access_token
-from routers import media as media_module
+from app.auth import create_access_token
+from app.routers import media as media_module
 
 
 @pytest.mark.anyio

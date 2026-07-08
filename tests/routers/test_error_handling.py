@@ -4,7 +4,7 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 from slowapi.errors import RateLimitExceeded
 
-from main import app
+from app.main import app
 
 
 @pytest.mark.asyncio
@@ -52,7 +52,7 @@ async def test_validation_error_format():
 async def test_rate_limit_error_format():
     """Test that rate limit errors return uniform error response."""
     # Verify the handler exists and is properly registered
-    from main import app, rate_limit_handler
+    from app.main import app, rate_limit_handler
 
     # Verify the handler is registered
     assert RateLimitExceeded in app.exception_handlers
@@ -94,7 +94,7 @@ async def test_internal_error_format():
 @pytest.mark.asyncio
 async def test_error_response_timestamp_format():
     """Test that timestamps are in proper ISO8601 format with Z suffix."""
-    from utils.errors import ErrorResponse
+    from app.utils.errors import ErrorResponse
     
     error = ErrorResponse.create(500, "Test error")
     

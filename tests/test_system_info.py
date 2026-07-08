@@ -1,7 +1,7 @@
 import pytest
 
-from auth import create_access_token
-from routers import system_info as system_info_module
+from app.auth import create_access_token
+from app.routers import system_info as system_info_module
 
 
 @pytest.mark.anyio

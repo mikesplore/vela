@@ -1,6 +1,6 @@
 import pytest
-from auth import create_access_token
-from routers import security as security_module
+from app.auth import create_access_token
+from app.routers import security as security_module
 
 
 @pytest.mark.anyio

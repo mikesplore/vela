@@ -1,6 +1,6 @@
 import pytest
-from auth import create_access_token
-from routers import maintenance as maintenance_module
+from app.auth import create_access_token
+from app.routers import maintenance as maintenance_module
 
 
 @pytest.mark.anyio
