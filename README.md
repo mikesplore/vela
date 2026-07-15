@@ -139,6 +139,8 @@ Most of these are typically pre-installed on a modern Linux desktop. Missing too
 
 ### Setup
 
+From source:
+
 ```bash
 git clone https://github.com/mikesplore/vela.git
 cd vela
@@ -146,6 +148,13 @@ cd vela
 # Run the setup script — it will ask you a few questions
 # and generate everything automatically
 ./setup.sh
+```
+
+If Vela is installed globally (for example via pip), run:
+
+```bash
+pip install mikesplore-vela
+vela --setup
 ```
 
 This will:
@@ -190,8 +199,11 @@ OpenAPI docs available at `http://127.0.0.1:8765/docs`.
 Common commands:
 
 ```bash
+vela --setup
 vela --start
 vela --stop
+vela --status
+vela --logs
 vela --pair
 vela-agent --start
 vela-agent --stop

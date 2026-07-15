@@ -23,6 +23,7 @@ from app.middleware import RequestLoggerMiddleware
 from app.rate_limiter import limiter, limit_route
 from app.routers import all_routers
 from app.routers import scheduler as scheduler_module
+from app.setup_cli import run_setup
 
 API_NAME = "Vela"
 API_VERSION = "1.0.0"
@@ -242,13 +243,20 @@ async def ping(request: Request) -> dict[str, bool]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Vela CLI")
+    parser.add_argument("--setup", action="store_true", help="Run interactive setup bootstrap")
     parser.add_argument("--start", action="store_true", help="Start vela + vela-agent user services")
     parser.add_argument("--stop", action="store_true", help="Stop vela + vela-agent user services")
     parser.add_argument("--enable", action="store_true", help="Enable and start vela + vela-agent user services")
+    parser.add_argument("--status", action="store_true", help="Show vela service status")
+    parser.add_argument("--logs", action="store_true", help="Tail vela service logs")
     parser.add_argument("--pair", action="store_true", help="Force browser pairing flow for the agent")
     args = parser.parse_args()
 
     services = ["vela.service", "vela-agent.service"]
+
+    if args.setup:
+        run_setup()
+        return
 
     if args.start:
         subprocess.run(["systemctl", "--user", "start", *services], check=True)
@@ -263,6 +271,25 @@ def main() -> None:
     if args.enable:
         subprocess.run(["systemctl", "--user", "enable", "--now", *services], check=True)
         print("Enabled and started vela services.")
+        return
+
+    if args.status:
+        for service in services:
+            proc = subprocess.run(
+                ["systemctl", "--user", "is-active", service],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            state = (proc.stdout or "").strip() or "unknown"
+            print(f"{service}: {state}")
+        return
+
+    if args.logs:
+        subprocess.run(
+            ["journalctl", "--user", "-u", "vela.service", "-u", "vela-agent.service", "-f"],
+            check=True,
+        )
         return
 
     if args.pair:

@@ -506,7 +506,7 @@ check_service "$SERVICE_NAME"
 check_service "$AGENT_SERVICE_NAME"
 
 # ---------------------------------------------------------------------------
-# Aliases for service management
+# Service management help
 # ---------------------------------------------------------------------------
 
 section "Service management commands"
@@ -514,10 +514,12 @@ echo
 info "  vela --start        — start both services"
 info "  vela --stop         — stop both services"
 info "  vela --enable       — enable+start both services"
+info "  vela --status       — show service activity state"
+info "  vela --logs         — tail vela + agent logs"
 info "  vela --pair         — force browser pairing flow"
+info "  vela --setup        — rerun interactive setup"
 info "  vela-agent --start  — start agent service only"
 info "  vela-agent --stop   — stop agent service only"
-info "  journalctl --user -u vela-agent.service -f  — tail agent logs"
 echo
 
 # ---------------------------------------------------------------------------
