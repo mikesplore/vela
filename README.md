@@ -9,7 +9,7 @@ Vela is a FastAPI-based remote PC agent for Linux. It exposes your desktop's cap
 - **Full system control API** — filesystem, audio, display, power, notifications, network, input control, system info, monitoring, processes, security, scheduler, maintenance, media, clipboard, Spotify, alerts
 - **LLM-powered assistant** — natural language chat interface via Fireworks AI with tool-calling
 - **WebSocket tunnel** — connect to a remote VPS relay to access your PC from anywhere
-- **Agent registration** — one-time registration with a VPS; automatic secret rotation
+- **Agent onboarding** — browser-based QR pairing with code/PIN fallback
 - **JWT authentication** — bcrypt-hashed passwords, bearer token auth, rate-limited
 - **Filesystem access control** — whitelist-based directory permissions
 - **Rate limiting** — per-endpoint rate limits (default 150/min, auth endpoints 10/min)
@@ -68,16 +68,22 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
+    participant App as Android App
+    participant Browser as Local Pairing UI
     participant Agent as Vela Agent (tunnel)
     participant VPS as VPS Relay
 
-    Note over Agent,VPS: First-time registration (no secret yet)
-    Agent->>VPS: POST /register {agent_id, public_address, metadata}
-    VPS-->>Agent: {secret, ws_token, expires_at}
-    Note right of Agent: Secret auto-saved to .env
+    Agent->>VPS: POST /agents/register/start
+    VPS-->>Agent: {agent_id, pairing_code, pairing_pin?, ttl}
+    Agent->>Browser: Show QR + code/PIN
 
-    Note over Agent,VPS: Subsequent reconnects (token refresh)
-    Agent->>VPS: POST /agents/{agent_id}/ws-token + X-Secret
+    App->>VPS: POST /pair/complete {pairing_code, pairing_pin}
+    VPS-->>Agent: status=PAIRED + activation_token
+    Agent->>VPS: POST /agents/register/activate
+    VPS-->>Agent: {relay_secret, credential, scopes}
+
+    Note over Agent,VPS: Normal reconnects
+    Agent->>VPS: POST /agents/{agent_id}/ws-token + X-Secret(relay_secret)
     VPS-->>Agent: {ws_token, expires_at}
 
 ```
@@ -146,7 +152,8 @@ This will:
 - Prompt for credentials, VPS URL, agent ID
 - Install the Python package and create a virtual environment
 - Generate a `config.yaml` and `.env` with default values
-- Register the agent with the VPS relay (if reachable)
+- Verify the VPS relay is reachable
+- Launch browser pairing (`vela --pair`) unless an existing credential is reused
 - Install `vela.service` and `vela-agent.service` as user systemd units
 
 > 💡 **VPS relay:** You can use the free relay at `vela.mikesplore.tech` or specify your own.
@@ -172,54 +179,85 @@ RESEND_API_KEY='your-resend-key'
 RECIPIENT_EMAIL='your-email@example.com'
 ```
 
-Then start the services:
+Then manage services with:
 
 ```bash
-vela-start
+vela --enable
 ```
 
 OpenAPI docs available at `http://127.0.0.1:8765/docs`.
 
-## Agent Registration
-
-Vela agents authenticate to the VPS relay using a secret token. Registration follows a two-step flow:
-
-### First-Time Registration
-
-When you run `vela-agent` for the first time with no `AGENT_SECRET`, it performs a first-time registration:
+Common commands:
 
 ```bash
-# The agent sends a registration request with the agent_id
-curl -X POST http://<vps-url>:8000/register \
-  -H "Content-Type: application/json" \
-  -d '{"agent_id": "my-agent", "public_address": "http://10.0.0.1:8080", "metadata": {"location": "home", "version": "1.0.0"}}'
-
-# Response includes an agent secret that authenticates this agent going forward:
-{
-  "agent": { ... },
-  "secret": "ubiuctIGyF_-d7hlIOcrNFBMR5x1CW3Mq-s7Nv5XkKA",
-  "ws_token": "LY6ggkkI3QU1G9_SeZIt4zrdHiuK6AOhi7kEF6iifis",
-  "expires_at": "2026-06-22T14:10:38Z"
-}
+vela --start
+vela --stop
+vela --pair
+vela-agent --start
+vela-agent --stop
 ```
 
-The secret is automatically saved to `.env` and used for all subsequent connections. The `ws_token` is used to establish the WebSocket tunnel.
+## Agent Registration
 
-### Token Refresh (Normal Reconnect)
+Vela uses pairing-based onboarding (`2026-07-pairing-v1`). The agent always initiates outbound requests; VPS never initiates to the device.
 
-On startup, the agent uses its stored `AGENT_SECRET` to request a fresh WebSocket token from the dedicated token endpoint — it does not re-register:
+### 1) Start pairing session
+
+Agent calls `POST /agents/register/start`:
+
+```bash
+curl -X POST http://<vps-url>:8000/agents/register/start \
+  -H "Content-Type: application/json" \
+  -d '{"agent_name":"my-agent","device_info":{"device_fingerprint":"host:user"}}'
+```
+
+VPS returns `agent_id`, `pairing_code`, optional `pairing_pin`, `pairing_expires_in`, and `pairing_qr_payload`.  
+The agent opens a local browser page with a QR and manual code/PIN fallback.
+
+### 2) Android completes pair
+
+Android app sends:
+
+```bash
+curl -X POST http://<vps-url>:8000/pair/complete \
+  -H "Content-Type: application/json" \
+  -d '{"pairing_code":"<code>","pairing_pin":"<pin>","agent_label":"My Phone"}'
+```
+
+Agent polls `GET /agents/register/status?agent_id=...` until it gets `PAIRED` + `activation_token`.
+
+### 3) Agent activates
+
+```bash
+curl -X POST http://<vps-url>:8000/agents/register/activate \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"<agent-id>","activation_token":"<one-time-token>"}'
+```
+
+VPS returns `relay_secret`, `credential`, and scopes.  
+Agent persists:
+
+- `RELAY_SECRET` (primary secret for VPS auth)
+- `AGENT_CREDENTIAL` (returned credential)
+- `AGENT_ID`
+
+### 4) Runtime reconnect
+
+On normal reconnect:
 
 ```bash
 curl -X POST http://<vps-url>:8000/agents/<agent-id>/ws-token \
-  -H "X-Secret: <current-secret>"
+  -H "X-Secret: <relay-secret>"
 ```
+
+Then agent connects `ws(s)://<vps>/tunnel?agent_id=<id>&token=<ws_token>`.
 
 ## Configuration
 
 Vela uses two configuration sources:
 
 - **`config.yaml`** — server settings (host, port, secret key, feature flags, etc.)
-- **`.env`** — agent/credentials (VPS URL, agent secret, API keys, etc.)
+- **`.env`** — agent credentials/secrets (`RELAY_SECRET`, `AGENT_CREDENTIAL`, API keys, etc.)
 
 ### config.yaml
 
@@ -277,8 +315,10 @@ See [.env.example](.env.example) for the full list. Key variables:
 | Variable | Description |
 |----------|-------------|
 | `VPS_URL` | VPS relay URL (e.g. `http://your-vps:8000`) |
-| `AGENT_ID` | Unique agent identifier |
-| `AGENT_SECRET` | Agent authentication secret (auto-generated on first registration) |
+| `AGENT_ID` | VPS-issued agent identifier after pairing |
+| `RELAY_SECRET` | Primary long-lived secret used as `X-Secret` for relay auth |
+| `AGENT_CREDENTIAL` | Agent activation credential returned by `/agents/register/activate` |
+| `AGENT_SECRET` | Backward-compatible alias (currently mirrors `RELAY_SECRET`) |
 | `PUBLIC_ADDRESS` | Public address of this agent (optional, first registration) |
 | `METADATA` | JSON metadata for agent registration (optional) |
 | `FIREWORKS_API_KEY` | Fireworks AI API key for the LLM assistant |
@@ -369,8 +409,9 @@ vela/
 │   ├── rate_limiter.py        # Rate limiting setup
 │   ├── agent/
 │   │   ├── __init__.py
-│   │   ├── agent.py          # VPS registration & WebSocket tunnel agent entry point
-│   │   ├── helpers.py        # Agent connection helpers
+│   │   ├── agent.py          # Agent CLI entry point
+│   │   ├── helpers.py        # Agent onboarding and tunnel orchestration
+│   │   ├── pairing_ui.py     # Local browser pairing page template
 │   │   └── tunnel.py         # WebSocket tunnel implementation
 │   ├── db/
 │   │   ├── __init__.py
