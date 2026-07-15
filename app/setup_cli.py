@@ -199,6 +199,19 @@ WantedBy=default.target
     return vela_service, agent_service
 
 
+def _restart_or_start_user_service(service: str) -> None:
+    active = subprocess.run(
+        ["systemctl", "--user", "is-active", service],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if (active.stdout or "").strip() == "active":
+        subprocess.run(["systemctl", "--user", "restart", service], check=True)
+    else:
+        subprocess.run(["systemctl", "--user", "start", service], check=True)
+
+
 def run_setup() -> None:
     target_dir = Path.cwd()
     print("Vela setup")
@@ -248,14 +261,14 @@ def run_setup() -> None:
 
     if existing_secret:
         try:
-            subprocess.run(["systemctl", "--user", "start", "vela-agent.service"], check=True)
+            _restart_or_start_user_service("vela-agent.service")
         except Exception as exc:
             print(f"could not start agent service: {exc}")
     else:
         # Launch pairing immediately for first-time setup.
         subprocess.run([sys.executable, "-m", "app.main", "--pair"], check=False)
         try:
-            subprocess.run(["systemctl", "--user", "start", "vela-agent.service"], check=True)
+            _restart_or_start_user_service("vela-agent.service")
         except Exception as exc:
             print(f"could not start agent service: {exc}")
 

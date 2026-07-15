@@ -459,19 +459,28 @@ systemctl --user enable --now "$SERVICE_NAME"
 systemctl --user enable "$AGENT_SERVICE_NAME"
 info "API service enabled and started."
 
+restart_or_start_service() {
+  local service="$1"
+  if systemctl --user is-active --quiet "$service"; then
+    systemctl --user restart "$service"
+  else
+    systemctl --user start "$service"
+  fi
+}
+
 if [[ -n "$AGENT_SECRET" ]]; then
-  systemctl --user start "$AGENT_SERVICE_NAME"
-  info "Agent service started using existing credential."
+  restart_or_start_service "$AGENT_SERVICE_NAME"
+  info "Agent service (re)started using existing credential."
 else
   section "Agent pairing"
   info "Launching browser pairing flow now..."
   if "$VENV_DIR/bin/vela" --pair; then
-    systemctl --user start "$AGENT_SERVICE_NAME"
-    info "Agent paired and service started."
+    restart_or_start_service "$AGENT_SERVICE_NAME"
+    info "Agent paired and service (re)started."
   else
     warn "Pairing did not complete. You can retry with: $VENV_DIR/bin/vela --pair"
     warn "Starting agent service anyway so it can retry in background."
-    systemctl --user start "$AGENT_SERVICE_NAME" || true
+    restart_or_start_service "$AGENT_SERVICE_NAME" || true
   fi
 fi
 
