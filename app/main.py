@@ -249,7 +249,8 @@ def main() -> None:
     parser.add_argument("--enable", action="store_true", help="Enable and start vela + vela-agent user services")
     parser.add_argument("--status", action="store_true", help="Show vela service status")
     parser.add_argument("--logs", action="store_true", help="Tail vela service logs")
-    parser.add_argument("--pair", action="store_true", help="Force browser pairing flow for the agent")
+    parser.add_argument("--pair", action="store_true", help="Run pairing only if agent is not paired")
+    parser.add_argument("--re-pair", action="store_true", help="Force fresh browser pairing and rotate secret")
     args = parser.parse_args()
 
     services = ["vela.service", "vela-agent.service"]
@@ -294,10 +295,19 @@ def main() -> None:
 
     if args.pair:
         try:
-            ensure_agent_registration(force=True)
-            print("Pairing completed successfully.")
+            ensure_agent_registration(force=False)
+            print("Pairing check completed.")
         except Exception as exc:
             print(f"Pairing failed: {exc}", file=sys.stderr)
+            raise
+        return
+
+    if args.re_pair:
+        try:
+            ensure_agent_registration(force=True)
+            print("Forced re-pair completed successfully.")
+        except Exception as exc:
+            print(f"Forced re-pair failed: {exc}", file=sys.stderr)
             raise
         return
 

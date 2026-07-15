@@ -21,7 +21,12 @@ def main() -> None:
     parser.add_argument(
         "--pair",
         action="store_true",
-        help="Force browser pairing flow and persist a new credential",
+        help="Run pairing only if agent is not paired",
+    )
+    parser.add_argument(
+        "--re-pair",
+        action="store_true",
+        help="Force fresh browser pairing flow and rotate credential",
     )
     parser.add_argument(
         "--regenerate-secret",
@@ -42,8 +47,13 @@ def main() -> None:
         return
 
     if args.pair:
+        ensure_agent_registration(force=False)
+        print("Pairing check completed.")
+        return
+
+    if args.re_pair:
         ensure_agent_registration(force=True)
-        print("Pairing completed successfully.")
+        print("Forced re-pair completed successfully.")
         return
 
     if args.regenerate_secret:

@@ -532,7 +532,9 @@ async def start_agent_loop() -> None:
         raise RuntimeError("VPS_URL must be set before starting vela-agent")
 
     if not config.relay_secret:
-        await asyncio.to_thread(ensure_agent_registration)
+        raise RuntimeError(
+            "Agent is not paired yet. Run `vela --pair` (or `vela --setup`) to complete pairing."
+        )
 
     backoff = 5
     max_backoff = 60

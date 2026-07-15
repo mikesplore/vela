@@ -205,6 +205,7 @@ vela --stop
 vela --status
 vela --logs
 vela --pair
+vela --re-pair
 vela-agent --start
 vela-agent --stop
 ```
