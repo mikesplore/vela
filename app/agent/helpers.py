@@ -319,8 +319,11 @@ def _start_pairing_browser_ui(
     expires_in: int,
     qr_payload: str | None,
 ):
+    pair_complete_url = f"{vps_url.rstrip('/')}/pair/complete"
     qr_scan_payload = json.dumps(
         {
+            "pair_url": pair_complete_url,
+            "vps_url": vps_url,
             "pairing_code": pairing_code,
             "pairing_pin": pairing_pin,
         },
@@ -329,6 +332,8 @@ def _start_pairing_browser_ui(
     if not pairing_pin:
         qr_scan_payload = json.dumps(
             {
+                "pair_url": pair_complete_url,
+                "vps_url": vps_url,
                 "pairing_code": pairing_code,
             },
             separators=(",", ":"),
