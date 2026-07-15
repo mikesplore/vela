@@ -28,6 +28,7 @@ dependencies = [
   "python-dotenv>=1.0.0",
   "websockets",
   "requests",
+  "spotipy>=2.24.0",
 ]
 
 [project.scripts]
