@@ -1,6 +1,9 @@
 import asyncio
+import argparse
 import logging
 import os
+import subprocess
+import sys
 import time
 from contextlib import asynccontextmanager
 from typing import List
@@ -14,7 +17,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.auth import router as auth_router
 from app.utils.config import Config
 from app.dependencies import get_current_user
-from app.agent.helpers import start_agent_loop
+from app.agent.helpers import ensure_agent_registration, start_agent_loop
 from app.utils.errors import ErrorResponse
 from app.middleware import RequestLoggerMiddleware
 from app.rate_limiter import limiter, limit_route
@@ -238,6 +241,39 @@ async def ping(request: Request) -> dict[str, bool]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Vela CLI")
+    parser.add_argument("--start", action="store_true", help="Start vela + vela-agent user services")
+    parser.add_argument("--stop", action="store_true", help="Stop vela + vela-agent user services")
+    parser.add_argument("--enable", action="store_true", help="Enable and start vela + vela-agent user services")
+    parser.add_argument("--pair", action="store_true", help="Force browser pairing flow for the agent")
+    args = parser.parse_args()
+
+    services = ["vela.service", "vela-agent.service"]
+
+    if args.start:
+        subprocess.run(["systemctl", "--user", "start", *services], check=True)
+        print("Started vela services.")
+        return
+
+    if args.stop:
+        subprocess.run(["systemctl", "--user", "stop", *services], check=True)
+        print("Stopped vela services.")
+        return
+
+    if args.enable:
+        subprocess.run(["systemctl", "--user", "enable", "--now", *services], check=True)
+        print("Enabled and started vela services.")
+        return
+
+    if args.pair:
+        try:
+            ensure_agent_registration(force=True)
+            print("Pairing completed successfully.")
+        except Exception as exc:
+            print(f"Pairing failed: {exc}", file=sys.stderr)
+            raise
+        return
+
     uvicorn.run(
         "app.main:app",
         host=config.host,

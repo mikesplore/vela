@@ -1,9 +1,13 @@
 import asyncio
 import getpass
+import platform
 import os
 import socket
+import threading
 import time
+import webbrowser
 from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlencode, urlparse, urlunparse
 
 from dotenv import set_key
@@ -11,12 +15,27 @@ import requests
 import json
 
 from app.agent.tunnel import tunnel
+from app.agent.pairing_ui import render_pairing_page
 
 from app.utils.config import Config
 config = Config()
 
 _local_token: str | None = None
 _local_token_expires = datetime.min.replace(tzinfo=timezone.utc)
+PAIRING_STATUS_POLL_INTERVAL = 3
+PAIRING_STATUS_TIMEOUT = 600
+
+
+class PairingExpiredError(RuntimeError):
+    pass
+
+
+class PairingRevokedError(RuntimeError):
+    pass
+
+
+class ActivationTokenInvalidError(RuntimeError):
+    pass
 
 
 def parse_metadata() -> dict | None:
@@ -139,82 +158,334 @@ async def wait_for_local_service(timeout: int = 60):
     return False
 
 
-def register():
-    """Register with the VPS relay server.
-    
-    Handles first-time registration (stores agent_id and secret) 
-    and re-registration for token refresh.
-    
-    Returns ws_token from response.
-    """
-    vps_url = _normalise_vps_url(_require_env("VPS_URL"))
-    agent_id = config.agent_id
+def _build_device_info() -> dict:
+    fingerprint = os.getenv("DEVICE_FINGERPRINT", "").strip()
+    if not fingerprint:
+        host = socket.gethostname() or "unknown-host"
+        user = getpass.getuser() or "unknown-user"
+        fingerprint = f"{host}:{user}"
 
-    # Construct the URL for this specific agent
-    url = f"{vps_url.rstrip('/')}/register"
-
-    # Build the registration payload matching the new VPS API
-    payload = {
-        "agent_id": agent_id,
+    return {
+        "hostname": socket.gethostname(),
+        "platform": platform.platform(),
+        "device_fingerprint": fingerprint,
     }
 
-    regenerate = os.getenv("REGENERATE_SECRET", "").lower() in ("1", "true", "yes")
 
-    if config.agent_secret and regenerate:
-        # Password change: re-register with a new secret
-        payload["regenerate_secret"] = "true"
-        print(f"Re-registering agent '{agent_id}' to regenerate secret")
-    elif not config.agent_secret:
-        # First-time registration: include public_address and metadata
-        if config.public_address:
-            payload["public_address"] = config.public_address
-        metadata = parse_metadata()
-        if metadata:
-            payload["metadata"] = metadata
-        print(f"First-time registration of agent '{agent_id}'")
-    else:
-        # Normal re-registration: just get a fresh ws_token
-        print(f"Re-registering agent '{agent_id}' for a fresh connection token")
+def _register_start(existing_agent_id: str | None = None) -> tuple[str, str, str | None, int, str | None]:
+    vps_url = _normalise_vps_url(_require_env("VPS_URL"))
+    url = f"{vps_url.rstrip('/')}/agents/register/start"
 
-    print(f"Registration payload: {payload}")
+    configured_agent_id = (config.agent_id or "").strip()
+    default_agent_name = configured_agent_id if configured_agent_id and not configured_agent_id.startswith("agt_") else socket.gethostname()
+    payload = {
+        "agent_name": os.getenv("AGENT_NAME", "").strip() or default_agent_name,
+        "device_info": _build_device_info(),
+    }
+    tenant_hint = os.getenv("TENANT_HINT", "").strip()
+    if tenant_hint:
+        payload["tenant_hint"] = tenant_hint
+    repair_agent_id = existing_agent_id or os.getenv("PAIRING_AGENT_ID", "").strip()
+    if repair_agent_id:
+        payload["agent_id"] = repair_agent_id
+    elif configured_agent_id.startswith("agt_"):
+        # If .env already stores a VPS-issued id, treat this as a repair flow.
+        payload["agent_id"] = configured_agent_id
 
-    # Only send X-API-Key header if we have a secret (for authenticated re-registration)
-    headers = {}
-    if config.agent_secret:
-        headers["X-API-Key"] = config.agent_secret
+    resp = requests.post(url, json=payload, timeout=config.local_service_timeout)
+    print(f"VPS register/start status: {resp.status_code}")
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"register/start failed: {resp.status_code} {resp.text}")
 
-    resp = requests.post(
-        url,
-        json=payload,
-        headers=headers,
+    data = resp.json()
+    agent_id = data.get("agent_id")
+    pairing_code = data.get("pairing_code")
+    pairing_pin = data.get("pairing_pin")
+    pairing_expires_in = int(data.get("pairing_expires_in", 0))
+
+    if not agent_id or not pairing_code:
+        raise RuntimeError("register/start response missing agent_id or pairing_code")
+    if pairing_expires_in <= 0:
+        raise RuntimeError("register/start returned invalid pairing_expires_in")
+
+    qr_payload = data.get("pairing_qr_payload")
+    if qr_payload:
+        print(f"Pairing QR payload: {qr_payload}")
+
+    return agent_id, pairing_code, pairing_pin, pairing_expires_in, qr_payload
+
+
+def _fetch_pairing_status(agent_id: str) -> tuple[str | None, str | None]:
+    vps_url = _normalise_vps_url(_require_env("VPS_URL"))
+    status_url = f"{vps_url.rstrip('/')}/agents/register/status"
+    resp = requests.get(
+        status_url,
+        params={"agent_id": agent_id},
         timeout=config.local_service_timeout,
     )
+    if resp.status_code != 200:
+        raise RuntimeError(f"register/status failed: {resp.status_code} {resp.text}")
+    data = resp.json()
+    return data.get("status"), data.get("activation_token")
 
-    print(f"VPS register status: {resp.status_code}")
 
-    if resp.status_code in (200, 201):
-        data = resp.json()
+def _wait_for_pairing(agent_id: str, on_status_update=None) -> str:
 
-        # Store agent_id in .env if not present (defensive)
-        if not config.agent_id and data.get("agent", {}).get("agent_id"):
+    timeout_seconds = int(os.getenv("PAIRING_STATUS_TIMEOUT", str(PAIRING_STATUS_TIMEOUT)))
+    poll_interval = int(os.getenv("PAIRING_STATUS_POLL_INTERVAL", str(PAIRING_STATUS_POLL_INTERVAL)))
+    started_at = time.time()
+    last_status = None
+
+    while time.time() - started_at < timeout_seconds:
+        status, activation_token = _fetch_pairing_status(agent_id)
+        if status != last_status:
+            print(f"Pairing status for '{agent_id}': {status}")
+            if on_status_update:
+                on_status_update(status)
+            last_status = status
+
+        if status == "PAIRED":
+            if not activation_token:
+                raise RuntimeError("PAIRED status missing activation_token")
+            return activation_token
+
+        if status == "EXPIRED":
+            raise PairingExpiredError("Pairing code expired; requesting a fresh session")
+
+        if status == "REVOKED":
+            raise PairingRevokedError("Pairing has been revoked; manual re-pair is required")
+
+        time.sleep(max(1, poll_interval))
+
+    raise TimeoutError(f"Timed out waiting for pairing after {timeout_seconds}s")
+
+
+def _activate_registration(agent_id: str, activation_token: str) -> tuple[str, str | None]:
+    vps_url = _normalise_vps_url(_require_env("VPS_URL"))
+    activate_url = f"{vps_url.rstrip('/')}/agents/register/activate"
+    payload = {
+        "agent_id": agent_id,
+        "activation_token": activation_token,
+    }
+    resp = requests.post(activate_url, json=payload, timeout=config.local_service_timeout)
+    print(f"VPS register/activate status: {resp.status_code}")
+    try:
+        error_data = resp.json() if resp.status_code != 200 else {}
+    except Exception:
+        error_data = {}
+    if resp.status_code != 200:
+        if resp.status_code == 400 and error_data.get("message") == "invalid_activation_token":
+            raise ActivationTokenInvalidError("register/activate failed: invalid_activation_token")
+        if resp.status_code == 409 and error_data.get("message") == "secret_already_delivered":
+            raise RuntimeError("register/activate failed: secret_already_delivered")
+        raise RuntimeError(f"register/activate failed: {resp.status_code} {resp.text}")
+
+    data = resp.json()
+    credential = data.get("credential")
+    if not credential:
+        raise RuntimeError("register/activate response missing credential")
+    return credential, data.get("relay_secret")
+
+
+def _persist_agent_credential(agent_id: str, credential: str, relay_secret: str | None = None) -> None:
+    if not relay_secret:
+        raise RuntimeError("register/activate response missing relay_secret")
+
+    try:
+        set_key(config.dotenv_path, "AGENT_ID", agent_id)
+        # AGENT_SECRET is kept as a backwards-compatible alias for relay_secret.
+        set_key(config.dotenv_path, "AGENT_SECRET", relay_secret)
+        set_key(config.dotenv_path, "AGENT_CREDENTIAL", credential)
+        set_key(config.dotenv_path, "RELAY_SECRET", relay_secret)
+        print(f"Persisted AGENT_ID, RELAY_SECRET, and AGENT_CREDENTIAL to {config.dotenv_path}")
+    except Exception as env_exc:
+        print(f"Failed to persist AGENT credential to .env: {env_exc}")
+
+    config.agent_id = agent_id
+    config.agent_secret = credential
+    config.relay_secret = relay_secret
+
+
+def _pairing_browser_enabled() -> bool:
+    raw = os.getenv("PAIRING_BROWSER_UI", "true").strip().lower()
+    return raw not in {"0", "false", "no"}
+
+
+def _start_pairing_browser_ui(
+    vps_url: str,
+    agent_id: str,
+    pairing_code: str,
+    pairing_pin: str | None,
+    expires_in: int,
+    qr_payload: str | None,
+):
+    qr_scan_payload = json.dumps(
+        {
+            "pairing_code": pairing_code,
+            "pairing_pin": pairing_pin,
+        },
+        separators=(",", ":"),
+    )
+    if not pairing_pin:
+        qr_scan_payload = json.dumps(
+            {
+                "pairing_code": pairing_code,
+            },
+            separators=(",", ":"),
+        )
+
+    state = {
+        "status": "AWAITING_PAIR",
+        "agent_id": agent_id,
+        "pairing_code": pairing_code,
+        "pairing_pin": pairing_pin,
+        "pairing_expires_in": expires_in,
+        "qr_payload": qr_scan_payload,
+        "vps_url": vps_url,
+        "started_at_epoch": int(time.time()),
+        "updated_at_epoch": int(time.time()),
+    }
+
+    class PairingHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path in {"/", "/index.html"}:
+                page = render_pairing_page(state)
+                body = page.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            if self.path in {"/status", "/state"}:
+                payload = json.dumps(state).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), PairingHandler)
+    host, port = server.server_address
+    url = f"http://{host}:{port}"
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def update_status(new_status: str) -> None:
+        state["status"] = new_status
+        state["updated_at_epoch"] = int(time.time())
+
+    def stop() -> None:
+        try:
+            server.shutdown()
+            server.server_close()
+        except Exception:
+            pass
+
+    return url, update_status, stop
+
+
+def reset_agent_credential() -> None:
+    """Clear persisted agent credential to force re-pairing."""
+    try:
+        set_key(config.dotenv_path, "AGENT_SECRET", "")
+        set_key(config.dotenv_path, "AGENT_CREDENTIAL", "")
+        set_key(config.dotenv_path, "RELAY_SECRET", "")
+    except Exception as env_exc:
+        print(f"Failed to clear agent credential in .env: {env_exc}")
+    config.agent_secret = ""
+    config.relay_secret = ""
+
+
+def ensure_agent_registration(force: bool = False) -> None:
+    if config.relay_secret and not force:
+        return
+    if force:
+        reset_agent_credential()
+
+    vps_url = _normalise_vps_url(_require_env("VPS_URL"))
+    stable_agent_id = config.agent_id if (config.agent_id or "").startswith("agt_") else None
+
+    while True:
+        agent_id, pairing_code, pairing_pin, expires_in, qr_payload = _register_start(existing_agent_id=stable_agent_id)
+        stable_agent_id = agent_id
+
+        print("")
+        print("=== Agent pairing required ===")
+        print("Open the Android app and complete pairing with:")
+        print(f"  VPS URL: {vps_url}")
+        print(f"  Agent ID: {agent_id}")
+        print(f"  Pairing Code: {pairing_code}")
+        if pairing_pin:
+            print(f"  Pairing PIN: {pairing_pin}")
+        else:
+            print("  Pairing PIN: not required by this VPS build")
+        print(f"  Expires In: {expires_in}s")
+        if qr_payload:
+            print(f"  QR Payload: {qr_payload}")
+        print("==============================")
+        print("")
+
+        on_status_update = None
+        stop_ui = None
+        if _pairing_browser_enabled():
             try:
-                set_key(config.dotenv_path, "AGENT_ID", data["agent"]["agent_id"])
-                print(f"Persisted AGENT_ID to {config.dotenv_path}")
-            except Exception as env_exc:
-                print(f"Failed to persist AGENT_ID to .env: {env_exc}")
+                ui_url, on_status_update, stop_ui = _start_pairing_browser_ui(
+                    vps_url=vps_url,
+                    agent_id=agent_id,
+                    pairing_code=pairing_code,
+                    pairing_pin=pairing_pin,
+                    expires_in=expires_in,
+                    qr_payload=qr_payload,
+                )
+                print(f"Pairing page: {ui_url}")
+                webbrowser.open(ui_url)
+            except Exception as ui_exc:
+                print(f"Could not start pairing browser UI: {ui_exc}")
 
-        # If the server returned a new secret, persist it to .env
-        new_secret = data.get("secret")
-        if new_secret:
+        try:
+            activation_token = _wait_for_pairing(agent_id, on_status_update=on_status_update)
             try:
-                set_key(config.dotenv_path, "AGENT_SECRET", new_secret)
-                print(f"Persisted new AGENT_SECRET to {config.dotenv_path}")
-            except Exception as env_exc:
-                print(f"Failed to persist AGENT_SECRET to .env: {env_exc}")
+                credential, relay_secret = _activate_registration(agent_id, activation_token)
+            except ActivationTokenInvalidError:
+                # Contract: re-check status once; if still paired with token retry once.
+                status, latest_activation_token = _fetch_pairing_status(agent_id)
+                if status == "PAIRED" and latest_activation_token:
+                    credential, relay_secret = _activate_registration(agent_id, latest_activation_token)
+                else:
+                    print("Activation token invalid and no replacement token available; restarting pairing")
+                    continue
 
-        return data.get("ws_token")
+            _persist_agent_credential(agent_id, credential, relay_secret=relay_secret)
+            if on_status_update:
+                on_status_update("ACTIVE")
+            # Keep the page alive briefly so the user sees success.
+            time.sleep(2)
+            print(f"Agent '{agent_id}' paired and activated successfully.")
+            return
+        except PairingExpiredError:
+            print("Pairing session expired; requesting a new pairing code")
+            continue
+        except PairingRevokedError:
+            raise RuntimeError("Pairing revoked by VPS. Run `vela --pair` to re-onboard this device.")
+        finally:
+            if stop_ui:
+                stop_ui()
 
-    raise Exception(f"Registration failed: {resp.text}")
+
+def _get_vps_secret() -> str:
+    secret = (config.relay_secret or config.agent_secret or "").strip()
+    if not secret:
+        raise RuntimeError("Cannot refresh ws_token: RELAY_SECRET not configured")
+    return secret
 
 
 def refresh_ws_token():
@@ -225,13 +496,10 @@ def refresh_ws_token():
     """
     vps_url = _normalise_vps_url(_require_env("VPS_URL"))
     agent_id = config.agent_id
-    agent_secret = config.agent_secret
-
-    if not agent_secret:
-        raise RuntimeError("Cannot refresh ws_token: AGENT_SECRET not configured")
+    relay_secret = _get_vps_secret()
 
     url = f"{vps_url.rstrip('/')}/agents/{agent_id}/ws-token"
-    headers = {"X-Secret": agent_secret}
+    headers = {"X-Secret": relay_secret}
 
     print(f"Refreshing ws_token for agent '{agent_id}'...")
     resp = requests.post(
@@ -253,18 +521,18 @@ def refresh_ws_token():
 async def start_agent_loop() -> None:
     """Main agent loop.
     
-    Expects the device to already be registered (AGENT_ID and AGENT_SECRET in .env).
+    Expects the device to be paired (AGENT_ID + RELAY_SECRET in .env).
     Uses the refresh token endpoint (POST /agents/{id}/ws-token) for connection.
     
     The /register endpoint should only be used by setup.sh for initial registration.
     """
     await wait_for_local_service()
 
-    if not config.agent_id or not config.agent_secret:
-        raise RuntimeError(
-            "Agent not configured. Run setup.sh to register this device first, "
-            "or ensure AGENT_ID and AGENT_SECRET are set in .env"
-        )
+    if not config.vps_url:
+        raise RuntimeError("VPS_URL must be set before starting vela-agent")
+
+    if not config.relay_secret:
+        await asyncio.to_thread(ensure_agent_registration)
 
     backoff = 5
     max_backoff = 60

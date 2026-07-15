@@ -70,7 +70,14 @@ class Config(BaseSettings):
     # validation_alias bypasses the global "VELA_" prefix for these keys!
     vps_url: str = Field(default="", validation_alias="VPS_URL")
     agent_id: str = Field(default_factory=_default_agent_id, validation_alias="AGENT_ID")
-    agent_secret: str = Field(default="", validation_alias="AGENT_SECRET")
+    agent_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("AGENT_CREDENTIAL", "AGENT_SECRET"),
+    )
+    relay_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("RELAY_SECRET", "AGENT_SECRET"),
+    )
     public_address: Optional[str] = Field(default=None, validation_alias="PUBLIC_ADDRESS")
     metadata_raw: str = Field(default="", validation_alias="METADATA")
 
@@ -107,7 +114,7 @@ class Config(BaseSettings):
     # ---- Cleaners & Fallbacks (Runs BEFORE type check) --------------
 
     @field_validator(
-        "vps_url", "agent_id", "agent_secret", "public_address",
+        "vps_url", "agent_id", "agent_secret", "relay_secret", "public_address",
         "metadata_raw", "local_service_url", "local_service_username",
         "local_service_password", "local_service_token_path",
         mode="before"

@@ -132,7 +132,17 @@ DEFAULT_AGENT_ID="${AGENT_ID:-$(hostname | tr -cs 'A-Za-z0-9_.-' '-')}"
 prompt_required AGENT_ID "Agent ID" "$DEFAULT_AGENT_ID"
 
 # AGENT_SECRET is issued by the relay on first registration; users don't set it.
-AGENT_SECRET="${AGENT_SECRET:-${SECRET:-}}"
+EXISTING_AGENT_SECRET="${AGENT_SECRET:-${SECRET:-}}"
+AGENT_SECRET=""
+if [[ -n "$EXISTING_AGENT_SECRET" ]]; then
+  read -rp "  Reuse existing agent credential from previous setup? [y/N]: " reuse_secret
+  if [[ "${reuse_secret:-N}" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+    AGENT_SECRET="$EXISTING_AGENT_SECRET"
+    info "Reusing existing agent credential."
+  else
+    info "A new pairing will be required after setup."
+  fi
+fi
 
 prompt_value PUBLIC_ADDRESS "Public address of this agent (optional, for first registration)"
 prompt_value METADATA       "Agent metadata as JSON (optional, e.g. {\"os\":\"linux\"})"
@@ -211,11 +221,6 @@ export FIREWORKS_API_KEY="${FIREWORKS_API_KEY:-}"
 export VELA_FIREWORKS_API_URL="${VELA_FIREWORKS_API_URL:-}"
 export VELA_FIREWORKS_MODEL="${VELA_FIREWORKS_MODEL:-}"
 
-# Use a tempfile to pass AGENT_SECRET / AGENT_ID back from the Python subprocess.
-AGENT_SECRET_FILE="$(mktemp)"
-export AGENT_SECRET_FILE
-trap 'rm -f "$AGENT_SECRET_FILE"' EXIT
-
 python - <<'PY'
 import os
 import sys
@@ -242,16 +247,10 @@ for entry in os.environ["ALLOWED_BASE_DIRS"].split(","):
 
 # --- Register with VPS -----------------------------------------------------
 
-agent_secret = os.environ.get("AGENT_SECRET", "").strip()
-agent_id = os.environ["AGENT_ID"].strip()
-
-url = f"{vps_url.rstrip('/')}/register"
-payload = {"agent_id": agent_id, "public_address": "http://127.0.0.1:0"}
-headers = {"X-API-Key": agent_secret} if agent_secret else {}
-
-print(f"  Registering at {url} …")
+health_url = f"{vps_url.rstrip('/')}/health"
+print(f"  Checking VPS at {health_url} …")
 try:
-    resp = requests.post(url, json=payload, headers=headers, timeout=10)
+    resp = requests.get(health_url, timeout=10)
 except requests.exceptions.ConnectionError:
     sys.exit(f"Could not connect to {vps_url}. Ensure the VPS is running and reachable.")
 except requests.exceptions.Timeout:
@@ -259,38 +258,16 @@ except requests.exceptions.Timeout:
 except requests.exceptions.RequestException as exc:
     sys.exit(f"Request failed: {exc}")
 
-if resp.status_code in {200, 201}:
+if resp.status_code == 200:
     data = resp.json()
-    print("  Connected to VPS.")
-    issued_secret = data.get("secret")
-    if issued_secret:
-        print(f"  Issued Agent Secret: {issued_secret}")
-        print("  IMPORTANT: Save this secret — it authenticates your agent to the relay.")
-        agent_secret = issued_secret
-    returned = data.get("agent", {})
-    if returned.get("agent_id"):
-        agent_id = returned["agent_id"]
-elif resp.status_code == 401:
-    sys.exit("VPS returned 401 Unauthorized. Check your Agent Secret.")
+    if data.get("status") != "ok":
+        sys.exit(f"VPS health check failed: {data}")
+    print("  VPS is reachable and healthy.")
 elif resp.status_code == 404:
-    sys.exit(f"VPS returned 404 Not Found at {url}. Check your relay URL.")
+    sys.exit(f"VPS returned 404 Not Found at {health_url}. Check your relay URL.")
 else:
     sys.exit(f"VPS returned {resp.status_code}: {resp.text}")
-
-# --- Write updated values back to the tempfile (read by bash) --------------
-
-secret_file = os.environ.get("AGENT_SECRET_FILE", "")
-if secret_file:
-    Path(secret_file).write_text(
-        f"AGENT_SECRET={agent_secret}\nAGENT_ID={agent_id}\n",
-        encoding="utf-8",
-    )
 PY
-
-# Absorb any updated AGENT_SECRET / AGENT_ID written by the Python block.
-# shellcheck disable=SC1090
-source "$AGENT_SECRET_FILE"
-export AGENT_SECRET AGENT_ID
 
 # ---------------------------------------------------------------------------
 # Generate config.yaml and .env
@@ -479,8 +456,24 @@ EOF
 
 systemctl --user daemon-reload
 systemctl --user enable --now "$SERVICE_NAME"
-systemctl --user enable --now "$AGENT_SERVICE_NAME"
-info "Services enabled and started."
+systemctl --user enable "$AGENT_SERVICE_NAME"
+info "API service enabled and started."
+
+if [[ -n "$AGENT_SECRET" ]]; then
+  systemctl --user start "$AGENT_SERVICE_NAME"
+  info "Agent service started using existing credential."
+else
+  section "Agent pairing"
+  info "Launching browser pairing flow now..."
+  if "$VENV_DIR/bin/vela" --pair; then
+    systemctl --user start "$AGENT_SERVICE_NAME"
+    info "Agent paired and service started."
+  else
+    warn "Pairing did not complete. You can retry with: $VENV_DIR/bin/vela --pair"
+    warn "Starting agent service anyway so it can retry in background."
+    systemctl --user start "$AGENT_SERVICE_NAME" || true
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # Done
@@ -516,35 +509,16 @@ check_service "$AGENT_SERVICE_NAME"
 # Aliases for service management
 # ---------------------------------------------------------------------------
 
-section "Service management aliases"
-
-ALIAS_BLOCK='
-# Vela service management
-alias vela-start="systemctl --user start vela.service vela-agent.service"
-alias vela-stop="systemctl --user stop vela.service vela-agent.service"
-alias vela-restart="systemctl --user restart vela.service vela-agent.service"
-alias vela-status="systemctl --user status vela.service vela-agent.service"
-alias vela-logs="journalctl --user -u vela.service -u vela-agent.service -f"
-'
-
-SHELL_RC="$HOME/.bashrc"
-[[ "${SHELL:-}" == */zsh ]] && SHELL_RC="$HOME/.zshrc"
-
-if grep -q "vela-start" "$SHELL_RC" 2>/dev/null; then
-  info "Aliases already present in $SHELL_RC — skipping."
-else
-  printf '%s\n' "$ALIAS_BLOCK" >> "$SHELL_RC"
-  info "Aliases added to $SHELL_RC."
-fi
-
+section "Service management commands"
 echo
-info "  vela-start    — start both services"
-info "  vela-stop     — stop both services"
-info "  vela-restart  — restart both services"
-info "  vela-status   — show service status"
-info "  vela-logs     — tail live logs"
+info "  vela --start        — start both services"
+info "  vela --stop         — stop both services"
+info "  vela --enable       — enable+start both services"
+info "  vela --pair         — force browser pairing flow"
+info "  vela-agent --start  — start agent service only"
+info "  vela-agent --stop   — stop agent service only"
+info "  journalctl --user -u vela-agent.service -f  — tail agent logs"
 echo
-info "Run:  source $SHELL_RC   to activate aliases in this shell."
 
 # ---------------------------------------------------------------------------
 # Next steps — what to use on your device
@@ -552,10 +526,12 @@ info "Run:  source $SHELL_RC   to activate aliases in this shell."
 
 section "Connect from your Android device"
 echo
-
-echo "  │  Relay URL   :  $VPS_URL/relay/$AGENT_ID"
-echo "  │  Secret      :  $AGENT_SECRET"
+echo "  │  VPS URL     :  $VPS_URL"
+echo "  │  Agent ID    :  $AGENT_ID"
 echo
-info "Open the Vela app then enter the"
-info "Relay URL, and Secret shown above."
-info "The secret is also saved in: $ENV_FILE"
+if [[ -n "$AGENT_SECRET" ]]; then
+  info "Existing credential was reused. No new pairing step is required."
+else
+  info "Pairing has been launched during setup. If needed, rerun it with: vela --pair"
+  info "Watch logs with: journalctl --user -u vela-agent.service -f"
+fi
