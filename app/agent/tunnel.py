@@ -5,7 +5,6 @@ from urllib.parse import urlencode
 
 import requests
 import websockets
-from dotenv import set_key
 
 from app.utils.config import Config
 config = Config()
@@ -74,18 +73,26 @@ async def tunnel(token):
                     if query_string and "?" not in local_url:
                         local_url = f"{local_url}?{query_string}"
 
-                    if "authorization" not in {k.lower() for k in headers}:
-                        try:
-                            headers["Authorization"] = f"Bearer {await async_get_local_auth_token()}"
-                        except Exception as auth_exc:
-                            print(f"Local auth failed while processing request: {auth_exc}")
-                            await websocket.send(json.dumps({
-                                "type": "forward_response",
-                                "status_code": 500,
-                                "body": f"Local auth failed: {auth_exc}",
-                                "request_id": request_id,
-                            }))
-                            continue
+                    upstream_authorization = next(
+                        (value for key, value in headers.items() if key.lower() == "authorization"),
+                        None,
+                    )
+                    if upstream_authorization:
+                        # Keep upstream auth available for debugging/auditing while ensuring
+                        # local API auth always uses a local token issued by this host.
+                        headers["X-Upstream-Authorization"] = upstream_authorization
+
+                    try:
+                        headers["Authorization"] = f"Bearer {await async_get_local_auth_token()}"
+                    except Exception as auth_exc:
+                        print(f"Local auth failed while processing request: {auth_exc}")
+                        await websocket.send(json.dumps({
+                            "type": "forward_response",
+                            "status_code": 500,
+                            "body": f"Local auth failed: {auth_exc}",
+                            "request_id": request_id,
+                        }))
+                        continue
 
                     request_kwargs = {"headers": headers, "timeout": config.local_service_timeout}
                     if body is not None:
@@ -108,19 +115,12 @@ async def tunnel(token):
                         **request_kwargs,
                     )
 
-                    if resp.status_code == 401 and not config.local_service_auth_token:
-                        print("Local request returned 401, refreshing local auth token and retrying")
+                    if resp.status_code == 401:
+                        print("Local request returned 401, refreshing local auth token and retrying once")
                         global _local_token
                         _local_token = None
                         config.local_service_auth_token = None
                         config.local_service_auth_token_expires = None
-
-                        # Clear from .env too
-                        try:
-                            set_key(config.dotenv_path, "LOCAL_SERVICE_AUTH_TOKEN", "")
-                            set_key(config.dotenv_path, "LOCAL_SERVICE_AUTH_TOKEN_EXPIRES", "")
-                        except Exception:
-                            pass
 
                         headers["Authorization"] = f"Bearer {await async_get_local_auth_token()}"
                         resp = await asyncio.to_thread(

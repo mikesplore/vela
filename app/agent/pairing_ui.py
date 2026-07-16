@@ -5,6 +5,7 @@ import json
 def render_pairing_page(state: dict) -> str:
     pairing_code = str(state.get("pairing_code") or "")
     pairing_pin = state.get("pairing_pin")
+    vps_url = str(state.get("vps_url") or "")
 
     return f"""<!doctype html>
 <html>
@@ -246,7 +247,7 @@ def render_pairing_page(state: dict) -> str:
   <body>
     <div class="shell">
       <section class="panel">
-        <h1>Scan to Pair Android</h1>
+        <h1>Scan to Pair Vela</h1>
         <p class="hint">Open the Android app and scan this QR. It contains only the pairing fields the app needs.</p>
         <div class="status">
           <span id="statusLabel" class="badge badge-awaiting"><span class="badge-dot"></span>Waiting for pairing</span>
@@ -258,8 +259,13 @@ def render_pairing_page(state: dict) -> str:
         </div>
         <p id="qrStaleNote"></p>
         <details class="manual" id="manualSection">
-          <summary>Use another device instead</summary>
+          <summary>If you cannot scan the QR, enter the pairing code and PIN manually</summary>
           <div class="manual-body">
+            <div class="code-row">
+              <span class="label">VPS URL</span>
+              <strong id="vpsUrlText">{html.escape(vps_url)}</strong>
+              <button class="copy-btn" type="button" data-copy="vps-url">Copy</button>
+            </div>
             <div class="code-row">
               <span class="label">Pairing code</span>
               <strong id="pairingCodeText">{html.escape(pairing_code)}</strong>
@@ -426,9 +432,14 @@ def render_pairing_page(state: dict) -> str:
       document.querySelectorAll('.copy-btn').forEach((btn) => {{
         btn.addEventListener('click', async () => {{
           const which = btn.getAttribute('data-copy');
-          const text = which === 'code'
-            ? document.getElementById('pairingCodeText').textContent
-            : document.getElementById('pairingPinText').textContent;
+          let text = '';
+          if (which === 'vps-url') {{
+            text = document.getElementById('vpsUrlText').textContent;
+          }} else if (which === 'code') {{
+            text = document.getElementById('pairingCodeText').textContent;
+          }} else {{
+            text = document.getElementById('pairingPinText').textContent;
+          }}
           try {{
             await navigator.clipboard.writeText(text);
             const original = btn.textContent;

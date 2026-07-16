@@ -241,6 +241,19 @@ async def ping(request: Request) -> dict[str, bool]:
     return {"pong": True}
 
 
+def _restart_or_start_user_service(service: str) -> None:
+    active = subprocess.run(
+        ["systemctl", "--user", "is-active", service],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if (active.stdout or "").strip() == "active":
+        subprocess.run(["systemctl", "--user", "restart", service], check=True)
+    else:
+        subprocess.run(["systemctl", "--user", "start", service], check=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Vela CLI")
     parser.add_argument("--setup", action="store_true", help="Run interactive setup bootstrap")
@@ -305,7 +318,9 @@ def main() -> None:
     if args.re_pair:
         try:
             ensure_agent_registration(force=True)
-            print("Forced re-pair completed successfully.")
+            for service in services:
+                _restart_or_start_user_service(service)
+            print("Forced re-pair completed successfully. Services refreshed.")
         except Exception as exc:
             print(f"Forced re-pair failed: {exc}", file=sys.stderr)
             raise

@@ -464,7 +464,13 @@ def ensure_agent_registration(force: bool = False) -> None:
                 # Contract: re-check status once; if still paired with token retry once.
                 status, latest_activation_token = _fetch_pairing_status(agent_id)
                 if status == "PAIRED" and latest_activation_token:
-                    credential, relay_secret = _activate_registration(agent_id, latest_activation_token)
+                    try:
+                        credential, relay_secret = _activate_registration(agent_id, latest_activation_token)
+                    except ActivationTokenInvalidError:
+                        # Some VPS builds can race token issuance/rotation under load.
+                        # Instead of failing the whole flow, request a fresh pairing session.
+                        print("Activation token rotated again; restarting pairing session")
+                        continue
                 else:
                     print("Activation token invalid and no replacement token available; restarting pairing")
                     continue
