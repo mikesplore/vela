@@ -456,7 +456,14 @@ def _persist_agent_credential(agent_id: str, credential: str, relay_secret: str 
         set_key(config.dotenv_path, "AGENT_SECRET", relay_secret)
         set_key(config.dotenv_path, "AGENT_CREDENTIAL", credential)
         set_key(config.dotenv_path, "RELAY_SECRET", relay_secret)
-        print(f"Persisted AGENT_ID, RELAY_SECRET, and AGENT_CREDENTIAL to {config.dotenv_path}")
+
+        vps_url = (config.vps_url or os.getenv("VPS_URL", "")).rstrip("/")
+        if vps_url and agent_id:
+            spotify_redirect = f"{vps_url}/relay/{agent_id}/callback"
+            set_key(config.dotenv_path, "SPOTIFY_REDIRECT_URI", spotify_redirect)
+            os.environ["SPOTIFY_REDIRECT_URI"] = spotify_redirect
+
+        print(f"Persisted AGENT_ID, RELAY_SECRET, AGENT_CREDENTIAL, and SPOTIFY_REDIRECT_URI to {config.dotenv_path}")
     except Exception as env_exc:
         print(f"Failed to persist AGENT credential to .env: {env_exc}")
 

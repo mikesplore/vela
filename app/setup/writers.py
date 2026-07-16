@@ -112,7 +112,8 @@ def write_env_file(
         f"RESEND_FROM_EMAIL={opts['resend_from_email']}",
         f"SPOTIFY_CLIENT_ID={opts['spotify_client_id']}",
         f"SPOTIFY_CLIENT_SECRET={opts['spotify_client_secret']}",
-        f"SPOTIFY_REDIRECT_URI={vps_url}/relay/your_agent_id_after_pairing/callback",
+        # Filled with the real agent id after pairing completes.
+        "SPOTIFY_REDIRECT_URI=",
     ]
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     os.chmod(env_path, 0o600)
