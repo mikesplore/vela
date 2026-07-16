@@ -1,8 +1,7 @@
 import asyncio
-import os
 import subprocess
 
-from app.agent.helpers import ensure_agent_registration, start_agent_loop
+from app.agent.helpers import start_agent_loop
 
 
 def main() -> None:
@@ -18,22 +17,6 @@ def main() -> None:
         action="store_true",
         help="Stop vela-agent.service via systemctl --user",
     )
-    parser.add_argument(
-        "--pair",
-        action="store_true",
-        help="Run pairing only if agent is not paired",
-    )
-    parser.add_argument(
-        "--re-pair",
-        action="store_true",
-        help="Force fresh browser pairing flow and rotate credential",
-    )
-    parser.add_argument(
-        "--regenerate-secret",
-        action="store_true",
-        help="Re-register with the VPS to obtain a new agent secret (password change). "
-             "Requires AGENT_SECRET to be set in the environment.",
-    )
     args = parser.parse_args()
 
     if args.start:
@@ -45,19 +28,6 @@ def main() -> None:
         subprocess.run(["systemctl", "--user", "stop", "vela-agent.service"], check=True)
         print("Stopped vela-agent.service.")
         return
-
-    if args.pair:
-        ensure_agent_registration(force=False)
-        print("Pairing check completed.")
-        return
-
-    if args.re_pair:
-        ensure_agent_registration(force=True)
-        print("Forced re-pair completed successfully.")
-        return
-
-    if args.regenerate_secret:
-        os.environ["REGENERATE_SECRET"] = "true"
 
     asyncio.run(start_agent_loop())
 

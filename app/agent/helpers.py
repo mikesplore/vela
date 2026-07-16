@@ -1,29 +1,75 @@
 import asyncio
+import bcrypt
 import getpass
 import platform
 import os
+from pathlib import Path
+import secrets
 import socket
-import threading
+import subprocess
 import time
-import webbrowser
 from datetime import datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlencode, urlparse, urlunparse
 
 from dotenv import set_key
 import requests
 import json
+import yaml
 
 from app.agent.tunnel import tunnel
-from app.agent.pairing_ui import render_pairing_page
+from app.ui.pairing_browser import start_pairing_browser_ui
 
 from app.utils.config import Config
 config = Config()
 
 _local_token: str | None = None
 _local_token_expires = datetime.min.replace(tzinfo=timezone.utc)
+_local_auth_block_until = datetime.min.replace(tzinfo=timezone.utc)
 PAIRING_STATUS_POLL_INTERVAL = 3
 PAIRING_STATUS_TIMEOUT = 600
+
+
+def clear_local_auth_cache() -> None:
+    """Drop in-memory local JWT so setup cannot reuse a stale token."""
+    global _local_token, _local_token_expires, _local_auth_block_until
+    _local_token = None
+    _local_token_expires = datetime.min.replace(tzinfo=timezone.utc)
+    _local_auth_block_until = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def reload_agent_env(dotenv_path: Path | None = None) -> None:
+    """Reload .env into process env + live Config after setup rewrites credentials."""
+    from dotenv import load_dotenv
+
+    path = dotenv_path or config.dotenv_path
+    load_dotenv(path, override=True)
+    clear_local_auth_cache()
+
+    config.vps_url = os.getenv("VPS_URL", "").strip()
+    config.agent_id = os.getenv("AGENT_ID", "").strip()
+    config.agent_secret = (
+        os.getenv("AGENT_CREDENTIAL", "").strip() or os.getenv("AGENT_SECRET", "").strip()
+    )
+    config.relay_secret = (
+        os.getenv("RELAY_SECRET", "").strip() or os.getenv("AGENT_SECRET", "").strip()
+    )
+    config.local_service_url = os.getenv("LOCAL_SERVICE_URL", config.local_service_url).strip()
+    config.local_service_username = (
+        os.getenv("LOCAL_SERVICE_USERNAME", "").strip()
+        or os.getenv("USERNAME", "").strip()
+        or config.local_service_username
+    )
+    config.local_service_password = (
+        os.getenv("LOCAL_SERVICE_PASSWORD", "").strip()
+        or os.getenv("PASSWORD", "").strip()
+        or config.local_service_password
+    )
+    config.local_service_auth_token = os.getenv("LOCAL_SERVICE_AUTH_TOKEN") or None
+    config.local_service_auth_token_expires = os.getenv("LOCAL_SERVICE_AUTH_TOKEN_EXPIRES") or None
+    if config.local_service_auth_token == "":
+        config.local_service_auth_token = None
+    if config.local_service_auth_token_expires == "":
+        config.local_service_auth_token_expires = None
 
 
 class PairingExpiredError(RuntimeError):
@@ -36,6 +82,66 @@ class PairingRevokedError(RuntimeError):
 
 class ActivationTokenInvalidError(RuntimeError):
     pass
+
+
+def _candidate_config_paths() -> list[Path]:
+    override = os.getenv("REMOTEAGENT_CONFIG_PATH", "").strip()
+    if override:
+        return [Path(override)]
+    return [
+        Path.cwd() / "config.yaml",
+        Path.home() / ".config" / "vela" / "config.yaml",
+        Path(__file__).resolve().parent.parent / "config.yaml",
+    ]
+
+
+def _auto_create_local_auth_account() -> bool:
+    """Create local API account credentials when none are saved yet."""
+    cfg_path = next((p for p in _candidate_config_paths() if p.exists()), None)
+    if not cfg_path:
+        print("Cannot auto-create local auth account: config.yaml not found")
+        return False
+
+    try:
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        print(f"Cannot auto-create local auth account: failed to read config.yaml: {exc}")
+        return False
+
+    username = (os.getenv("USER", "") or "vela-agent").strip() or "vela-agent"
+    password = secrets.token_urlsafe(18)
+    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+    data["username"] = username
+    data["password_hash"] = password_hash
+
+    try:
+        cfg_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    except Exception as exc:
+        print(f"Cannot auto-create local auth account: failed to write config.yaml: {exc}")
+        return False
+
+    try:
+        set_key(config.dotenv_path, "USERNAME", username)
+        set_key(config.dotenv_path, "PASSWORD", password)
+        set_key(config.dotenv_path, "LOCAL_SERVICE_USERNAME", username)
+        set_key(config.dotenv_path, "LOCAL_SERVICE_PASSWORD", password)
+    except Exception as exc:
+        print(f"Auto-created account but failed to persist .env credentials: {exc}")
+
+    config.username = username
+    config.password_hash = password_hash
+    config.local_service_username = username
+    config.local_service_password = password
+
+    try:
+        subprocess.run(["systemctl", "--user", "restart", "vela.service"], check=False)
+        time.sleep(1.5)
+    except Exception as exc:
+        print(f"Auto-created account; could not restart vela.service automatically: {exc}")
+
+    print("Auto-created local auth account and refreshed service.")
+    return True
 
 
 def parse_metadata() -> dict | None:
@@ -65,9 +171,15 @@ def parse_local_expiry(expires_at: str) -> datetime:
 
 
 def get_local_auth_token(retries: int = 3, delay: float = 2.0) -> str:
-    global _local_token, _local_token_expires
+    global _local_token, _local_token_expires, _local_auth_block_until
 
     now = datetime.now(timezone.utc)
+
+    if now < _local_auth_block_until:
+        wait_seconds = int((_local_auth_block_until - now).total_seconds())
+        raise RuntimeError(
+            f"Local auth temporarily blocked for {wait_seconds}s after recent auth failures"
+        )
 
     # 1. Try in-memory token
     if _local_token and now + timedelta(seconds=30) < _local_token_expires:
@@ -89,47 +201,85 @@ def get_local_auth_token(retries: int = 3, delay: float = 2.0) -> str:
          return config.local_service_auth_token
 
     if not config.local_service_username or not config.local_service_password:
-        raise RuntimeError(
-            "config.local_service_username and config.local_service_password must be set to obtain a local auth token"
-        )
+        created = _auto_create_local_auth_account()
+        if not created:
+            raise RuntimeError(
+                "Local auth credentials are missing and automatic account creation failed"
+            )
 
     token_url = f"{config.local_service_url}{config.local_service_token_path}"
+    credential_candidates: list[tuple[str, str, str]] = []
+    seen = set()
+    for username, password, label in [
+        ((config.local_service_username or "").strip(), (config.local_service_password or "").strip(), "LOCAL_SERVICE_*"),
+        ((os.getenv("USERNAME", "") or "").strip(), (os.getenv("PASSWORD", "") or "").strip(), "USERNAME/PASSWORD"),
+    ]:
+        key = (username, password)
+        if username and password and key not in seen:
+            credential_candidates.append((username, password, label))
+            seen.add(key)
 
     last_exc = None
     for attempt in range(retries):
         print(f"Obtaining local auth token from {token_url} (attempt {attempt + 1}/{retries})")
-        resp = None
-        try:
-            resp = requests.post(
-                token_url,
-                json={"username": config.local_service_username, "password": config.local_service_password},
-                timeout=config.local_service_timeout,
-            )
-            print(f"Local auth response status: {resp.status_code}")
-            resp.raise_for_status()
-
-            data = resp.json()
-            _local_token = data.get("access_token")
-            expiry_str = data.get("expires_at")
-            _local_token_expires = parse_local_expiry(expiry_str)
-
-            # Persist to .env
+        for username, password, label in credential_candidates:
+            resp = None
             try:
-                set_key(config.dotenv_path, "LOCAL_SERVICE_AUTH_TOKEN", _local_token)
-                set_key(config.dotenv_path, "LOCAL_SERVICE_AUTH_TOKEN_EXPIRES", expiry_str)
-                print(f"Persisted local auth token to {config.dotenv_path}")
-            except Exception as env_exc:
-                print(f"Failed to persist token to .env: {env_exc}")
+                resp = requests.post(
+                    token_url,
+                    json={"username": username, "password": password},
+                    timeout=config.local_service_timeout,
+                )
+                print(f"Local auth response status ({label}): {resp.status_code}")
+                resp.raise_for_status()
 
-            print(f"Obtained local auth token expiring at {_local_token_expires.isoformat()}")
-            return _local_token
-        except Exception as exc:
-            last_exc = exc
-            print(f"Local auth token request failed (attempt {attempt + 1}/{retries}): {exc}")
-            if resp is not None:
-                print(f"Local auth failure response: status={resp.status_code}")
-            if attempt < retries - 1:
-                time.sleep(delay * (2 ** attempt))  # Exponential backoff
+                data = resp.json()
+                _local_token = data.get("access_token")
+                expiry_str = data.get("expires_at")
+                _local_token_expires = parse_local_expiry(expiry_str)
+
+                # If fallback credentials worked, sync them as primary local creds.
+                if label != "LOCAL_SERVICE_*":
+                    try:
+                        set_key(config.dotenv_path, "LOCAL_SERVICE_USERNAME", username)
+                        set_key(config.dotenv_path, "LOCAL_SERVICE_PASSWORD", password)
+                    except Exception as env_exc:
+                        print(f"Failed to persist recovered local credentials to .env: {env_exc}")
+                    config.local_service_username = username
+                    config.local_service_password = password
+
+                # Persist token to .env
+                try:
+                    set_key(config.dotenv_path, "LOCAL_SERVICE_AUTH_TOKEN", _local_token)
+                    set_key(config.dotenv_path, "LOCAL_SERVICE_AUTH_TOKEN_EXPIRES", expiry_str)
+                    print(f"Persisted local auth token to {config.dotenv_path}")
+                except Exception as env_exc:
+                    print(f"Failed to persist token to .env: {env_exc}")
+
+                print(f"Obtained local auth token expiring at {_local_token_expires.isoformat()}")
+                return _local_token
+            except Exception as exc:
+                last_exc = exc
+                print(f"Local auth token request failed ({label}, attempt {attempt + 1}/{retries}): {exc}")
+                if resp is not None:
+                    print(f"Local auth failure response ({label}): status={resp.status_code}")
+                    if resp.status_code == 429:
+                        retry_after = 60
+                        try:
+                            retry_after = max(5, int(resp.headers.get("Retry-After", "60")))
+                        except Exception:
+                            retry_after = 60
+                        _local_auth_block_until = datetime.now(timezone.utc) + timedelta(seconds=retry_after)
+                        raise RuntimeError(
+                            f"Local auth rate-limited (429). Backing off for {retry_after}s."
+                        )
+                    # On 401, try next credential candidate before blocking.
+                    if resp.status_code == 401:
+                        continue
+        # All credential candidates failed this round; block briefly to avoid hammering.
+        _local_auth_block_until = datetime.now(timezone.utc) + timedelta(seconds=60)
+        if attempt < retries - 1:
+            time.sleep(delay * (2 ** attempt))  # Exponential backoff
 
     raise last_exc
 
@@ -172,6 +322,16 @@ def _build_device_info() -> dict:
     }
 
 
+def _build_pairing_qr_payload(vps_url: str, pairing_code: str, pairing_pin: str | None) -> str:
+    payload = {
+        "vps_url": vps_url,
+        "pairing_code": pairing_code,
+    }
+    if pairing_pin:
+        payload["pairing_pin"] = pairing_pin
+    return json.dumps(payload, separators=(",", ":"))
+
+
 def _register_start(existing_agent_id: str | None = None) -> tuple[str, str, str | None, int, str | None]:
     vps_url = _normalise_vps_url(_require_env("VPS_URL"))
     url = f"{vps_url.rstrip('/')}/agents/register/start"
@@ -208,9 +368,8 @@ def _register_start(existing_agent_id: str | None = None) -> tuple[str, str, str
     if pairing_expires_in <= 0:
         raise RuntimeError("register/start returned invalid pairing_expires_in")
 
-    qr_payload = data.get("pairing_qr_payload")
-    if qr_payload:
-        print(f"Pairing QR payload: {qr_payload}")
+    qr_payload = _build_pairing_qr_payload(vps_url, pairing_code, pairing_pin)
+    print(f"Pairing QR payload: {qr_payload}")
 
     return agent_id, pairing_code, pairing_pin, pairing_expires_in, qr_payload
 
@@ -311,101 +470,16 @@ def _pairing_browser_enabled() -> bool:
     return raw not in {"0", "false", "no"}
 
 
-def _start_pairing_browser_ui(
-    vps_url: str,
-    agent_id: str,
-    pairing_code: str,
-    pairing_pin: str | None,
-    expires_in: int,
-    qr_payload: str | None,
-):
-    pair_complete_url = f"{vps_url.rstrip('/')}/pair/complete"
-    qr_scan_payload = json.dumps(
-        {
-            "pair_url": pair_complete_url,
-            "vps_url": vps_url,
-            "pairing_code": pairing_code,
-            "pairing_pin": pairing_pin,
-        },
-        separators=(",", ":"),
-    )
-    if not pairing_pin:
-        qr_scan_payload = json.dumps(
-            {
-                "pair_url": pair_complete_url,
-                "vps_url": vps_url,
-                "pairing_code": pairing_code,
-            },
-            separators=(",", ":"),
-        )
-
-    state = {
-        "status": "AWAITING_PAIR",
-        "agent_id": agent_id,
-        "pairing_code": pairing_code,
-        "pairing_pin": pairing_pin,
-        "pairing_expires_in": expires_in,
-        "qr_payload": qr_scan_payload,
-        "vps_url": vps_url,
-        "started_at_epoch": int(time.time()),
-        "updated_at_epoch": int(time.time()),
-    }
-
-    class PairingHandler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            if self.path in {"/", "/index.html"}:
-                page = render_pairing_page(state)
-                body = page.encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                return
-
-            if self.path in {"/status", "/state"}:
-                payload = json.dumps(state).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-                return
-
-            self.send_response(404)
-            self.end_headers()
-
-        def log_message(self, format, *args):
-            return
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), PairingHandler)
-    host, port = server.server_address
-    url = f"http://{host}:{port}"
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    def update_status(new_status: str) -> None:
-        state["status"] = new_status
-        state["updated_at_epoch"] = int(time.time())
-
-    def stop() -> None:
-        try:
-            server.shutdown()
-            server.server_close()
-        except Exception:
-            pass
-
-    return url, update_status, stop
-
-
 def reset_agent_credential() -> None:
-    """Clear persisted agent credential to force re-pairing."""
+    """Clear persisted relay credentials to force re-pairing."""
     try:
+        set_key(config.dotenv_path, "AGENT_ID", "")
         set_key(config.dotenv_path, "AGENT_SECRET", "")
         set_key(config.dotenv_path, "AGENT_CREDENTIAL", "")
         set_key(config.dotenv_path, "RELAY_SECRET", "")
     except Exception as env_exc:
         print(f"Failed to clear agent credential in .env: {env_exc}")
+    config.agent_id = ""
     config.agent_secret = ""
     config.relay_secret = ""
 
@@ -424,7 +498,12 @@ def _existing_registration_is_valid() -> bool:
         return False
 
 
-def ensure_agent_registration(force: bool = False) -> None:
+def ensure_agent_registration(
+    force: bool = False,
+    pairing_session_callback=None,
+    pairing_status_callback=None,
+    browser_ui: bool | None = None,
+) -> None:
     if config.relay_secret and not force:
         if _existing_registration_is_valid():
             print("Stored relay credential is valid; skipping pairing.")
@@ -452,27 +531,58 @@ def ensure_agent_registration(force: bool = False) -> None:
         else:
             print("  Pairing PIN: not required by this VPS build")
         print(f"  Expires In: {expires_in}s")
-        if qr_payload:
-            print(f"  QR Payload: {qr_payload}")
+        print(f"  QR Payload: {qr_payload}")
         print("==============================")
         print("")
 
+        if pairing_session_callback:
+            try:
+                pairing_session_callback(
+                    {
+                        "vps_url": vps_url,
+                        "agent_id": agent_id,
+                        "pairing_code": pairing_code,
+                        "pairing_pin": pairing_pin,
+                        "pairing_expires_in": expires_in,
+                        "qr_payload": qr_payload,
+                        "status": "AWAITING_PAIR",
+                    }
+                )
+            except Exception as callback_exc:
+                print(f"Pairing session callback failed: {callback_exc}")
+
         on_status_update = None
         stop_ui = None
-        if _pairing_browser_enabled():
+        should_use_browser_ui = _pairing_browser_enabled() if browser_ui is None else browser_ui
+        if should_use_browser_ui:
             try:
-                ui_url, on_status_update, stop_ui = _start_pairing_browser_ui(
-                    vps_url=vps_url,
-                    agent_id=agent_id,
-                    pairing_code=pairing_code,
-                    pairing_pin=pairing_pin,
-                    expires_in=expires_in,
-                    qr_payload=qr_payload,
-                )
+                pairing_state = {
+                    "status": "AWAITING_PAIR",
+                    "agent_id": agent_id,
+                    "pairing_code": pairing_code,
+                    "pairing_pin": pairing_pin,
+                    "pairing_expires_in": expires_in,
+                    "qr_payload": qr_payload,
+                    "vps_url": vps_url,
+                    "started_at_epoch": int(time.time()),
+                    "updated_at_epoch": int(time.time()),
+                }
+                ui_url, on_status_update, stop_ui = start_pairing_browser_ui(pairing_state)
                 print(f"Pairing page: {ui_url}")
-                webbrowser.open(ui_url)
             except Exception as ui_exc:
                 print(f"Could not start pairing browser UI: {ui_exc}")
+        elif pairing_status_callback:
+            on_status_update = pairing_status_callback
+
+        if pairing_status_callback and on_status_update is not pairing_status_callback:
+            base_update = on_status_update
+
+            def combined_status_update(status: str) -> None:
+                if base_update:
+                    base_update(status)
+                pairing_status_callback(status)
+
+            on_status_update = combined_status_update
 
         try:
             activation_token = _wait_for_pairing(agent_id, on_status_update=on_status_update)
@@ -504,7 +614,7 @@ def ensure_agent_registration(force: bool = False) -> None:
             print("Pairing session expired; requesting a new pairing code")
             continue
         except PairingRevokedError:
-            raise RuntimeError("Pairing revoked by VPS. Run `vela --pair` to re-onboard this device.")
+            raise RuntimeError("Pairing revoked by VPS. Run `vela --setup` to re-onboard this device.")
         finally:
             if stop_ui:
                 stop_ui()
@@ -562,7 +672,7 @@ async def start_agent_loop() -> None:
 
     if not config.relay_secret:
         raise RuntimeError(
-            "Agent is not paired yet. Run `vela --pair` (or `vela --setup`) to complete pairing."
+            "Agent is not paired yet. Run `vela --setup` to complete pairing."
         )
 
     backoff = 5

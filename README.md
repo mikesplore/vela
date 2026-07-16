@@ -158,14 +158,15 @@ vela --setup
 ```
 
 This will:
-- Prompt for credentials, VPS URL, agent ID
-- Install the Python package and create a virtual environment
-- Generate a `config.yaml` and `.env` with default values
+- Wipe cached local auth tokens and relay credentials (fresh start)
+- Prompt for credentials, VPS URL, and agent label
+- Generate a `config.yaml` and fresh `.env` (empty relay secrets until pairing)
 - Verify the VPS relay is reachable
-- Launch browser pairing (`vela --pair`) unless an existing credential is reused
-- Install `vela.service` and `vela-agent.service` as user systemd units
+- Force pairing, then restart `vela.service` and `vela-agent.service` so only the new credentials are used
 
 > 💡 **VPS relay:** You can use the free relay at `vela.mikesplore.tech` or specify your own.
+>
+> `./setup.sh` also creates a virtual environment and installs Vela from the current source tree. A globally installed `vela --setup` only runs setup.
 
 ### Post-Setup
 
@@ -204,11 +205,11 @@ vela --start
 vela --stop
 vela --status
 vela --logs
-vela --pair
-vela --re-pair
 vela-agent --start
 vela-agent --stop
 ```
+
+> `vela --setup` is the only onboarding path. It always starts fresh (no credential reuse).
 
 ## Agent Registration
 
@@ -224,8 +225,8 @@ curl -X POST http://<vps-url>:8000/agents/register/start \
   -d '{"agent_name":"my-agent","device_info":{"device_fingerprint":"host:user"}}'
 ```
 
-VPS returns `agent_id`, `pairing_code`, optional `pairing_pin`, `pairing_expires_in`, and `pairing_qr_payload`.  
-The agent opens a local browser page with a QR and manual code/PIN fallback.
+VPS returns `agent_id`, `pairing_code`, optional `pairing_pin`, and `pairing_expires_in`.  
+The agent creates the QR payload locally from the VPS URL, pairing code, and optional PIN, then shows it with a manual code/PIN fallback.
 
 ### 2) Android completes pair
 
@@ -237,7 +238,7 @@ curl -X POST http://<vps-url>:8000/pair/complete \
   -d '{"pairing_code":"<code>","pairing_pin":"<pin>","agent_label":"My Phone"}'
 ```
 
-Agent polls `GET /agents/register/status?agent_id=...` until it gets `PAIRED` + `activation_token`.
+Agent polls `GET /agents/register/status?agent_id=...` until it gets `PAIRED` + `activation_token`, then immediately calls activation. If activation reports an invalid token, the agent fetches status once and retries activation once with the returned token before it requests a new pairing session.
 
 ### 3) Agent activates
 
@@ -424,8 +425,9 @@ vela/
 │   │   ├── __init__.py
 │   │   ├── agent.py          # Agent CLI entry point
 │   │   ├── helpers.py        # Agent onboarding and tunnel orchestration
-│   │   ├── pairing_ui.py     # Local browser pairing page template
 │   │   └── tunnel.py         # WebSocket tunnel implementation
+│   ├── setup/                # Fresh-start setup (wipe, write config, pair, restart)
+│   ├── ui/                   # Browser pairing + setup wizard pages
 │   ├── db/
 │   │   ├── __init__.py
 │   │   ├── models.py         # Database models

@@ -3,7 +3,6 @@ import argparse
 import logging
 import os
 import subprocess
-import sys
 import time
 from contextlib import asynccontextmanager
 from typing import List
@@ -17,13 +16,13 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.auth import router as auth_router
 from app.utils.config import Config
 from app.dependencies import get_current_user
-from app.agent.helpers import ensure_agent_registration, start_agent_loop
+from app.agent.helpers import start_agent_loop
 from app.utils.errors import ErrorResponse
 from app.middleware import RequestLoggerMiddleware
 from app.rate_limiter import limiter, limit_route
 from app.routers import all_routers
 from app.routers import scheduler as scheduler_module
-from app.setup_cli import run_setup
+from app.setup import run_setup
 
 API_NAME = "Vela"
 API_VERSION = "1.0.0"
@@ -241,29 +240,14 @@ async def ping(request: Request) -> dict[str, bool]:
     return {"pong": True}
 
 
-def _restart_or_start_user_service(service: str) -> None:
-    active = subprocess.run(
-        ["systemctl", "--user", "is-active", service],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if (active.stdout or "").strip() == "active":
-        subprocess.run(["systemctl", "--user", "restart", service], check=True)
-    else:
-        subprocess.run(["systemctl", "--user", "start", service], check=True)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Vela CLI")
-    parser.add_argument("--setup", action="store_true", help="Run interactive setup bootstrap")
+    parser.add_argument("--setup", action="store_true", help="Fresh-start setup: wipe creds, pair, restart services")
     parser.add_argument("--start", action="store_true", help="Start vela + vela-agent user services")
     parser.add_argument("--stop", action="store_true", help="Stop vela + vela-agent user services")
     parser.add_argument("--enable", action="store_true", help="Enable and start vela + vela-agent user services")
     parser.add_argument("--status", action="store_true", help="Show vela service status")
     parser.add_argument("--logs", action="store_true", help="Tail vela service logs")
-    parser.add_argument("--pair", action="store_true", help="Run pairing only if agent is not paired")
-    parser.add_argument("--re-pair", action="store_true", help="Force fresh browser pairing and rotate secret")
     args = parser.parse_args()
 
     services = ["vela.service", "vela-agent.service"]
@@ -304,28 +288,6 @@ def main() -> None:
             ["journalctl", "--user", "-u", "vela.service", "-u", "vela-agent.service", "-f"],
             check=True,
         )
-        return
-
-    if args.pair:
-        try:
-            ensure_agent_registration(force=False)
-            for service in services:
-                _restart_or_start_user_service(service)
-            print("Pairing check completed. Services refreshed.")
-        except Exception as exc:
-            print(f"Pairing failed: {exc}", file=sys.stderr)
-            raise
-        return
-
-    if args.re_pair:
-        try:
-            ensure_agent_registration(force=True)
-            for service in services:
-                _restart_or_start_user_service(service)
-            print("Forced re-pair completed successfully. Services refreshed.")
-        except Exception as exc:
-            print(f"Forced re-pair failed: {exc}", file=sys.stderr)
-            raise
         return
 
     uvicorn.run(

@@ -1,6 +1,6 @@
 import argparse
 
-from app.setup_cli import run_setup
+from app.setup import run_setup
 
 
 def main() -> None:
