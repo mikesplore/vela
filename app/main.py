@@ -309,7 +309,9 @@ def main() -> None:
     if args.pair:
         try:
             ensure_agent_registration(force=False)
-            print("Pairing check completed.")
+            for service in services:
+                _restart_or_start_user_service(service)
+            print("Pairing check completed. Services refreshed.")
         except Exception as exc:
             print(f"Pairing failed: {exc}", file=sys.stderr)
             raise

@@ -92,6 +92,132 @@ confirm_secret() {
 }
 
 # ---------------------------------------------------------------------------
+# System dependency checks
+# ---------------------------------------------------------------------------
+
+detect_pkg_manager() {
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "apt"
+    return
+  fi
+  if command -v dnf >/dev/null 2>&1; then
+    echo "dnf"
+    return
+  fi
+  if command -v pacman >/dev/null 2>&1; then
+    echo "pacman"
+    return
+  fi
+  echo "unknown"
+}
+
+check_and_offer_system_dependencies() {
+  local pkg_manager="$1"
+  local -a groups=(
+    "Filesystem|Open files and paths from API calls.|xdg-open|xdg-utils|xdg-utils|xdg-utils"
+    "Audio|Adjust volume/output and play sounds.|amixer pactl|alsa-utils pulseaudio-utils|alsa-utils pulseaudio-utils|alsa-utils pulseaudio-utils"
+    "Display/Screenshot|Manage display state and capture screenshots.|xrandr flameshot xset ffmpeg busctl brightnessctl gsettings|x11-xserver-utils flameshot ffmpeg libglib2.0-bin brightnessctl systemd|xorg-xrandr flameshot xorg-xset ffmpeg glib2 brightnessctl systemd|xorg-xrandr flameshot xorg-xset ffmpeg glib2 brightnessctl systemd"
+    "Input Control|Mouse/keyboard actions and window introspection.|xdotool xprop xwininfo|xdotool x11-utils|xdotool xorg-xprop xorg-xwininfo|xdotool xorg-xprop xorg-xwininfo"
+    "Media|Control media playback sessions.|playerctl|playerctl|playerctl|playerctl"
+    "Network|Inspect/manage network, bluetooth, and connectivity tests.|nmcli bluetoothctl rfkill ping|network-manager bluez util-linux iputils-ping|NetworkManager bluez util-linux iputils|networkmanager bluez util-linux iputils"
+    "Notifications|Send desktop notifications.|notify-send|libnotify-bin|libnotify|libnotify"
+    "Power|Power actions and profile controls.|systemctl powerprofilesctl|systemd power-profiles-daemon|systemd power-profiles-daemon|systemd power-profiles-daemon"
+    "Security|Lock/session and webcam security operations.|loginctl modprobe pactl pkill who ffmpeg|systemd kmod pulseaudio-utils procps util-linux coreutils ffmpeg|systemd kmod pulseaudio-utils procps-ng util-linux coreutils ffmpeg|systemd kmod pulseaudio-utils procps-ng util-linux coreutils ffmpeg"
+    "System Info|Read hardware/system inventory.|lspci lsusb dmidecode xrandr|pciutils usbutils dmidecode x11-xserver-utils|pciutils usbutils dmidecode xorg-xrandr|pciutils usbutils dmidecode xorg-xrandr"
+    "Maintenance|Inspect service logs/time state.|journalctl systemctl timedatectl|systemd|systemd|systemd"
+  )
+  local -a missing_rows=()
+  local row feature description commands missing
+
+  section "Checking system dependencies"
+  info "Vela checks runtime tools by feature and can install missing packages."
+
+  for row in "${groups[@]}"; do
+    IFS='|' read -r feature description commands _ <<< "$row"
+    missing=()
+    for cmd in $commands; do
+      if ! command -v "$cmd" >/dev/null 2>&1; then
+        missing+=("$cmd")
+      fi
+    done
+    if ((${#missing[@]})); then
+      missing_rows+=("$row|${missing[*]}")
+    fi
+  done
+
+  if ((${#missing_rows[@]} == 0)); then
+    info "All checked runtime tools are already available."
+    return
+  fi
+
+  echo
+  info "Missing tools detected:"
+  for row in "${missing_rows[@]}"; do
+    IFS='|' read -r feature description _ _ _ _ missing <<< "$row"
+    echo "  - $feature"
+    echo "    What it does: $description"
+    echo "    Missing commands: $missing"
+  done
+  echo
+
+  read -rp "  Install missing packages now? [y/N]: " install_missing
+  if [[ ! "${install_missing:-N}" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+    info "Skipping package install. Missing features may fail until tools are installed."
+    return
+  fi
+
+  if [[ "$pkg_manager" == "unknown" ]]; then
+    warn "No supported package manager detected (apt, dnf, pacman). Install tools manually."
+    return
+  fi
+
+  local -A pkg_set=()
+
+  for row in "${missing_rows[@]}"; do
+    IFS='|' read -r _ _ _ apt_pkgs dnf_pkgs pacman_pkgs _ <<< "$row"
+    local pkgs
+    case "$pkg_manager" in
+      apt) pkgs="$apt_pkgs" ;;
+      dnf) pkgs="$dnf_pkgs" ;;
+      pacman) pkgs="$pacman_pkgs" ;;
+    esac
+    for pkg in $pkgs; do
+      pkg_set["$pkg"]=1
+    done
+  done
+
+  local -a install_packages=()
+  local pkg
+  for pkg in "${!pkg_set[@]}"; do
+    install_packages+=("$pkg")
+  done
+
+  if ((${#install_packages[@]} == 0)); then
+    warn "No package suggestions available for detected missing commands."
+    return
+  fi
+
+  section "Installing missing packages"
+  info "Package manager: $pkg_manager"
+  info "Packages: ${install_packages[*]}"
+
+  case "$pkg_manager" in
+    apt)
+      sudo apt-get update
+      sudo apt-get install -y "${install_packages[@]}"
+      ;;
+    dnf)
+      sudo dnf install -y "${install_packages[@]}"
+      ;;
+    pacman)
+      sudo pacman -S --needed --noconfirm "${install_packages[@]}"
+      ;;
+  esac
+
+  info "Dependency installation step completed."
+}
+
+# ---------------------------------------------------------------------------
 # Collect configuration
 # ---------------------------------------------------------------------------
 
@@ -128,8 +254,14 @@ if [[ "$VPS_URL" != http://* && "$VPS_URL" != https://* ]]; then
   info "Using HTTPS: $VPS_URL"
 fi
 
-DEFAULT_AGENT_ID="${AGENT_ID:-$(hostname | tr -cs 'A-Za-z0-9_.-' '-')}"
-prompt_required AGENT_ID "Agent ID" "$DEFAULT_AGENT_ID"
+DEFAULT_AGENT_LABEL="${AGENT_NAME:-$(hostname | tr -cs 'A-Za-z0-9_.-' '-')}"
+prompt_required AGENT_NAME "Agent label (shown in app)" "$DEFAULT_AGENT_LABEL"
+
+# Keep only existing VPS-issued IDs for repair/reuse flows.
+EXISTING_VPS_AGENT_ID="${AGENT_ID:-}"
+if [[ ! "$EXISTING_VPS_AGENT_ID" =~ ^agt_ ]]; then
+  EXISTING_VPS_AGENT_ID=""
+fi
 
 # AGENT_SECRET is issued by the relay on first registration; users don't set it.
 EXISTING_AGENT_SECRET="${AGENT_SECRET:-${SECRET:-}}"
@@ -174,7 +306,13 @@ read -rp "  Do you want to configure Spotify? [y/N]: " answer
 if [[ "${answer:-N}es" =~ ^[Yy][Ee][Ss]$ ]]; then
   prompt_required SPOTIFY_CLIENT_ID "Spotify Client ID"
   prompt_required SPOTIFY_CLIENT_SECRET "Spotify Client Secret"
-  SPOTIFY_REDIRECT_URI="${SPOTIFY_REDIRECT_URI:-${VPS_URL}/relay/${AGENT_ID}/callback}"
+  if [[ -z "${SPOTIFY_REDIRECT_URI:-}" ]]; then
+    if [[ -n "$EXISTING_VPS_AGENT_ID" ]]; then
+      SPOTIFY_REDIRECT_URI="${VPS_URL}/relay/${EXISTING_VPS_AGENT_ID}/callback"
+    else
+      SPOTIFY_REDIRECT_URI="${VPS_URL}/relay/your_agent_id_after_pairing/callback"
+    fi
+  fi
   info "Using Spotify redirect URI: $SPOTIFY_REDIRECT_URI"
 else
   SPOTIFY_CLIENT_ID="${SPOTIFY_CLIENT_ID:-}"
@@ -189,6 +327,9 @@ if [[ -z "$ASSISTANT_ACTION_PIN" ]]; then
   read -rsp "  Assistant action PIN for high-risk operations (press Enter to skip): " answer; echo
   ASSISTANT_ACTION_PIN="${answer:-}"
 fi
+
+PKG_MANAGER="$(detect_pkg_manager)"
+check_and_offer_system_dependencies "$PKG_MANAGER"
 
 # ---------------------------------------------------------------------------
 # Install Python package
@@ -212,8 +353,9 @@ info "Package installed."
 
 section "Connecting to VPS relay"
 
+AGENT_ID="$EXISTING_VPS_AGENT_ID"
 export USERNAME PASSWORD LOCAL_SERVICE_USERNAME LOCAL_SERVICE_PASSWORD
-export VPS_URL AGENT_ID AGENT_SECRET PUBLIC_ADDRESS METADATA
+export VPS_URL AGENT_NAME AGENT_ID AGENT_SECRET PUBLIC_ADDRESS METADATA
 export SERVER_HOST SERVER_PORT ALLOWED_BASE_DIRS ASSISTANT_ACTION_PIN
 export CONFIG_FILE ENV_FILE
 # Fireworks vars are optional; export whatever is already in the environment.
@@ -355,6 +497,7 @@ lines = [
     f"LOCAL_SERVICE_AUTH_TOKEN=",
     f"LOCAL_SERVICE_AUTH_TOKEN_EXPIRES=",
     f"VPS_URL={os.environ['VPS_URL']}",
+    f"AGENT_NAME={os.environ.get('AGENT_NAME', '')}",
     f"AGENT_ID={os.environ['AGENT_ID']}",
     f"AGENT_SECRET={os.environ['AGENT_SECRET']}",
     f"ASSISTANT_ACTION_PIN={os.environ.get('ASSISTANT_ACTION_PIN', '')}",
@@ -375,7 +518,14 @@ if fw_key := os.environ.get("FIREWORKS_API_KEY", "").strip():
     lines.append(f"FIREWORKS_API_KEY={fw_key}")
 lines.append(f"SPOTIFY_CLIENT_ID={os.environ.get('SPOTIFY_CLIENT_ID', '') or 'your_spotify_client_id_here'}")
 lines.append(f"SPOTIFY_CLIENT_SECRET={os.environ.get('SPOTIFY_CLIENT_SECRET', '') or 'your_spotify_client_secret_here'}")
-lines.append(f"SPOTIFY_REDIRECT_URI={os.environ.get('SPOTIFY_REDIRECT_URI', '') or f'{os.environ['VPS_URL']}/relay/{os.environ['AGENT_ID']}/callback'}")
+spotify_redirect = os.environ.get("SPOTIFY_REDIRECT_URI", "").strip()
+if not spotify_redirect:
+    agent_id = os.environ.get("AGENT_ID", "").strip()
+    if agent_id:
+        spotify_redirect = f"{os.environ['VPS_URL']}/relay/{agent_id}/callback"
+    else:
+        spotify_redirect = f"{os.environ['VPS_URL']}/relay/your_agent_id_after_pairing/callback"
+lines.append(f"SPOTIFY_REDIRECT_URI={spotify_redirect}")
 
 env_path = Path(os.environ["ENV_FILE"])
 env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -537,8 +687,11 @@ echo
 
 section "Connect from your Android device"
 echo
-echo "  │  VPS URL     :  $VPS_URL"
-echo "  │  Agent ID    :  $AGENT_ID"
+echo "  │  VPS URL      :  $VPS_URL"
+echo "  │  Agent label  :  $AGENT_NAME"
+if [[ -n "$AGENT_ID" ]]; then
+  echo "  │  Agent ID     :  $AGENT_ID"
+fi
 echo
 if [[ -n "$AGENT_SECRET" ]]; then
   info "Existing credential was reused. No new pairing step is required."

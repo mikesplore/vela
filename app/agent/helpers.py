@@ -410,9 +410,27 @@ def reset_agent_credential() -> None:
     config.relay_secret = ""
 
 
+def _existing_registration_is_valid() -> bool:
+    """Check whether current stored relay credentials can still mint ws tokens."""
+    secret = (config.relay_secret or "").strip()
+    agent_id = (config.agent_id or "").strip()
+    if not secret or not agent_id.startswith("agt_"):
+        return False
+    try:
+        refresh_ws_token()
+        return True
+    except Exception as exc:
+        print(f"Stored relay credential validation failed: {exc}")
+        return False
+
+
 def ensure_agent_registration(force: bool = False) -> None:
     if config.relay_secret and not force:
-        return
+        if _existing_registration_is_valid():
+            print("Stored relay credential is valid; skipping pairing.")
+            return
+        print("Stored relay credential is invalid or expired; re-pairing now.")
+        reset_agent_credential()
     if force:
         reset_agent_credential()
 
