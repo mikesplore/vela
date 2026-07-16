@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from app.setup.cli_links import install_user_cli_links
 from app.setup.credentials import wipe_setup_credentials
 from app.setup.deps import check_and_offer_dependency_install
 from app.setup.services import enable_services, restart_all_services, write_systemd_units
@@ -202,6 +203,7 @@ def run_setup() -> None:
         optional=optional,
     )
     vela_service, agent_service = write_systemd_units(target_dir)
+    install_user_cli_links(target_dir)
 
     # Stop agent so it cannot keep using any previous in-memory/env credentials
     # while we write new ones and force pairing.

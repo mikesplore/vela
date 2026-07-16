@@ -167,6 +167,8 @@ This will:
 > 💡 **VPS relay:** You can use the free relay at `vela.mikesplore.tech` or specify your own.
 >
 > `./setup.sh` also creates a virtual environment and installs Vela from the current source tree. A globally installed `vela --setup` only runs setup.
+>
+> Setup links `vela` and `vela-agent` into `~/.local/bin` so the commands work outside the virtualenv (as long as that directory is on your `PATH`).
 
 ### Post-Setup
 

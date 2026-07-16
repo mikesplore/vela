@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.scripts]
-vela = "app.main:main"
+vela = "app.cli:main"
 vela-agent = "app.agent.agent:main"
 vela-init = "installer:main"
 

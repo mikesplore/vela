@@ -185,13 +185,6 @@ class Config(BaseSettings):
             raise ValueError(f"Invalid rate limit format for routes: {bad}")
         return v
 
-    @field_validator("allowed_origins", "allowed_base_dirs")
-    @classmethod
-    def warn_if_empty(cls, v: List[str], info) -> List[str]:
-        if not v:
-            logger.warning("%s is empty — downstream processing will be fail-closed.", info.field_name)
-        return v
-
     # ---- Multi-Source Cascading Pipeline -----------------------------
 
     @classmethod

@@ -21,11 +21,6 @@ logger = logging.getLogger(__name__)
 RESEND_AVAILABLE = emails.is_configured()
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "")
 
-if not RESEND_AVAILABLE:
-    logger.warning("RESEND_API_KEY not set in .env — email alerts disabled")
-if not RECIPIENT_EMAIL:
-    logger.warning("RECIPIENT_EMAIL not set in .env — cannot send alerts")
-
 # Default thresholds
 DEFAULT_CPU_THRESHOLD = 80.0
 DEFAULT_MEMORY_THRESHOLD = 85.0
