@@ -22,7 +22,12 @@ from app.setup.credentials import wipe_setup_credentials
 from app.setup.deps import check_and_offer_dependency_install
 from app.setup.services import enable_services, restart_all_services, write_systemd_units
 from app.setup.wizard import browser_is_available, browser_onboarding_enabled, start_setup_wizard
-from app.setup.writers import write_config_yaml, write_env_file
+from app.setup.writers import (
+    OPTIONAL_ENV_FIELDS,
+    empty_optional_integrations,
+    write_config_yaml,
+    write_env_file,
+)
 
 
 def _prompt(default: str | None, label: str, required: bool = True) -> str:
@@ -82,6 +87,8 @@ def _collect_values(defaults: dict[str, str], wizard) -> dict[str, str | int]:
             wizard["close"]()
             wizard = None
 
+    optional = empty_optional_integrations()
+
     if browser_values:
         username = browser_values["username"] or defaults["username"]
         password = (browser_values["password"] or "").strip()
@@ -93,6 +100,8 @@ def _collect_values(defaults: dict[str, str], wizard) -> dict[str, str | int]:
         port = int(browser_values["port"] or defaults["port"])
         allowed_dirs_csv = browser_values["allowed_dirs_csv"] or defaults["allowed_dirs_csv"]
         assistant_pin = browser_values["assistant_pin"] or ""
+        for key in optional:
+            optional[key] = (browser_values.get(key) or "").strip()
     else:
         username = _prompt(defaults["username"], "Username")
         password = _prompt_secret("Password")
@@ -102,6 +111,10 @@ def _collect_values(defaults: dict[str, str], wizard) -> dict[str, str | int]:
         port = int(_prompt(defaults["port"], "Port"))
         allowed_dirs_csv = _prompt(defaults["allowed_dirs_csv"], "Allowed base dirs (comma-separated)")
         assistant_pin = _prompt("", "Assistant action PIN (optional)", required=False)
+        print("")
+        print("Optional integrations (leave blank to skip):")
+        for key, _, label in OPTIONAL_ENV_FIELDS:
+            optional[key] = _prompt(defaults.get(key, ""), f"{label} (optional)", required=False)
 
     if raw_vps and not raw_vps.startswith(("http://", "https://")):
         raw_vps = f"https://{raw_vps}"
@@ -124,6 +137,7 @@ def _collect_values(defaults: dict[str, str], wizard) -> dict[str, str | int]:
         "port": port,
         "allowed_dirs": allowed_dirs,
         "assistant_pin": assistant_pin,
+        "optional": optional,
         "wizard": wizard,
     }
 
@@ -146,6 +160,7 @@ def run_setup() -> None:
         "port": "8765",
         "allowed_dirs_csv": str(Path.home()),
         "assistant_pin": "",
+        **empty_optional_integrations(),
     }
 
     browser_available = browser_is_available()
@@ -163,6 +178,7 @@ def run_setup() -> None:
     port = int(values["port"])
     allowed_dirs = list(values["allowed_dirs"])
     assistant_pin = str(values["assistant_pin"])
+    optional = dict(values["optional"])  # type: ignore[arg-type]
 
     if wizard:
         wizard["set_phase"]("dependencies", "Checking dependencies...")
@@ -175,7 +191,16 @@ def run_setup() -> None:
     if wizard:
         wizard["set_phase"]("writing-config", "Writing config and environment files...")
     config_path = write_config_yaml(target_dir, username, password, host, port, allowed_dirs, assistant_pin)
-    env_path = write_env_file(target_dir, username, password, vps_url, agent_label, port, assistant_pin)
+    env_path = write_env_file(
+        target_dir,
+        username,
+        password,
+        vps_url,
+        agent_label,
+        port,
+        assistant_pin,
+        optional=optional,
+    )
     vela_service, agent_service = write_systemd_units(target_dir)
 
     # Stop agent so it cannot keep using any previous in-memory/env credentials

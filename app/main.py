@@ -245,6 +245,7 @@ def main() -> None:
     parser.add_argument("--setup", action="store_true", help="Fresh-start setup: wipe creds, pair, restart services")
     parser.add_argument("--start", action="store_true", help="Start vela + vela-agent user services")
     parser.add_argument("--stop", action="store_true", help="Stop vela + vela-agent user services")
+    parser.add_argument("--restart", action="store_true", help="Restart vela + vela-agent user services")
     parser.add_argument("--enable", action="store_true", help="Enable and start vela + vela-agent user services")
     parser.add_argument("--status", action="store_true", help="Show vela service status")
     parser.add_argument("--logs", action="store_true", help="Tail vela service logs")
@@ -264,6 +265,11 @@ def main() -> None:
     if args.stop:
         subprocess.run(["systemctl", "--user", "stop", *services], check=True)
         print("Stopped vela services.")
+        return
+
+    if args.restart:
+        subprocess.run(["systemctl", "--user", "restart", *services], check=True)
+        print("Restarted vela services.")
         return
 
     if args.enable:

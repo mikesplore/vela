@@ -78,6 +78,12 @@ def start_setup_wizard(defaults: dict[str, str]):
                 "port",
                 "allowed_dirs_csv",
                 "assistant_pin",
+                "fireworks_api_key",
+                "resend_api_key",
+                "resend_from_email",
+                "recipient_email",
+                "spotify_client_id",
+                "spotify_client_secret",
             ):
                 submitted[key] = (data.get(key) or [""])[0].strip()
             with state_lock:

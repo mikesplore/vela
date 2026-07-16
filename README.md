@@ -170,13 +170,14 @@ This will:
 
 ### Post-Setup
 
-After running `setup.sh`, open the generated `.env` file and add your API keys:
+Optional integrations (Fireworks, Resend, Spotify) can be filled during `vela --setup`.
+If you skipped them, open `.env` afterward and add the keys you need:
 
 ```bash
 nano .env
 ```
 
-At minimum, set your **Fireworks AI API key** (required for the assistant):
+At minimum, set your **Fireworks AI API key** if you want the assistant:
 
 ```
 FIREWORKS_API_KEY='your-actual-key-here'
@@ -203,6 +204,7 @@ Common commands:
 vela --setup
 vela --start
 vela --stop
+vela --restart
 vela --status
 vela --logs
 vela-agent --start
@@ -210,6 +212,7 @@ vela-agent --stop
 ```
 
 > `vela --setup` is the only onboarding path. It always starts fresh (no credential reuse).
+> After editing `.env`, run `vela --restart` so both services reload the new values.
 
 ## Agent Registration
 

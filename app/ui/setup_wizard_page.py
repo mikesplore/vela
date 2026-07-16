@@ -10,6 +10,12 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
         "PORT": html.escape(defaults.get("port", "")),
         "DIRS": html.escape(defaults.get("allowed_dirs_csv", "")),
         "PIN": html.escape(defaults.get("assistant_pin", "")),
+        "FIREWORKS_API_KEY": html.escape(defaults.get("fireworks_api_key", "")),
+        "RESEND_API_KEY": html.escape(defaults.get("resend_api_key", "")),
+        "RESEND_FROM_EMAIL": html.escape(defaults.get("resend_from_email", "")),
+        "RECIPIENT_EMAIL": html.escape(defaults.get("recipient_email", "")),
+        "SPOTIFY_CLIENT_ID": html.escape(defaults.get("spotify_client_id", "")),
+        "SPOTIFY_CLIENT_SECRET": html.escape(defaults.get("spotify_client_secret", "")),
     }
 
     template = """<!DOCTYPE html>
@@ -40,7 +46,7 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
   .step{display:none;padding:0 26px 26px;} .step.active{display:block;}
   .field{margin-bottom:16px;} .field label{display:block;font-size:12.5px;font-weight:600;margin-bottom:6px;}
   .hint{font-size:11.5px;color:var(--ink-faint);margin-top:6px;line-height:1.4;} .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
-  input[type=text],input[type=password]{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-family:var(--sans);font-size:13.5px;color:var(--ink);background:var(--paper);transition:border-color .15s, box-shadow .15s;}
+  input[type=text],input[type=password],input[type=email]{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-family:var(--sans);font-size:13.5px;color:var(--ink);background:var(--paper);transition:border-color .15s, box-shadow .15s;}
   input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);} input.mono{font-family:var(--mono);}
   .pin-field{position:relative;} .pin-field input{padding-right:60px;}
   .pin-toggle{position:absolute;right:8px;top:50%;transform:translateY(-50%);font-family:var(--mono);font-size:10.5px;text-transform:uppercase;color:var(--accent);background:none;border:none;cursor:pointer;padding:4px 6px;}
@@ -72,13 +78,18 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
 </head>
 <body>
 <div class="card">
-  <div class="progress"><div class="seg" id="seg1"></div><div class="seg" id="seg2"></div><div class="seg" id="seg3"></div></div>
+  <div class="progress">
+    <div class="seg" id="seg1"></div>
+    <div class="seg" id="seg2"></div>
+    <div class="seg" id="seg3"></div>
+    <div class="seg" id="seg4"></div>
+  </div>
   <div class="head"><div class="eyebrow"><div class="brand-mark"></div>Vela Setup</div></div>
   <div id="errorBanner" class="error-banner"></div>
-  <div class="step" id="step1">
-    <h1>Configure this device</h1>
-    <p class="sub">Set identity and access scope. You will review before setup starts.</p>
-    <form id="setupForm">
+  <form id="setupForm">
+    <div class="step" id="step1">
+      <h1>Configure this device</h1>
+      <p class="sub">Set identity and access scope. Integrations come next.</p>
       <div class="field"><label for="user">Username</label><input name="username" type="text" id="user" value="__USERNAME__" required></div>
       <div class="field"><label for="pass">Password</label><input name="password" type="password" id="pass" value="" required></div>
       <div class="field"><label for="vps">VPS URL</label><input name="vps_url" type="text" id="vps" class="mono" value="__VPS_URL__" required></div>
@@ -93,12 +104,26 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
         </div>
       </div>
       <div class="field" style="margin-bottom:0;"><label for="dirs">Allowed base directories</label><input name="allowed_dirs_csv" type="text" id="dirs" class="mono" value="__DIRS__" required><div class="hint">Comma-separated. Setup always starts fresh and re-pairs.</div></div>
-    </form>
-    <div class="actions" style="justify-content:flex-end;">
-      <button type="button" class="btn-primary" id="toReviewBtn">Review <svg viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <div class="actions" style="justify-content:flex-end;">
+        <button type="button" class="btn-primary" id="toIntegrationsBtn">Next <svg viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
     </div>
-  </div>
-  <div class="step" id="step2">
+    <div class="step" id="step2">
+      <h1>Optional integrations</h1>
+      <p class="sub">Skip anything you do not have yet. You can edit these later in <span class="mono">.env</span>.</p>
+      <div class="field"><label for="fireworks">Fireworks API key</label><input name="fireworks_api_key" type="password" id="fireworks" class="mono" value="__FIREWORKS_API_KEY__" autocomplete="off"><div class="hint">Needed for the LLM assistant.</div></div>
+      <div class="field"><label for="resendKey">Resend API key</label><input name="resend_api_key" type="password" id="resendKey" class="mono" value="__RESEND_API_KEY__" autocomplete="off"></div>
+      <div class="field"><label for="resendFrom">Resend from email</label><input name="resend_from_email" type="text" id="resendFrom" value="__RESEND_FROM_EMAIL__" placeholder="Vela &lt;alerts@example.com&gt;"></div>
+      <div class="field"><label for="recipient">Alert recipient email</label><input name="recipient_email" type="email" id="recipient" value="__RECIPIENT_EMAIL__"></div>
+      <div class="field"><label for="spotifyId">Spotify client ID</label><input name="spotify_client_id" type="text" id="spotifyId" class="mono" value="__SPOTIFY_CLIENT_ID__" autocomplete="off"></div>
+      <div class="field" style="margin-bottom:0;"><label for="spotifySecret">Spotify client secret</label><input name="spotify_client_secret" type="password" id="spotifySecret" class="mono" value="__SPOTIFY_CLIENT_SECRET__" autocomplete="off"></div>
+      <div class="actions">
+        <button type="button" class="btn-ghost" id="backToConfigBtn"><svg viewBox="0 0 16 16" fill="none"><path d="M13 8H3M7 4L3 8l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Back</button>
+        <button type="button" class="btn-primary" id="toReviewBtn">Review <svg viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
+    </div>
+  </form>
+  <div class="step" id="step3">
     <h1>Review &amp; confirm</h1>
     <p class="sub">Confirm details before setup and registration.</p>
     <div class="review-list">
@@ -108,14 +133,20 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
       <div class="review-row"><span>Bind host : port</span><span id="r-bind"></span></div>
       <div class="review-row"><span>Allowed dirs</span><span id="r-dirs"></span></div>
       <div class="review-row"><span>Assistant PIN</span><span id="r-pin"></span></div>
+      <div class="review-row"><span>Fireworks API key</span><span id="r-fireworks"></span></div>
+      <div class="review-row"><span>Resend API key</span><span id="r-resend"></span></div>
+      <div class="review-row"><span>Resend from email</span><span id="r-resend-from"></span></div>
+      <div class="review-row"><span>Recipient email</span><span id="r-recipient"></span></div>
+      <div class="review-row"><span>Spotify client ID</span><span id="r-spotify-id"></span></div>
+      <div class="review-row"><span>Spotify client secret</span><span id="r-spotify-secret"></span></div>
     </div>
     <p class="hint" id="phaseText">[collect] Waiting for form submission...</p>
     <div class="actions">
-      <button type="button" class="btn-ghost" id="backToConfigBtn"><svg viewBox="0 0 16 16" fill="none"><path d="M13 8H3M7 4L3 8l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Back</button>
+      <button type="button" class="btn-ghost" id="backToIntegrationsBtn"><svg viewBox="0 0 16 16" fill="none"><path d="M13 8H3M7 4L3 8l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Back</button>
       <button type="button" class="btn-primary" id="startSetupBtn">Start setup <svg viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     </div>
   </div>
-  <div class="step" id="step3">
+  <div class="step" id="step4">
     <h1>Pair your mobile app</h1>
     <p class="sub">Open the Vela app and use these pairing details.</p>
     <span class="status-pill" id="statusPill"><span class="dot"></span><span id="statusPillText">Awaiting pairing</span></span>
@@ -133,7 +164,7 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
     </div>
     <div class="expiry-note"><svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 5v3.3l2.2 1.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span id="expiryText">Waiting for pairing session...</span></div>
   </div>
-  <div class="step" id="step4">
+  <div class="step" id="step5">
     <div class="done-wrap">
       <div class="done-icon"><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
       <div class="done-title" id="doneTitle">Agent paired</div>
@@ -142,12 +173,13 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
   </div>
 </div>
 <script>
-  const total = 3;
+  const total = 4;
   let qr = null;
   let currentPairing = null;
   let currentQrPayload = null;
   let localErrorMessage = '';
   let serverErrorMessage = '';
+  let userStep = 1;
 
   function goTo(n){
     document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
@@ -159,7 +191,12 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
       if(i < n) seg.classList.add('done');
       else if(i === n) seg.classList.add('active');
     }
-    if(n === 4) for(let i=1;i<=total;i++) document.getElementById('seg'+i).classList.add('done');
+    if(n === 5) for(let i=1;i<=total;i++) document.getElementById('seg'+i).classList.add('done');
+    if (n <= 3) userStep = n;
+  }
+
+  function maskOrUnset(value){
+    return value ? '•••• set' : 'Not set';
   }
 
   function fillReview(){
@@ -169,6 +206,12 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
     document.getElementById('r-bind').textContent = document.getElementById('bind').value + ' : ' + document.getElementById('port').value;
     document.getElementById('r-dirs').textContent = document.getElementById('dirs').value;
     document.getElementById('r-pin').textContent = document.getElementById('pin').value ? '••••' : 'Not set';
+    document.getElementById('r-fireworks').textContent = maskOrUnset(document.getElementById('fireworks').value);
+    document.getElementById('r-resend').textContent = maskOrUnset(document.getElementById('resendKey').value);
+    document.getElementById('r-resend-from').textContent = document.getElementById('resendFrom').value || 'Not set';
+    document.getElementById('r-recipient').textContent = document.getElementById('recipient').value || 'Not set';
+    document.getElementById('r-spotify-id').textContent = document.getElementById('spotifyId').value || 'Not set';
+    document.getElementById('r-spotify-secret').textContent = maskOrUnset(document.getElementById('spotifySecret').value);
   }
 
   function renderQr(payload){
@@ -194,19 +237,26 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
     document.getElementById('statusPillText').textContent = status.toLowerCase().replace('_', ' ');
     if (status === 'ACTIVE') {
       document.getElementById('statusPill').classList.add('paired');
-      goTo(4);
+      goTo(5);
       document.getElementById('doneTitle').textContent = (document.getElementById('label').value || 'Agent') + ' is paired';
       document.getElementById('doneSub').textContent = 'Your mobile app is now connected to this device.';
     }
   }
 
-  async function submitSetup(){
+  function validateRequired(){
     const form = document.getElementById('setupForm');
     if (!form.reportValidity()) {
       showError('Please fill all required fields before continuing.', 'local');
-      return;
+      goTo(1);
+      return false;
     }
     clearLocalError();
+    return true;
+  }
+
+  async function submitSetup(){
+    if (!validateRequired()) return;
+    const form = document.getElementById('setupForm');
     const formData = new FormData(form);
     try {
       const res = await fetch('/submit', { method: 'POST', body: new URLSearchParams(formData), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }});
@@ -214,7 +264,7 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
         const body = await res.text();
         throw new Error(body || `Submit failed with status ${res.status}`);
       }
-      goTo(2);
+      goTo(3);
       document.getElementById('phaseText').textContent = '[configuring] Setup submitted. Continuing...';
     } catch (_) {
       showError('Failed to submit setup form. Please try again.', 'local');
@@ -256,14 +306,13 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
       else if (phase !== 'error') serverErrorMessage = '';
       updateErrorBanner();
       if (data.done) {
-        goTo(4);
+        goTo(5);
       } else if (data.pairing || phase === 'pairing') {
-        goTo(3);
+        goTo(4);
       } else if (phase === 'collect') {
-        // keep user where they are while editing
+        // keep user on config / integrations / review while editing
       } else {
-        // configure/dependencies/services progress stays in review step
-        goTo(2);
+        goTo(3);
       }
       updatePairingDisplay(data);
     } catch (_) {}
@@ -274,8 +323,16 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
     i.type = i.type === 'password' ? 'text' : 'password';
     this.textContent = i.type === 'password' ? 'Show' : 'Hide';
   });
-  document.getElementById('toReviewBtn').addEventListener('click', function(){ fillReview(); goTo(2); });
+  document.getElementById('toIntegrationsBtn').addEventListener('click', function(){
+    if (!validateRequired()) return;
+    goTo(2);
+  });
+  document.getElementById('toReviewBtn').addEventListener('click', function(){
+    fillReview();
+    goTo(3);
+  });
   document.getElementById('backToConfigBtn').addEventListener('click', function(){ goTo(1); });
+  document.getElementById('backToIntegrationsBtn').addEventListener('click', function(){ goTo(2); });
   document.getElementById('startSetupBtn').addEventListener('click', submitSetup);
   setInterval(refreshState, 1500);
   refreshState();
@@ -288,4 +345,3 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
     for key, value in values.items():
         template = template.replace(f"__{key}__", value)
     return template
-

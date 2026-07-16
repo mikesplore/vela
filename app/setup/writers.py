@@ -9,6 +9,20 @@ from pathlib import Path
 import bcrypt
 import yaml
 
+# Optional integrations collected during setup. Empty means "leave unset".
+OPTIONAL_ENV_FIELDS = (
+    ("fireworks_api_key", "FIREWORKS_API_KEY", "Fireworks API key (assistant)"),
+    ("resend_api_key", "RESEND_API_KEY", "Resend API key (email alerts)"),
+    ("resend_from_email", "RESEND_FROM_EMAIL", "Resend from email"),
+    ("recipient_email", "RECIPIENT_EMAIL", "Alert recipient email"),
+    ("spotify_client_id", "SPOTIFY_CLIENT_ID", "Spotify client ID"),
+    ("spotify_client_secret", "SPOTIFY_CLIENT_SECRET", "Spotify client secret"),
+)
+
+
+def empty_optional_integrations() -> dict[str, str]:
+    return {key: "" for key, _, _ in OPTIONAL_ENV_FIELDS}
+
 
 def write_config_yaml(
     target_dir: Path,
@@ -64,8 +78,14 @@ def write_env_file(
     agent_label: str,
     server_port: int,
     assistant_pin: str,
+    optional: dict[str, str] | None = None,
 ) -> Path:
     """Write a fresh .env. Relay credentials stay empty until pairing completes."""
+    opts = empty_optional_integrations()
+    if optional:
+        for key in opts:
+            opts[key] = (optional.get(key) or "").strip()
+
     env_path = target_dir / ".env"
     lines = [
         f"USERNAME={username}",
@@ -83,15 +103,15 @@ def write_env_file(
         "AGENT_CREDENTIAL=",
         "RELAY_SECRET=",
         f"ASSISTANT_ACTION_PIN={assistant_pin}",
-        "FIREWORKS_API_KEY=paste_your_key_here",
+        f"FIREWORKS_API_KEY={opts['fireworks_api_key']}",
         "VELA_ASSISTANT_ENABLE_THINKING=false",
         "VELA_FIREWORKS_API_URL=https://api.fireworks.ai/inference/v1",
         "VELA_FIREWORKS_MODEL=accounts/fireworks/models/qwen3p7-plus",
-        "RECIPIENT_EMAIL=your_personal_email",
-        "RESEND_API_KEY=your_resend_api_key",
-        "RESEND_FROM_EMAIL=your_resend_email",
-        "SPOTIFY_CLIENT_ID=your_spotify_client_id_here",
-        "SPOTIFY_CLIENT_SECRET=your_spotify_client_secret_here",
+        f"RECIPIENT_EMAIL={opts['recipient_email']}",
+        f"RESEND_API_KEY={opts['resend_api_key']}",
+        f"RESEND_FROM_EMAIL={opts['resend_from_email']}",
+        f"SPOTIFY_CLIENT_ID={opts['spotify_client_id']}",
+        f"SPOTIFY_CLIENT_SECRET={opts['spotify_client_secret']}",
         f"SPOTIFY_REDIRECT_URI={vps_url}/relay/your_agent_id_after_pairing/callback",
     ]
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
