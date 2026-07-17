@@ -14,6 +14,7 @@ from app.prompts import DEFAULT_ASSISTANT_SYSTEM_PROMPT
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent.parent
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "vela"
 
 # 1. Look for .env candidates. Standard load_dotenv does not overwrite
@@ -21,7 +22,7 @@ DEFAULT_CONFIG_DIR = Path.home() / ".config" / "vela"
 ENV_CANDIDATES = (
     Path.cwd() / ".env",
     DEFAULT_CONFIG_DIR / ".env",
-    BASE_DIR / ".env",
+    PROJECT_ROOT / ".env",
 )
 for dotenv_path in ENV_CANDIDATES:
     if dotenv_path.exists():
@@ -227,7 +228,11 @@ class Config(BaseSettings):
             candidate_paths = (
                 [Path(config_override)]
                 if config_override
-                else [Path.cwd() / "config.yaml", DEFAULT_CONFIG_DIR / "config.yaml", BASE_DIR / "config.yaml"]
+                else [
+                    Path.cwd() / "config.yaml",
+                    DEFAULT_CONFIG_DIR / "config.yaml",
+                    PROJECT_ROOT / "config.yaml",
+                ]
             )
 
             for config_path in candidate_paths:
