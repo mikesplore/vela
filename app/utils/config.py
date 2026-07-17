@@ -59,6 +59,8 @@ class Config(BaseSettings):
     assistant_action_pin: str | None = None
     assistant_action_timeout_seconds: int = 120
     assistant_enable_thinking: bool = False
+    # Max bytes the assistant will transfer via download_file (base64 over chat/SSE).
+    assistant_max_download_bytes: int = 5 * 1024 * 1024
     fireworks_api_key: str | None = None
     fireworks_model: str = "accounts/fireworks/models/deepseek-v4-flash"
     fireworks_api_url: str = "https://api.fireworks.ai/inference/v1"

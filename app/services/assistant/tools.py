@@ -331,7 +331,12 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "download_file": {
         "method": "GET",
         "path": "/fs/download",
-        "description": "Download a file from the filesystem.",
+        "description": (
+            "Download a file from the local filesystem and send it to the user interface. "
+            "Images are shown in the UI (not to the AI model) — you only get a success confirmation with path/size. "
+            "Files larger than the configured limit are rejected with size details; do not retry the same path. "
+            "Use for transferring a file the user asked to see or receive, not for reading file contents yourself."
+        ),
         "input": {"path": "string"},
     },
     "upload_file": {

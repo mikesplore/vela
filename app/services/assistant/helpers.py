@@ -230,11 +230,14 @@ async def compose_final_reply(user_message: str, results: list[dict[str, Any]]) 
             parts.append(f"Length: {length_text}.")
         return " ".join(parts), art_url
 
+    from app.services.assistant.tool_exec import sanitize_tool_results_for_llm
+
     system = config.assistant_system_prompt
+    safe_results = sanitize_tool_results_for_llm(results)
     results_text = "\n".join(
         f"Tool: {r['tool']}\nResult: {json.dumps(r['result'], separators=(',', ':'))}"
         + (f"\nError: {r['error']}" if r.get("error") else "")
-        for r in results
+        for r in safe_results
     )
     try:
         api_key = get_api_key()

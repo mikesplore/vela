@@ -2,16 +2,166 @@ import asyncio
 import base64
 import json
 import logging
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from httpx import ASGITransport, AsyncClient
 
 from app.domain.assistant import AssistantResponse
 from app.services.assistant.tools import INPUT_CONFIRM_TOOLS, TOOL_ALIASES, TOOL_DEFINITIONS
+from app.services.filesystem import validate_path
+from app.utils.config import get_config
 
 logger = logging.getLogger("vela.assistant")
+
+_BINARY_RESULT_KEYS = ("content_base64", "image_base64")
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"}
+
+
+def _format_bytes(num: int) -> str:
+    value = float(num)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{num} B"
+
+
+def _detect_image(path: Path, data: bytes) -> tuple[bool, str]:
+    """Return (is_image, content_type) from extension and magic bytes."""
+    ext = path.suffix.lower()
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return True, "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return True, "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return True, "image/gif"
+    if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WEBP":
+        return True, "image/webp"
+    if data.startswith(b"BM"):
+        return True, "image/bmp"
+    if data.startswith(b"\x00\x00\x01\x00"):
+        return True, "image/x-icon"
+    if ext in _IMAGE_EXTENSIONS:
+        return True, {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+            ".bmp": "image/bmp",
+            ".ico": "image/x-icon",
+        }.get(ext, "application/octet-stream")
+    return False, "application/octet-stream"
+
+
+def sanitize_tool_result_for_llm(result: Any) -> Any:
+    """Strip binary payloads so they never enter an LLM prompt."""
+    if not isinstance(result, dict):
+        return result
+    if not any(k in result for k in _BINARY_RESULT_KEYS):
+        return result
+    sanitized = {k: v for k, v in result.items() if k not in _BINARY_RESULT_KEYS}
+    sanitized["content_omitted"] = True
+    sanitized["content_omitted_reason"] = "binary content delivered to client only"
+    return sanitized
+
+
+def sanitize_tool_results_for_llm(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            **r,
+            "result": sanitize_tool_result_for_llm(r.get("result")),
+        }
+        for r in results
+    ]
+
+
+def download_image_payload(tool_results: list[dict[str, Any]]) -> tuple[str, str] | None:
+    """
+    If results are a single successful image download, return (display_name, image_base64).
+    Used for screenshot-style fast-path (no second LLM call).
+    """
+    if len(tool_results) != 1:
+        return None
+    entry = tool_results[0]
+    if entry.get("tool") != "download_file" or entry.get("error"):
+        return None
+    result = entry.get("result") or {}
+    if not isinstance(result, dict):
+        return None
+    image_b64 = result.get("image_base64")
+    if not result.get("is_image") or not image_b64:
+        return None
+    path = result.get("path") or "image"
+    return Path(str(path)).name, image_b64
+
+
+async def _execute_download_file(
+        app: FastAPI,
+        tool_input: dict[str, Any],
+        headers: dict[str, str],
+) -> dict[str, Any]:
+    path_value = tool_input.get("path")
+    if not path_value:
+        raise ValueError("tool_input.path is required for download_file")
+
+    try:
+        target = validate_path(str(path_value), must_exist=True)
+    except HTTPException as exc:
+        raise ValueError(exc.detail) from exc
+    if target.is_dir():
+        raise ValueError("Path must be a file")
+
+    size = target.stat().st_size
+    max_bytes = get_config().assistant_max_download_bytes
+    if size > max_bytes:
+        return {
+            "path": str(target),
+            "size_bytes": size,
+            "max_bytes": max_bytes,
+            "too_large": True,
+            "message": (
+                f"File is too large to transfer ({_format_bytes(size)}). "
+                f"Maximum is {_format_bytes(max_bytes)}."
+            ),
+        }
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/fs/download",
+            params={"path": str(target)},
+            headers=headers,
+            timeout=20.0,
+        )
+
+    if response.status_code >= 400:
+        try:
+            error_data = response.json()
+        except ValueError:
+            error_data = response.text
+        raise ValueError(f"Tool download_file failed: {response.status_code} {error_data}")
+
+    data = response.content
+    is_image, content_type = _detect_image(target, data)
+    encoded = base64.b64encode(data).decode("utf-8")
+    result: dict[str, Any] = {
+        "path": str(target),
+        "size_bytes": size,
+        "content_type": content_type,
+        "is_image": is_image,
+    }
+    if is_image:
+        # Same field the client already uses for screenshots.
+        result["image_base64"] = encoded
+    else:
+        result["content_base64"] = encoded
+    return result
 
 
 async def _execute_tool(
@@ -53,6 +203,9 @@ async def _execute_tool(
     if auth_header:
         headers["Authorization"] = auth_header
 
+    if tool_name == "download_file":
+        return await _execute_download_file(app, tool_input, headers)
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         method = tool["method"].upper()
@@ -72,19 +225,6 @@ async def _execute_tool(
             response = await client.get(path, params=tool_input or {}, headers=headers, timeout=20.0)
         else:
             response = await client.request(method, path, json=tool_input or {}, headers=headers, timeout=20.0)
-
-    if tool_name == "download_file":
-        if response.status_code >= 400:
-            try:
-                error_data = response.json()
-            except ValueError:
-                error_data = response.text
-            raise ValueError(f"Tool {tool_name} failed: {response.status_code} {error_data}")
-        return {
-            "path": tool_input.get("path"),
-            "content_base64": base64.b64encode(response.content).decode("utf-8"),
-            "content_type": response.headers.get("content-type", "application/octet-stream"),
-        }
 
     try:
         data = response.json()
@@ -130,13 +270,19 @@ async def execute_tool_calls(request: Request, tool_calls: list[dict[str, object
         if image_base64:
             return AssistantResponse(reply="Screenshot captured.", image_base64=image_base64)
 
+    image_download = download_image_payload(tool_results)
+    if image_download:
+        name, image_base64 = image_download
+        return AssistantResponse(reply=f"Here's {name}.", image_base64=image_base64)
+
     try:
         reply_text, art_url = await compose_final_reply(user_message, tool_results)
     except Exception as exc:
         logger.error("Final response composition failed: %s", exc, exc_info=True)
+        safe = sanitize_tool_results_for_llm(tool_results)
         reply_text = "\n".join(
             f"- **{r['tool']}**: {r['error'] or json.dumps(r['result'], separators=(',', ':'))}"
-            for r in tool_results
+            for r in safe
         )
         art_url = None
     return AssistantResponse(reply=reply_text, art_url=art_url)

@@ -47,7 +47,11 @@ from app.services.assistant.session import (
     get_or_init_session,
     trim_history,
 )
-from app.services.assistant.tool_exec import execute_tool_safe
+from app.services.assistant.tool_exec import (
+    download_image_payload,
+    execute_tool_safe,
+    sanitize_tool_result_for_llm,
+)
 from app.services.assistant.safety import (
     PIN_MAX_ATTEMPTS,
     build_confirmation_card,
@@ -173,6 +177,14 @@ async def _run_tools_and_reply(
         else:
             yield _sse_tool(r["tool"], "done", result=r.get("result"))
 
+    # Deliver downloaded images on the same channel as screenshots (client already handles this).
+    for r in tool_results:
+        if r.get("tool") != "download_file" or r.get("error"):
+            continue
+        result = r.get("result") or {}
+        if isinstance(result, dict) and result.get("is_image") and result.get("image_base64"):
+            yield _sse("screenshot", {"image_base64": result["image_base64"]})
+
     # Fast-path: screenshot only (no second LLM call — image data is too large)
     if len(tool_results) == 1 and tool_results[0].get("tool") == "display_screenshot":
         result = tool_results[0].get("result") or {}
@@ -181,6 +193,17 @@ async def _run_tools_and_reply(
             yield _sse("screenshot", {"image_base64": img})
         yield _sse_content("Screenshot captured.")
         history.append({"role": "assistant", "content": "Screenshot captured."})
+        SESSION_STORE[current_user] = trim_history(history)
+        yield _sse_done()
+        return
+
+    # Fast-path: single image download (same as screenshot — skip second LLM call)
+    image_download = download_image_payload(tool_results)
+    if image_download:
+        name, _img = image_download
+        reply = f"Here's {name}."
+        yield _sse_content(reply)
+        history.append({"role": "assistant", "content": reply})
         SESSION_STORE[current_user] = trim_history(history)
         yield _sse_done()
         return
@@ -199,10 +222,11 @@ async def _run_tools_and_reply(
         yield _sse_done()
         return
 
-    # Stream the final reply
+    # Stream the final reply (binary payloads stripped — already sent to client above)
     results_text = ""
     for r in tool_results:
-        res_str = json.dumps(r['result'], separators=(',', ':'))
+        safe_result = sanitize_tool_result_for_llm(r.get("result"))
+        res_str = json.dumps(safe_result, separators=(',', ':'))
         if len(res_str) > 5000:
             res_str = res_str[:5000] + "... [TRUNCATED]"
         results_text += f"\nTool: {r['tool']}\nResult: {res_str}"
