@@ -137,10 +137,20 @@ def install_packages(pkg_manager: str, packages: list[str]) -> None:
     raise RuntimeError(f"Unsupported package manager: {pkg_manager}")
 
 
+def dependency_install_plan() -> tuple[list[dict], str, list[str]]:
+    """Return missing dependency groups and the packages that can satisfy them."""
+    missing = check_missing_dependencies()
+    pkg_manager = detect_pkg_manager()
+    packages = sorted(
+        {pkg for group in missing for pkg in group["packages"].get(pkg_manager, [])}
+    )
+    return missing, pkg_manager, packages
+
+
 def check_and_offer_dependency_install(prompt_fn) -> None:
     print("")
     print("Checking system dependencies...")
-    missing = check_missing_dependencies()
+    missing, pkg_manager, packages = dependency_install_plan()
     if not missing:
         print("All checked runtime tools are already available.")
         return
@@ -156,14 +166,10 @@ def check_and_offer_dependency_install(prompt_fn) -> None:
         print("Skipping package install. Missing features may fail until tools are installed.")
         return
 
-    pkg_manager = detect_pkg_manager()
     if pkg_manager == "unknown":
         print("No supported package manager detected (apt, dnf, pacman). Install tools manually.")
         return
 
-    packages = sorted(
-        {pkg for group in missing for pkg in group["packages"].get(pkg_manager, [])}
-    )
     if not packages:
         print("No package suggestions available for the detected missing commands.")
         return

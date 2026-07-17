@@ -30,51 +30,57 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
   :root{
-    --bg:#F7F6F3; --paper:#FFFFFF; --line:#E4E1D9; --line-soft:#EDEBE4; --ink:#1C1B18;
-    --ink-soft:#6B6858; --ink-faint:#A6A296; --accent:#2C55E8; --accent-soft:#EEF1FD;
-    --good:#1D7A50; --mono:'IBM Plex Mono', ui-monospace, monospace; --sans:'Inter', -apple-system, sans-serif;
+    --bg:#F3F6FC; --paper:#FFFFFF; --panel:#F8FAFE; --line:#DCE3F0; --line-soft:#EAF0F8;
+    --ink:#172033; --ink-soft:#64718A; --ink-faint:#8995AA; --accent:#4F7CFF;
+    --accent-soft:#EAF0FF; --good:#248C62; --warn:#B7791F; --bad:#C94954;
+    --mono:'IBM Plex Mono', ui-monospace, monospace; --sans:'Inter', -apple-system, sans-serif;
   }
   *{box-sizing:border-box;} html,body{margin:0;padding:0;}
-  body{background:var(--bg);font-family:var(--sans);color:var(--ink);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:40px 20px;}
-  .card{width:100%;max-width:520px;background:var(--paper);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(28,27,24,0.04);}
+  body{background:radial-gradient(circle at 12% 5%,rgba(79,124,255,.12),transparent 30%),radial-gradient(circle at 88% 92%,rgba(36,140,98,.08),transparent 28%),var(--bg);font-family:var(--sans);color:var(--ink);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:40px 20px;}
+  .card{width:100%;max-width:520px;background:rgba(255,255,255,.96);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 20px 50px rgba(36,55,93,.12);}
   .progress{display:flex;gap:6px;padding:22px 26px 0;} .progress .seg{flex:1;height:3px;border-radius:2px;background:var(--line-soft);}
-  .progress .seg::after{content:"";display:block;height:100%;width:0%;background:var(--ink);transition:width .35s ease;}
+  .progress .seg::after{content:"";display:block;height:100%;width:0%;background:var(--accent);transition:width .35s ease;}
   .progress .seg.done::after,.progress .seg.active::after{width:100%;}
   .head{padding:20px 26px 0;} .eyebrow{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-faint);display:flex;align-items:center;gap:8px;margin-bottom:8px;}
-  .brand-mark{width:16px;height:16px;border-radius:5px;background:var(--ink);position:relative;flex-shrink:0;}
-  .brand-mark::after{content:"";position:absolute;inset:0;margin:auto;width:5px;height:5px;background:var(--paper);clip-path:polygon(50% 0%,0% 100%,100% 100%);}
+  .brand-mark{width:18px;height:18px;border-radius:5px;background:var(--accent);flex-shrink:0;box-shadow:0 0 14px rgba(79,124,255,.32);}
   h1{font-size:21px;letter-spacing:-0.01em;margin:0 0 6px;font-weight:700;} .sub{color:var(--ink-soft);font-size:13.5px;line-height:1.5;margin:0 0 22px;}
   .step{display:none;padding:0 26px 26px;} .step.active{display:block;}
   .field{margin-bottom:16px;} .field label{display:block;font-size:12.5px;font-weight:600;margin-bottom:6px;}
   .hint{font-size:11.5px;color:var(--ink-faint);margin-top:6px;line-height:1.4;} .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
-  input[type=text],input[type=password],input[type=email]{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-family:var(--sans);font-size:13.5px;color:var(--ink);background:var(--paper);transition:border-color .15s, box-shadow .15s;}
+  input[type=text],input[type=password],input[type=email]{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-family:var(--sans);font-size:13.5px;color:var(--ink);background:var(--panel);transition:border-color .15s, box-shadow .15s;}
   input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);} input.mono{font-family:var(--mono);}
   .pin-field{position:relative;} .pin-field input{padding-right:60px;}
   .pin-toggle{position:absolute;right:8px;top:50%;transform:translateY(-50%);font-family:var(--mono);font-size:10.5px;text-transform:uppercase;color:var(--accent);background:none;border:none;cursor:pointer;padding:4px 6px;}
   .actions{display:flex;align-items:center;justify-content:space-between;margin-top:22px;}
-  .btn-primary{background:var(--ink);color:#fff;border:none;padding:11px 20px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:7px;}
+  .btn-primary{background:var(--accent);color:#fff;border:none;padding:11px 20px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:7px;box-shadow:0 5px 12px rgba(79,124,255,.22);}
+  .btn-primary:hover{background:#3F6DEE;}.btn-primary:focus-visible,.btn-ghost:focus-visible,.pin-toggle:focus-visible{outline:3px solid rgba(79,124,255,.32);outline-offset:2px;}
   .btn-primary svg,.btn-ghost svg{width:13px;height:13px;}
   .btn-ghost{background:none;border:none;color:var(--ink-soft);font-size:13px;font-weight:500;cursor:pointer;padding:8px 4px;display:inline-flex;align-items:center;gap:6px;}
-  .review-list{border:1px solid var(--line-soft);border-radius:10px;overflow:hidden;margin-bottom:6px;}
+  .review-list{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:6px;background:var(--panel);}
   .review-row{display:flex;justify-content:space-between;gap:12px;padding:10px 14px;font-size:12.5px;border-bottom:1px solid var(--line-soft);}
   .review-row:last-child{border-bottom:none;} .review-row span:first-child{color:var(--ink-faint);} .review-row span:last-child{font-family:var(--mono);font-weight:500;text-align:right;word-break:break-all;}
-  .status-pill{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;font-weight:600;padding:5px 11px;border-radius:20px;background:#FBF2DE;color:#8A6512;text-transform:uppercase;letter-spacing:.05em;margin-bottom:18px;}
-  .status-pill .dot{width:6px;height:6px;border-radius:50%;background:#D8A11E;animation:blink 1.4s infinite;}
-  .status-pill.paired{background:#E9F5EE;color:var(--good);} .status-pill.paired .dot{background:var(--good);animation:none;}
+  .dependency-panel{display:none;margin:16px 0 6px;padding:14px;border:1px solid rgba(79,124,255,.28);border-radius:10px;background:var(--accent-soft);}
+  .dependency-panel h2{font-size:14px;margin:0 0 6px;}.dependency-panel p{font-size:12px;color:var(--ink-soft);line-height:1.45;margin:0 0 10px;}
+  .dependency-list{margin:0 0 12px;padding:0;list-style:none;}.dependency-list li{padding:8px 0;border-top:1px solid rgba(79,124,255,.14);font-size:12px;}
+  .dependency-list li:first-child{border-top:0;}.dependency-list strong{display:block;font-size:12.5px;}.dependency-list span{display:block;margin-top:2px;color:var(--ink-soft);}
+  .dependency-actions{display:flex;justify-content:flex-end;gap:10px;}.dependency-actions .btn-primary{padding:9px 12px;font-size:12.5px;}
+  .status-pill{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;font-weight:600;padding:5px 11px;border-radius:20px;background:#FFF6E6;color:var(--warn);text-transform:uppercase;letter-spacing:.05em;margin-bottom:18px;}
+  .status-pill .dot{width:6px;height:6px;border-radius:50%;background:var(--warn);animation:blink 1.4s infinite;}
+  .status-pill.paired{background:#E8F7F0;color:var(--good);} .status-pill.paired .dot{background:var(--good);animation:none;}
   @keyframes blink{0%,100%{opacity:1;}50%{opacity:.3;}}
-  .qr-wrap{border:1px solid var(--line);border-radius:12px;padding:18px;background:#FCFBF9;text-align:center;max-width:220px;margin:0 auto 20px;}
+  .qr-wrap{border:1px solid var(--line);border-radius:12px;padding:18px;background:var(--panel);text-align:center;max-width:220px;margin:0 auto 20px;}
   #qrRender{width:180px;height:180px;margin:0 auto 10px;display:flex;align-items:center;justify-content:center;background:#fff;border:1px solid var(--line);border-radius:8px;}
   .qr-caption{font-size:10.5px;color:var(--ink-faint);font-family:var(--mono);}
   .code-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
   .code-grid .full{grid-column:1 / -1;}
-  .code-card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:#FCFBF9;text-align:center;}
+  .code-card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--panel);text-align:center;}
   .code-card .node-label{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-faint);margin-bottom:6px;}
   .code-value{font-family:var(--mono);font-size:19px;font-weight:600;letter-spacing:.02em;word-break:break-all;}
   .expiry-note{display:flex;align-items:flex-start;gap:7px;font-size:11.5px;color:var(--ink-faint);line-height:1.5;}
   .expiry-note svg{width:13px;height:13px;flex-shrink:0;margin-top:1px;}
-  .done-wrap{text-align:center;padding:8px 0 4px;} .done-icon{width:46px;height:46px;border-radius:50%;background:#E9F5EE;color:var(--good);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;}
+  .done-wrap{text-align:center;padding:8px 0 4px;} .done-icon{width:46px;height:46px;border-radius:50%;background:#E8F7F0;color:var(--good);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;}
   .done-icon svg{width:20px;height:20px;} .done-title{font-size:16px;font-weight:700;margin-bottom:6px;} .done-sub{font-size:13px;color:var(--ink-soft);margin-bottom:22px;line-height:1.5;}
-  .error-banner{display:none;margin:0 26px 14px;padding:10px 12px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:10px;font-size:12.5px;line-height:1.45;}
+  .error-banner{display:none;margin:0 26px 14px;padding:10px 12px;border:1px solid rgba(201,73,84,.25);background:#FFF1F2;color:var(--bad);border-radius:10px;font-size:12.5px;line-height:1.45;}
 </style>
 </head>
 <body>
@@ -144,6 +150,15 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
       <div class="review-row"><span>Spotify client secret</span><span id="r-spotify-secret"></span></div>
     </div>
     <p class="hint" id="phaseText">[collect] Waiting for form submission...</p>
+    <section class="dependency-panel" id="dependencyPanel" aria-labelledby="dependencyTitle">
+      <h2 id="dependencyTitle">Optional system tools are missing</h2>
+      <p id="dependencyMessage"></p>
+      <ul class="dependency-list" id="dependencyList"></ul>
+      <div class="dependency-actions">
+        <button type="button" class="btn-ghost" id="skipDependenciesBtn">Skip for now</button>
+        <button type="button" class="btn-primary" id="installDependenciesBtn">Install packages</button>
+      </div>
+    </section>
     <div class="actions">
       <button type="button" class="btn-ghost" id="backToIntegrationsBtn"><svg viewBox="0 0 16 16" fill="none"><path d="M13 8H3M7 4L3 8l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Back</button>
       <button type="button" class="btn-primary" id="startSetupBtn">Start setup <svg viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
@@ -247,6 +262,54 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
     }
   }
 
+  function renderDependencyPrompt(data){
+    const panel = document.getElementById('dependencyPanel');
+    const required = Boolean(data.dependency_decision_required);
+    panel.style.display = required ? 'block' : 'none';
+    if (!required) return;
+
+    const dependency = data.dependency || {};
+    const manager = dependency.package_manager || 'your package manager';
+    const packages = dependency.packages || [];
+    document.getElementById('dependencyMessage').textContent = packages.length
+      ? `Install ${packages.join(', ')} using ${manager}. The terminal may ask for your system password.`
+      : `No install command is available for ${manager}; install these tools manually or skip for now.`;
+    const list = document.getElementById('dependencyList');
+    list.replaceChildren();
+    (dependency.missing || []).forEach(group => {
+      const item = document.createElement('li');
+      const title = document.createElement('strong');
+      title.textContent = group.feature || 'Optional feature';
+      const detail = document.createElement('span');
+      const commands = (group.missing_commands || []).join(', ');
+      detail.textContent = `${group.description || ''}${commands ? ` Missing: ${commands}.` : ''}`;
+      item.append(title, detail);
+      list.append(item);
+    });
+    document.getElementById('installDependenciesBtn').disabled = !packages.length || manager === 'unknown';
+    document.getElementById('skipDependenciesBtn').disabled = false;
+  }
+
+  async function submitDependencyDecision(decision){
+    const install = document.getElementById('installDependenciesBtn');
+    const skip = document.getElementById('skipDependenciesBtn');
+    install.disabled = true;
+    skip.disabled = true;
+    try {
+      const res = await fetch('/dependency-decision', {
+        method: 'POST',
+        body: new URLSearchParams({ decision }),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      });
+      if (!res.ok) throw new Error('Dependency decision failed');
+      document.getElementById('dependencyPanel').style.display = 'none';
+    } catch (_) {
+      showError('Could not save the dependency choice. Please try again.', 'local');
+      install.disabled = false;
+      skip.disabled = false;
+    }
+  }
+
   function validateRequired(){
     const form = document.getElementById('setupForm');
     if (!form.reportValidity()) {
@@ -319,6 +382,7 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
       } else {
         goTo(3);
       }
+      renderDependencyPrompt(data);
       updatePairingDisplay(data);
     } catch (_) {}
   }
@@ -339,6 +403,8 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
   document.getElementById('backToConfigBtn').addEventListener('click', function(){ goTo(1); });
   document.getElementById('backToIntegrationsBtn').addEventListener('click', function(){ goTo(2); });
   document.getElementById('startSetupBtn').addEventListener('click', submitSetup);
+  document.getElementById('installDependenciesBtn').addEventListener('click', function(){ submitDependencyDecision('install'); });
+  document.getElementById('skipDependenciesBtn').addEventListener('click', function(){ submitDependencyDecision('skip'); });
   setInterval(refreshState, 1500);
   refreshState();
   goTo(1);

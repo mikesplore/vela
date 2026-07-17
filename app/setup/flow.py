@@ -20,7 +20,11 @@ import requests
 
 from app.setup.cli_links import install_user_cli_links
 from app.setup.credentials import wipe_setup_credentials
-from app.setup.deps import check_and_offer_dependency_install
+from app.setup.deps import (
+    check_and_offer_dependency_install,
+    dependency_install_plan,
+    install_packages,
+)
 from app.setup.services import enable_services, restart_all_services, write_systemd_units
 from app.setup.wizard import browser_is_available, browser_onboarding_enabled, start_setup_wizard
 from app.setup.writers import (
@@ -183,7 +187,36 @@ def run_setup() -> None:
 
     if wizard:
         wizard["set_phase"]("dependencies", "Checking dependencies...")
-    check_and_offer_dependency_install(_prompt)
+        missing, pkg_manager, packages = dependency_install_plan()
+        if missing:
+            decision_timeout = int(os.getenv("VELA_BROWSER_DEPENDENCY_TIMEOUT", "300"))
+            decision = wizard["wait_for_dependency_decision"](
+                missing,
+                pkg_manager,
+                packages,
+                decision_timeout,
+            )
+            if decision == "install":
+                if pkg_manager == "unknown" or not packages:
+                    wizard["set_error"](
+                        "No supported package manager or package suggestions are available for these tools."
+                    )
+                else:
+                    wizard["set_phase"](
+                        "dependencies",
+                        "Installing selected packages. Check the terminal if a system password is requested...",
+                    )
+                    try:
+                        install_packages(pkg_manager, packages)
+                    except Exception as exc:
+                        wizard["set_error"](f"Could not install selected packages: {exc}")
+                        raise
+            else:
+                wizard["set_phase"]("dependencies", "Optional package installation skipped.")
+        else:
+            wizard["set_phase"]("dependencies", "All checked runtime tools are available.")
+    else:
+        check_and_offer_dependency_install(_prompt)
 
     if wizard:
         wizard["set_phase"]("relay-check", "Checking VPS relay health...")
