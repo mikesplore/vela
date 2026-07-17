@@ -79,6 +79,7 @@ def start_setup_wizard(defaults: dict[str, str]):
                 "allowed_dirs_csv",
                 "assistant_pin",
                 "fireworks_api_key",
+                "ipinfo_token",
                 "resend_api_key",
                 "resend_from_email",
                 "recipient_email",

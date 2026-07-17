@@ -12,6 +12,7 @@ import yaml
 # Optional integrations collected during setup. Empty means "leave unset".
 OPTIONAL_ENV_FIELDS = (
     ("fireworks_api_key", "FIREWORKS_API_KEY", "Fireworks API key (assistant)"),
+    ("ipinfo_token", "IPINFO_TOKEN", "IPinfo token (network location fallback)"),
     ("resend_api_key", "RESEND_API_KEY", "Resend API key (email alerts)"),
     ("resend_from_email", "RESEND_FROM_EMAIL", "Resend from email"),
     ("recipient_email", "RECIPIENT_EMAIL", "Alert recipient email"),
@@ -104,6 +105,7 @@ def write_env_file(
         "RELAY_SECRET=",
         f"ASSISTANT_ACTION_PIN={assistant_pin}",
         f"FIREWORKS_API_KEY={opts['fireworks_api_key']}",
+        f"IPINFO_TOKEN={opts['ipinfo_token']}",
         "VELA_ASSISTANT_ENABLE_THINKING=false",
         "VELA_FIREWORKS_API_URL=https://api.fireworks.ai/inference/v1",
         "VELA_FIREWORKS_MODEL=accounts/fireworks/models/qwen3p7-plus",

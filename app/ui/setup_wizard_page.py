@@ -11,6 +11,7 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
         "DIRS": html.escape(defaults.get("allowed_dirs_csv", "")),
         "PIN": html.escape(defaults.get("assistant_pin", "")),
         "FIREWORKS_API_KEY": html.escape(defaults.get("fireworks_api_key", "")),
+        "IPINFO_TOKEN": html.escape(defaults.get("ipinfo_token", "")),
         "RESEND_API_KEY": html.escape(defaults.get("resend_api_key", "")),
         "RESEND_FROM_EMAIL": html.escape(defaults.get("resend_from_email", "")),
         "RECIPIENT_EMAIL": html.escape(defaults.get("recipient_email", "")),
@@ -112,6 +113,7 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
       <h1>Optional integrations</h1>
       <p class="sub">Skip anything you do not have yet. You can edit these later in <span class="mono">.env</span>.</p>
       <div class="field"><label for="fireworks">Fireworks API key</label><input name="fireworks_api_key" type="password" id="fireworks" class="mono" value="__FIREWORKS_API_KEY__" autocomplete="off"><div class="hint">Needed for the LLM assistant.</div></div>
+      <div class="field"><label for="ipinfoToken">IPinfo token</label><input name="ipinfo_token" type="password" id="ipinfoToken" class="mono" value="__IPINFO_TOKEN__" autocomplete="off"><div class="hint">Optional fallback for network-location lookups.</div></div>
       <div class="field"><label for="resendKey">Resend API key</label><input name="resend_api_key" type="password" id="resendKey" class="mono" value="__RESEND_API_KEY__" autocomplete="off"></div>
       <div class="field"><label for="resendFrom">Resend from email</label><input name="resend_from_email" type="text" id="resendFrom" value="__RESEND_FROM_EMAIL__" placeholder="Vela &lt;alerts@example.com&gt;"></div>
       <div class="field"><label for="recipient">Alert recipient email</label><input name="recipient_email" type="email" id="recipient" value="__RECIPIENT_EMAIL__"></div>
@@ -134,6 +136,7 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
       <div class="review-row"><span>Allowed dirs</span><span id="r-dirs"></span></div>
       <div class="review-row"><span>Assistant PIN</span><span id="r-pin"></span></div>
       <div class="review-row"><span>Fireworks API key</span><span id="r-fireworks"></span></div>
+      <div class="review-row"><span>IPinfo token</span><span id="r-ipinfo"></span></div>
       <div class="review-row"><span>Resend API key</span><span id="r-resend"></span></div>
       <div class="review-row"><span>Resend from email</span><span id="r-resend-from"></span></div>
       <div class="review-row"><span>Recipient email</span><span id="r-recipient"></span></div>
@@ -207,6 +210,7 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
     document.getElementById('r-dirs').textContent = document.getElementById('dirs').value;
     document.getElementById('r-pin').textContent = document.getElementById('pin').value ? '••••' : 'Not set';
     document.getElementById('r-fireworks').textContent = maskOrUnset(document.getElementById('fireworks').value);
+    document.getElementById('r-ipinfo').textContent = maskOrUnset(document.getElementById('ipinfoToken').value);
     document.getElementById('r-resend').textContent = maskOrUnset(document.getElementById('resendKey').value);
     document.getElementById('r-resend-from').textContent = document.getElementById('resendFrom').value || 'Not set';
     document.getElementById('r-recipient').textContent = document.getElementById('recipient').value || 'Not set';

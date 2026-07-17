@@ -8,6 +8,7 @@ import time
 import urllib.request
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 import psutil
 
@@ -18,11 +19,11 @@ except ImportError:  # pragma: no cover
 
 from app.services.monitoring import get_top_processes, get_uptime
 from app.services.system_info import get_os_info
+from app.utils.config import get_config
 
 logger = logging.getLogger(__name__)
 
-# In-memory cache for geo-location to avoid ip-api.com rate limiting
-# ip-api.com allows 45 req/min from a single IP
+# In-memory cache for geo-location to avoid external provider rate limits.
 _geo_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _GEO_CACHE_TTL = 30  # seconds
 
@@ -65,44 +66,79 @@ def public_ip() -> str:
 # Geo-location helper
 # ---------------------------------------------------------------------------
 
+def _lookup_ip_api(ip: str) -> Optional[Dict[str, Any]]:
+    url = (
+        f"http://ip-api.com/json/{quote(ip, safe='')}"
+        "?fields=status,country,regionName,city,zip,timezone,isp,org,lat,lon,query,message"
+    )
+    with urllib.request.urlopen(url, timeout=5) as response:
+        data = json.loads(response.read().decode().strip())
+    if not isinstance(data, dict) or data.get("status") != "success":
+        return None
+    return {
+        "status": "success",
+        "query": data.get("query") or ip,
+        "country": data.get("country"),
+        "region": data.get("regionName") or data.get("region"),
+        "city": data.get("city"),
+        "zip": data.get("zip"),
+        "timezone": data.get("timezone"),
+        "isp": data.get("isp"),
+        "org": data.get("org"),
+        "lat": data.get("lat"),
+        "lon": data.get("lon"),
+        "message": None,
+    }
+
+
+def _lookup_ipinfo_lite(ip: str, token: str) -> Optional[Dict[str, Any]]:
+    """IPinfo Lite fallback; Lite only supplies country and ASN metadata."""
+    url = f"https://api.ipinfo.io/lite/{quote(ip, safe='')}?token={quote(token, safe='')}"
+    with urllib.request.urlopen(url, timeout=5) as response:
+        data = json.loads(response.read().decode().strip())
+    if not isinstance(data, dict) or not data.get("ip"):
+        return None
+    return {
+        "status": "success",
+        "query": data.get("ip") or ip,
+        "country": data.get("country"),
+        "region": None,
+        "city": None,
+        "zip": None,
+        "timezone": None,
+        "isp": data.get("as_name"),
+        "org": data.get("as_domain") or data.get("asn"),
+        "lat": None,
+        "lon": None,
+        "message": "Location resolved by IPinfo Lite; city and coordinates are unavailable on this plan.",
+    }
+
+
 def geolocate_ip(ip: str) -> Optional[Dict[str, Any]]:
     if not ip:
         return None
 
-    # Return cached result if still fresh
     now = time.time()
     cached = _geo_cache.get(ip)
     if cached and (now - cached[0]) < _GEO_CACHE_TTL:
         return cached[1]
 
     try:
-        url = (
-            f"http://ip-api.com/json/{ip}"
-            "?fields=status,country,regionName,city,zip,timezone,isp,org,lat,lon,query,message"
-        )
-        with urllib.request.urlopen(url, timeout=5) as response:
-            raw = response.read().decode().strip()
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            return None
-        result = {
-            "status": data.get("status", "fail"),
-            "query": data.get("query"),
-            "country": data.get("country"),
-            "region": data.get("regionName") or data.get("region"),
-            "city": data.get("city"),
-            "zip": data.get("zip"),
-            "timezone": data.get("timezone"),
-            "isp": data.get("isp"),
-            "org": data.get("org"),
-            "lat": data.get("lat"),
-            "lon": data.get("lon"),
-            "message": data.get("message"),
-        }
-        _geo_cache[ip] = (time.time(), result)
-        return result
+        result = _lookup_ip_api(ip)
     except Exception:
-        return None
+        result = None
+
+    if result is None:
+        token = (get_config().ipinfo_token or "").strip()
+        if token:
+            try:
+                result = _lookup_ipinfo_lite(ip, token)
+            except Exception:
+                result = None
+
+    if result is not None:
+        _geo_cache[ip] = (now, result)
+    return result
 
 
 # ── vnstat helpers (multi-period) ──────────────────────────────────────────────

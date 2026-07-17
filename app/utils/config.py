@@ -64,6 +64,10 @@ class Config(BaseSettings):
     fireworks_api_key: str | None = None
     fireworks_model: str = "accounts/fireworks/models/deepseek-v4-flash"
     fireworks_api_url: str = "https://api.fireworks.ai/inference/v1"
+    ipinfo_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("IPINFO_TOKEN", "VELA_IPINFO_TOKEN"),
+    )
     assistant_system_prompt: str = DEFAULT_ASSISTANT_SYSTEM_PROMPT
 
     # ==================================================================
