@@ -49,7 +49,7 @@ from app.services.assistant.session import (
 )
 from app.services.assistant.tool_exec import (
     download_image_payload,
-    execute_tool_safe,
+    execute_tool_audited,
     sanitize_tool_result_for_llm,
 )
 from app.services.assistant.safety import (
@@ -161,9 +161,12 @@ async def _run_tools_and_reply(
             yield _sse_tool(tc["tool"], "running")
 
     tasks = [
-        execute_tool_safe(
+        execute_tool_audited(
             request.app, tc["tool"], tc.get("tool_input") or {},
-            auth_header, confirmed=confirmed,
+            auth_header,
+            request_id=getattr(request.state, "request_id", None),
+            user_id=current_user,
+            confirmed=confirmed,
         )
         for tc in real_calls
     ]

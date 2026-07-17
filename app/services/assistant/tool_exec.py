@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
@@ -252,13 +253,51 @@ async def execute_tool_safe(
         return {"tool": tool_name, "result": {}, "error": str(exc)}
 
 
+async def execute_tool_audited(
+        app: FastAPI,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        auth_header: str | None,
+        *,
+        request_id: str | None = None,
+        user_id: str | None = None,
+        confirmed: bool = False,
+) -> dict[str, Any]:
+    """Execute a tool and persist only safe operational metadata."""
+    started = time.monotonic()
+    result = await execute_tool_safe(app, tool_name, tool_input, auth_header, confirmed=confirmed)
+    duration_ms = (time.monotonic() - started) * 1000
+    try:
+        from app.db.audit_log import insert_tool_call_event
+
+        insert_tool_call_event(
+            request_id=request_id or "unknown",
+            tool_name=str(result.get("tool") or tool_name),
+            duration_ms=duration_ms,
+            succeeded=not bool(result.get("error")),
+            user_id=user_id,
+            error=str(result["error"])[:1_000] if result.get("error") else None,
+        )
+    except Exception as exc:
+        logger.debug("Tool audit write skipped: %s", exc)
+    return result
+
+
 async def execute_tool_calls(request: Request, tool_calls: list[dict[str, object]], auth_header: str | None,
                               user_message: str = "", confirmed: bool = False) -> AssistantResponse:
     # Lazy import avoids circular dependency with helpers.compose_final_reply
     from app.services.assistant.helpers import compose_final_reply
 
     tasks = [
-        execute_tool_safe(request.app, tc["tool"], tc.get("tool_input") or {}, auth_header, confirmed=confirmed)
+        execute_tool_audited(
+            request.app,
+            tc["tool"],
+            tc.get("tool_input") or {},
+            auth_header,
+            request_id=getattr(request.state, "request_id", None),
+            user_id=getattr(request.state, "audit_user_id", None),
+            confirmed=confirmed,
+        )
         for tc in tool_calls
         if tc.get("tool") and tc["tool"] != "none"
     ]

@@ -243,7 +243,7 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
       document.getElementById('statusPill').classList.add('paired');
       goTo(5);
       document.getElementById('doneTitle').textContent = (document.getElementById('label').value || 'Agent') + ' is paired';
-      document.getElementById('doneSub').textContent = 'Your mobile app is now connected to this device.';
+      document.getElementById('doneSub').textContent = 'Your mobile app is now connected to this device. Open Operations with: vela --dashboard';
     }
   }
 
@@ -311,6 +311,7 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
       updateErrorBanner();
       if (data.done) {
         goTo(5);
+        if (msg) document.getElementById('doneSub').textContent = msg;
       } else if (data.pairing || phase === 'pairing') {
         goTo(4);
       } else if (phase === 'collect') {

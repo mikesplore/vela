@@ -200,6 +200,11 @@ vela --enable
 
 OpenAPI docs available at `http://127.0.0.1:8765/docs`.
 
+Operations dashboard (request audit, latency median/p95, recent errors) is at
+`http://127.0.0.1:8765/admin/dashboard` — sign in with the same username/password as the API.
+
+> **p95** means the 95th percentile latency: 95% of requests finished at or under that time. It is better than average for spotting slow outliers without being dominated by a single worst request.
+
 Common commands:
 
 ```bash
@@ -209,6 +214,7 @@ vela --stop
 vela --restart
 vela --status
 vela --logs
+vela --dashboard
 vela-agent --start
 vela-agent --stop
 ```

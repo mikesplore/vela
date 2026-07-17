@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import webbrowser
 
 
 def main() -> None:
@@ -15,6 +16,7 @@ def main() -> None:
     parser.add_argument("--enable", action="store_true", help="Enable and start vela + vela-agent user services")
     parser.add_argument("--status", action="store_true", help="Show vela service status")
     parser.add_argument("--logs", action="store_true", help="Tail vela service logs")
+    parser.add_argument("--dashboard", action="store_true", help="Open the local Operations dashboard")
     args = parser.parse_args()
 
     services = ["vela.service", "vela-agent.service"]
@@ -62,6 +64,18 @@ def main() -> None:
             ["journalctl", "--user", "-u", "vela.service", "-u", "vela-agent.service", "-f"],
             check=True,
         )
+        return
+
+    if args.dashboard:
+        from app.utils.config import get_config
+
+        config = get_config()
+        host = "127.0.0.1" if config.host in {"0.0.0.0", "::", "::0"} else config.host
+        url = f"http://{host}:{config.port}/admin/dashboard"
+        if webbrowser.open(url):
+            print(f"Opened Operations dashboard: {url}")
+        else:
+            print(f"Open the Operations dashboard in your browser: {url}")
         return
 
     # Default: run the local API server (imports app stack only now).

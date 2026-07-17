@@ -266,9 +266,14 @@ def run_setup() -> None:
     print(f"env:    {env_path}")
     print(f"vela service: {vela_service}")
     print(f"agent service: {agent_service}")
+    print(f"operations dashboard: http://127.0.0.1:{port}/admin/dashboard")
+    print("  Reopen it any time with: vela --dashboard")
+    print("  Sign in with your Vela username/password to view request audit and latency.")
     if wizard:
         done_message = (
-            "Setup complete. Agent and API services restarted with new credentials."
+            f"Setup complete. Agent and API services restarted. "
+            f"Operations dashboard: http://127.0.0.1:{port}/admin/dashboard "
+            f"(or run: vela --dashboard)"
             if pairing_ok
             else "Setup wrote config but pairing did not finish. Re-run vela --setup."
         )

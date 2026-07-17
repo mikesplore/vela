@@ -1,0 +1,138 @@
+"""SQLite persistence for API audit / request metrics."""
+from __future__ import annotations
+
+from datetime import datetime, UTC
+from pathlib import Path
+
+from sqlalchemy import create_engine, delete, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class AuditEventModel(Base):
+    __tablename__ = "audit_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    request_id: Mapped[str] = mapped_column(index=True)
+    created_at: Mapped[datetime] = mapped_column(index=True)
+    method: Mapped[str]
+    path: Mapped[str] = mapped_column(index=True)
+    status_code: Mapped[int] = mapped_column(index=True)
+    duration_ms: Mapped[float]
+    user_id: Mapped[str | None] = mapped_column(nullable=True)
+    client_ip: Mapped[str | None] = mapped_column(nullable=True)
+    error: Mapped[str | None] = mapped_column(nullable=True)
+
+
+class ToolCallEventModel(Base):
+    """One assistant tool execution, linked to its parent HTTP request."""
+    __tablename__ = "assistant_tool_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    request_id: Mapped[str] = mapped_column(index=True)
+    created_at: Mapped[datetime] = mapped_column(index=True)
+    tool_name: Mapped[str] = mapped_column(index=True)
+    duration_ms: Mapped[float]
+    succeeded: Mapped[bool] = mapped_column(index=True)
+    user_id: Mapped[str | None] = mapped_column(nullable=True)
+    error: Mapped[str | None] = mapped_column(nullable=True)
+
+
+db_path = Path.cwd() / "audit_log.sqlite"
+engine = create_engine(
+    f"sqlite:///{db_path}",
+    echo=False,
+    connect_args={"check_same_thread": False},
+)
+
+
+def init_audit_db() -> None:
+    Base.metadata.create_all(engine)
+
+
+def get_audit_session() -> Session:
+    return Session(engine)
+
+
+def insert_audit_event(
+    *,
+    request_id: str,
+    method: str,
+    path: str,
+    status_code: int,
+    duration_ms: float,
+    user_id: str | None = None,
+    client_ip: str | None = None,
+    error: str | None = None,
+    created_at: datetime | None = None,
+) -> None:
+    with get_audit_session() as session:
+        session.add(
+            AuditEventModel(
+                request_id=request_id,
+                created_at=created_at or datetime.now(UTC),
+                method=method,
+                path=path,
+                status_code=status_code,
+                duration_ms=duration_ms,
+                user_id=user_id,
+                client_ip=client_ip,
+                error=error,
+            )
+        )
+        session.commit()
+
+
+def insert_tool_call_event(
+    *,
+    request_id: str,
+    tool_name: str,
+    duration_ms: float,
+    succeeded: bool,
+    user_id: str | None = None,
+    error: str | None = None,
+    created_at: datetime | None = None,
+) -> None:
+    with get_audit_session() as session:
+        session.add(
+            ToolCallEventModel(
+                request_id=request_id,
+                created_at=created_at or datetime.now(UTC),
+                tool_name=tool_name,
+                duration_ms=duration_ms,
+                succeeded=succeeded,
+                user_id=user_id,
+                error=error,
+            )
+        )
+        session.commit()
+
+
+def prune_audit_events(*, older_than: datetime | None = None, keep_max: int | None = None) -> int:
+    """Delete old / excess rows. Returns number of deleted rows."""
+    deleted = 0
+    with get_audit_session() as session:
+        if older_than is not None:
+            result = session.execute(delete(AuditEventModel).where(AuditEventModel.created_at < older_than))
+            deleted += result.rowcount or 0
+            result = session.execute(delete(ToolCallEventModel).where(ToolCallEventModel.created_at < older_than))
+            deleted += result.rowcount or 0
+        if keep_max is not None and keep_max > 0:
+            # Keep newest keep_max rows
+            ids_to_keep = list(
+                session.scalars(
+                    select(AuditEventModel.id)
+                    .order_by(AuditEventModel.created_at.desc(), AuditEventModel.id.desc())
+                    .limit(keep_max)
+                )
+            )
+            if ids_to_keep:
+                result = session.execute(
+                    delete(AuditEventModel).where(AuditEventModel.id.notin_(ids_to_keep))
+                )
+                deleted += result.rowcount or 0
+        session.commit()
+    return deleted

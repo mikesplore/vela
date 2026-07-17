@@ -68,6 +68,10 @@ class Config(BaseSettings):
         default=None,
         validation_alias=AliasChoices("IPINFO_TOKEN", "VELA_IPINFO_TOKEN"),
     )
+    # Request audit / admin metrics dashboard
+    audit_enabled: bool = True
+    audit_retention_days: int = 14
+    audit_max_rows: int = 50_000
     assistant_system_prompt: str = DEFAULT_ASSISTANT_SYSTEM_PROMPT
 
     # ==================================================================

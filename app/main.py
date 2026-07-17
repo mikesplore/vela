@@ -96,6 +96,12 @@ async def lifespan(app: FastAPI):
     app.state.start_time = time.time()
     logger.info("Vela starting on %s:%s", config.host, config.port)
     try:
+        from app.db.audit_log import init_audit_db
+
+        init_audit_db()
+    except Exception as e:
+        logger.warning("Could not initialize audit database: %s", e)
+    try:
         scheduler_module.scheduler.start()
     except Exception:
         logger.warning("Scheduler failed to start or was already running")
