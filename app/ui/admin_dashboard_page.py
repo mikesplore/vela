@@ -38,6 +38,8 @@ def render_admin_dashboard_page() -> str:
   button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid rgba(79,124,255,.38);outline-offset:2px}
   button.ghost{background:transparent;border-color:var(--line);color:var(--muted)}
   button.ghost:hover:not(:disabled){color:var(--ink);border-color:var(--faint)}
+  button.danger{color:var(--bad);border-color:rgba(240,113,120,.4)}
+  button.danger:hover:not(:disabled){color:#FFB4B9;border-color:var(--bad)}
   .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
   .card .label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);font-family:var(--mono)}
@@ -85,19 +87,30 @@ def render_admin_dashboard_page() -> str:
   .status-dot.off{background:var(--bad)}
   .status-dot.stale{background:var(--warn)}
   .meta{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .connection-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:16px}
+  .connection-card h2{margin-bottom:14px}
+  .connection-state{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}
+  .connection-detail{margin:10px 0 0;color:var(--muted);font-size:12px;line-height:1.45}
+  .connection-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px}
+  .connection-metric{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+  .connection-metric span{display:block;color:var(--faint);font:10px var(--mono);letter-spacing:.04em;text-transform:uppercase}
+  .connection-metric strong{display:block;margin-top:4px;font-size:15px;font-variant-numeric:tabular-nums}
   .tool-overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:0 0 16px}
   .tool-stat{background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
   .tool-stat .tool-stat-label{display:block;color:var(--faint);font:10px var(--mono);letter-spacing:.05em;text-transform:uppercase}
   .tool-stat strong{display:block;margin-top:5px;font-size:16px;font-variant-numeric:tabular-nums}
-  .tool-block{border-top:1px solid var(--line);padding-top:14px;margin-top:14px}
-  .tool-block h3{font-size:12px;margin:0 0 10px;color:var(--muted);font-weight:600}
-  .tool-block.failure-block h3{color:#FFB4B9}
+  .operations-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px;align-items:start}
+  .operations-card{min-width:0}
+  .operations-card.full-row{grid-column:1 / -1}
+  .operations-card h2{margin-bottom:14px}
+  .operations-card.failure-block h2{color:#FFB4B9}
+  .operations-table{overflow:auto;max-height:280px}
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
   @media (max-width:960px){
     .grid{grid-template-columns:repeat(2,1fr)}
-    .charts,.split{grid-template-columns:1fr}
+    .charts,.split,.connection-grid,.operations-grid{grid-template-columns:1fr}
   }
-  @media (max-width:540px){.tool-overview{grid-template-columns:1fr}}
+  @media (max-width:540px){.tool-overview,.connection-metrics{grid-template-columns:1fr}}
   @media (prefers-reduced-motion:reduce){
     *{animation-duration:.001ms !important;transition-duration:.001ms !important}
   }
@@ -143,8 +156,12 @@ def render_admin_dashboard_page() -> str:
         <option value="60" selected>Last 60 min</option>
         <option value="360">Last 6 h</option>
         <option value="1440">Last 24 h</option>
+        <option value="10080">Last 7 days</option>
+        <option value="20160">Last 14 days</option>
+        <option value="43200">Last 30 days</option>
       </select>
       <button class="ghost" type="button" id="refreshBtn">Refresh</button>
+      <button class="ghost danger" type="button" id="clearHistoryBtn">Clear history</button>
       <button class="ghost" type="button" id="logoutBtn">Log out</button>
     </div>
   </header>
@@ -154,6 +171,24 @@ def render_admin_dashboard_page() -> str:
     <div class="card"><div class="label">Error rate</div><div class="value" id="statErrors">0%</div><div class="hint" id="statErrorCount">0 errors</div></div>
     <div class="card"><div class="label">Median</div><div class="value" id="statMedian">0 ms</div><div class="hint">latency</div></div>
     <div class="card"><div class="label">p95</div><div class="value" id="statP95">0 ms</div><div class="hint">latency</div></div>
+  </div>
+
+  <div class="connection-grid" aria-label="Backend and relay health">
+    <section class="chart-card connection-card" aria-labelledby="backendStatusHeading">
+      <h2 id="backendStatusHeading"><span>Backend status</span><span class="meta" id="backendServerTime">Checking…</span></h2>
+      <div class="connection-state"><span class="status-dot" id="backendStatusDot"></span><span id="backendStatus">Online</span></div>
+      <p class="connection-detail">The local FastAPI service is responding to this dashboard.</p>
+    </section>
+    <section class="chart-card connection-card" aria-labelledby="relayStatusHeading">
+      <h2 id="relayStatusHeading"><span>Relay connection</span><span class="meta" id="relayStatus">Checking…</span></h2>
+      <div class="connection-state"><span class="status-dot stale" id="relayStatusDot"></span><span id="relayState">Checking relay tunnel</span></div>
+      <div class="connection-metrics">
+        <div class="connection-metric"><span>Broken</span><strong id="relayDisconnects">0</strong></div>
+        <div class="connection-metric"><span>Reconnected</span><strong id="relayReconnects">0</strong></div>
+        <div class="connection-metric"><span>Connected for</span><strong id="relayUptime">—</strong></div>
+      </div>
+      <p class="connection-detail" id="relayDetail">Waiting for relay status.</p>
+    </section>
   </div>
 
   <div class="charts">
@@ -181,32 +216,29 @@ def render_admin_dashboard_page() -> str:
           <tbody id="eventsBody"></tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <div class="operations-grid" aria-label="Failures and assistant tools">
+    <section class="chart-card operations-card full-row" aria-labelledby="requestErrorsHeading">
+      <h2 id="requestErrorsHeading"><span>Recent request errors</span></h2>
+      <div class="operations-table">
+        <table>
+          <caption class="sr-only">Most recent request errors</caption>
+          <thead><tr><th>When</th><th>Request ID</th><th>Call</th><th>Status</th><th>ms</th></tr></thead>
+          <tbody id="errorsBody"></tbody>
+        </table>
+      </div>
     </section>
-  </div>
 
-  <div class="chart-card" style="margin-top:12px">
-    <h2><span>Recent errors</span></h2>
-    <div style="overflow:auto;max-height:240px">
-      <table>
-        <caption class="sr-only">Most recent request errors</caption>
-        <thead><tr><th>When</th><th>Request ID</th><th>Call</th><th>Status</th><th>ms</th></tr></thead>
-        <tbody id="errorsBody"></tbody>
-      </table>
-    </div>
-  </div>
-
-  <div class="chart-card" style="margin-top:12px">
-    <h2><span>Assistant tools</span><span class="meta" id="assistantToolSummary">No tool calls in this window</span></h2>
-
-    <div class="tool-overview">
-      <div class="tool-stat"><span class="tool-stat-label">Tool calls</span><strong id="toolCallCount">0</strong></div>
-      <div class="tool-stat"><span class="tool-stat-label">Failed</span><strong id="toolFailureCount">0</strong></div>
-      <div class="tool-stat"><span class="tool-stat-label">Success rate</span><strong id="toolSuccessRate">—</strong></div>
-    </div>
-
-    <section class="tool-block" aria-labelledby="toolHealthHeading">
-      <h3 id="toolHealthHeading">Tool health</h3>
-      <div style="overflow:auto;max-height:300px">
+    <section class="chart-card operations-card" aria-labelledby="toolHealthHeading">
+      <h2 id="toolHealthHeading"><span>Assistant tool health</span><span class="meta" id="assistantToolSummary">No tool calls in this window</span></h2>
+      <div class="tool-overview" aria-label="Assistant tool overview">
+        <div class="tool-stat"><span class="tool-stat-label">Tool calls</span><strong id="toolCallCount">0</strong></div>
+        <div class="tool-stat"><span class="tool-stat-label">Failed</span><strong id="toolFailureCount">0</strong></div>
+        <div class="tool-stat"><span class="tool-stat-label">Success rate</span><strong id="toolSuccessRate">—</strong></div>
+      </div>
+      <div class="operations-table">
         <table>
           <caption class="sr-only">Assistant tool usage and latency by tool</caption>
           <thead><tr><th>Tool</th><th>Calls</th><th>Failure rate</th><th>Typical</th><th>Slow 5%</th></tr></thead>
@@ -215,9 +247,9 @@ def render_admin_dashboard_page() -> str:
       </div>
     </section>
 
-    <section class="tool-block" aria-labelledby="toolActivityHeading">
-      <h3 id="toolActivityHeading">Latest tool executions</h3>
-      <div style="overflow:auto;max-height:300px">
+    <section class="chart-card operations-card" aria-labelledby="toolActivityHeading">
+      <h2 id="toolActivityHeading"><span>Latest tool executions</span></h2>
+      <div class="operations-table">
         <table>
           <caption class="sr-only">Latest assistant tool executions</caption>
           <thead><tr><th>When</th><th>Tool</th><th>Outcome</th><th>Duration</th></tr></thead>
@@ -226,16 +258,16 @@ def render_admin_dashboard_page() -> str:
       </div>
     </section>
 
-    <section class="tool-block failure-block" id="toolFailurePanel" aria-labelledby="toolFailureHeading">
-      <h3 id="toolFailureHeading">Recent tool failures</h3>
-      <div style="overflow:auto;max-height:210px">
+    <section class="chart-card operations-card full-row failure-block" id="toolFailurePanel" aria-labelledby="toolFailureHeading">
+      <h2 id="toolFailureHeading"><span>Recent tool failures</span></h2>
+      <div class="operations-table">
         <table>
           <caption class="sr-only">Recent assistant tool failures</caption>
           <thead><tr><th>Tool</th><th>Request ID</th><th>Error</th></tr></thead>
           <tbody id="toolErrorsBody"></tbody>
         </table>
       </div>
-    </div>
+    </section>
   </div>
 </div>
 
@@ -272,6 +304,12 @@ def render_admin_dashboard_page() -> str:
   function fmtMs(v){ return `${Math.round(v||0).toLocaleString()} ms`; }
   function fmtPct(v){ return `${((v||0)*100).toFixed(1)}%`; }
   function fmtNum(v){ return (v||0).toLocaleString(); }
+  function fmtDuration(seconds){
+    if (seconds === null || seconds === undefined) return '—';
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return mins ? `${mins}m ${secs}s` : `${secs}s`;
+  }
   function shortTime(iso){
     try { return new Date(iso).toLocaleTimeString(); } catch { return esc(iso); }
   }
@@ -443,6 +481,45 @@ def render_admin_dashboard_page() -> str:
     document.getElementById('eventsError').textContent = '';
   }
 
+  function renderConnectionStatus(payload){
+    const relay = payload.relay;
+    document.getElementById('backendServerTime').textContent =
+      payload.server_time ? `checked ${shortTime(payload.server_time)}` : 'online';
+    document.getElementById('backendStatus').textContent = 'Online';
+    document.getElementById('backendStatusDot').className = 'status-dot';
+
+    const status = relay.status || 'unknown';
+    const isConnected = status === 'connected';
+    const isWaiting = status === 'connecting' || status === 'reconnecting';
+    const dot = document.getElementById('relayStatusDot');
+    dot.className = `status-dot${isConnected ? '' : isWaiting || status === 'unknown' ? ' stale' : ' off'}`;
+    document.getElementById('relayStatus').textContent = status.replace('_', ' ');
+    document.getElementById('relayState').textContent = isConnected
+      ? 'Relay tunnel connected'
+      : status === 'unknown'
+        ? 'No relay telemetry received yet'
+        : isWaiting ? 'Relay tunnel connecting' : 'Relay tunnel disconnected';
+    document.getElementById('relayDisconnects').textContent = fmtNum(relay.disconnect_count);
+    document.getElementById('relayReconnects').textContent = fmtNum(relay.reconnect_count);
+    document.getElementById('relayUptime').textContent = fmtDuration(relay.connected_seconds);
+    document.getElementById('relayDetail').textContent = relay.last_error
+      ? `Last issue: ${relay.last_error}`
+      : relay.last_message_at
+        ? `Last relay message ${shortTime(relay.last_message_at)}`
+        : status === 'unknown'
+          ? 'Restart the Vela agent once to begin recording relay health.'
+          : 'No relay activity recorded yet.';
+  }
+
+  function renderConnectionStatusUnavailable(){
+    document.getElementById('backendStatus').textContent = 'Status unavailable';
+    document.getElementById('backendStatusDot').className = 'status-dot stale';
+    document.getElementById('backendServerTime').textContent = 'Failed to load';
+    document.getElementById('relayStatus').textContent = 'unavailable';
+    document.getElementById('relayStatusDot').className = 'status-dot stale';
+    document.getElementById('relayState').textContent = 'Relay status unavailable';
+  }
+
   function renderAssistant(summary, payload){
     document.getElementById('assistantToolSummary').textContent =
       `${fmtNum(summary.total_tool_calls)} calls · ${fmtNum(summary.tool_error_count)} failed · ${fmtPct(summary.tool_error_rate)} error rate`;
@@ -502,13 +579,14 @@ def render_admin_dashboard_page() -> str:
         api(`/admin/summary?since_minutes=${mins}`, controller.signal),
         api(`/admin/events?limit=40&since_minutes=${mins}`, controller.signal),
         api(`/admin/assistant/summary?since_minutes=${mins}`, controller.signal),
-        api(`/admin/assistant/events?limit=30&since_minutes=${mins}`, controller.signal)
+        api(`/admin/assistant/events?limit=30&since_minutes=${mins}`, controller.signal),
+        api(`/admin/status?since_minutes=${mins}`, controller.signal)
       ]);
 
       // A newer refresh started while this one was in flight; drop these results.
       if (mySeq !== requestSeq) return;
 
-      const [summaryR, eventsR, assistantSummaryR, toolEventsR] = results;
+      const [summaryR, eventsR, assistantSummaryR, toolEventsR, statusR] = results;
 
       if (summaryR.status === 'rejected' && String(summaryR.reason?.message).includes('unauthorized')) {
         throw new Error('unauthorized');
@@ -526,6 +604,11 @@ def render_admin_dashboard_page() -> str:
       }
       if (assistantSummaryR.status === 'fulfilled' && toolEventsR.status === 'fulfilled') {
         renderAssistant(assistantSummaryR.value, toolEventsR.value);
+      }
+      if (statusR.status === 'fulfilled') {
+        renderConnectionStatus(statusR.value);
+      } else {
+        renderConnectionStatusUnavailable();
       }
 
       const anyFailed = results.some(r => r.status === 'rejected');
@@ -557,6 +640,36 @@ def render_admin_dashboard_page() -> str:
     pollTimer = setTimeout(tick, backoffMs);
   }
 
+  async function clearHistory(){
+    if (!window.confirm('Clear all request, assistant, and relay monitoring history? This cannot be undone.')) return;
+    const button = document.getElementById('clearHistoryBtn');
+    button.disabled = true;
+    try {
+      const res = await fetch('/admin/clear', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token()}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ confirmation: 'CLEAR' })
+      });
+      if (res.status === 401) throw new Error('unauthorized');
+      if (!res.ok) throw new Error(`request_failed:${res.status}`);
+      const result = await res.json();
+      showToast(`Cleared ${fmtNum(result.deleted)} monitoring records.`);
+      await refresh();
+    } catch (e) {
+      if (String(e.message).includes('unauthorized')) {
+        clearToken();
+        location.reload();
+        return;
+      }
+      showToast('Could not clear monitoring history.');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   // --- wiring -------------------------------------------------------------
 
   document.getElementById('loginForm').addEventListener('submit', e => { e.preventDefault(); login(); });
@@ -570,6 +683,7 @@ def render_admin_dashboard_page() -> str:
     input.focus();
   };
   document.getElementById('refreshBtn').onclick = () => { backoffMs = POLL_MS; refresh(); };
+  document.getElementById('clearHistoryBtn').onclick = clearHistory;
   document.getElementById('windowSelect').onchange = (e) => {
     localStorage.setItem(WINDOW_KEY, e.target.value);
     backoffMs = POLL_MS;

@@ -84,3 +84,29 @@ class AssistantAuditSummary(BaseModel):
 class ToolEventsResponse(BaseModel):
     events: list[ToolCallEvent]
     total_stored: int
+
+
+class RelayConnectionEvent(BaseModel):
+    created_at: str
+    event_type: str
+    detail: Optional[str] = None
+
+
+class RelayStatus(BaseModel):
+    configured: bool
+    status: str
+    connected_since: Optional[str] = None
+    last_connected_at: Optional[str] = None
+    last_disconnected_at: Optional[str] = None
+    last_message_at: Optional[str] = None
+    last_error: Optional[str] = None
+    connected_seconds: Optional[int] = None
+    disconnect_count: int
+    reconnect_count: int
+    recent_events: list[RelayConnectionEvent]
+
+
+class AdminSystemStatus(BaseModel):
+    backend_status: str
+    server_time: str
+    relay: RelayStatus

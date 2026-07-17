@@ -41,6 +41,16 @@ class ToolCallEventModel(Base):
     error: Mapped[str | None] = mapped_column(nullable=True)
 
 
+class RelayConnectionEventModel(Base):
+    """A relay tunnel lifecycle event emitted by the local agent."""
+    __tablename__ = "relay_connection_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(index=True)
+    event_type: Mapped[str] = mapped_column(index=True)
+    detail: Mapped[str | None] = mapped_column(nullable=True)
+
+
 db_path = Path.cwd() / "audit_log.sqlite"
 engine = create_engine(
     f"sqlite:///{db_path}",
@@ -111,7 +121,30 @@ def insert_tool_call_event(
         session.commit()
 
 
-def prune_audit_events(*, older_than: datetime | None = None, keep_max: int | None = None) -> int:
+def insert_relay_connection_event(
+    *,
+    event_type: str,
+    detail: str | None = None,
+    created_at: datetime | None = None,
+) -> None:
+    with get_audit_session() as session:
+        session.add(
+            RelayConnectionEventModel(
+                created_at=created_at or datetime.now(UTC),
+                event_type=event_type,
+                detail=detail,
+            )
+        )
+        session.commit()
+
+
+def prune_audit_events(
+    *,
+    older_than: datetime | None = None,
+    relay_older_than: datetime | None = None,
+    keep_max: int | None = None,
+    relay_keep_max: int | None = None,
+) -> int:
     """Delete old / excess rows. Returns number of deleted rows."""
     deleted = 0
     with get_audit_session() as session:
@@ -119,6 +152,11 @@ def prune_audit_events(*, older_than: datetime | None = None, keep_max: int | No
             result = session.execute(delete(AuditEventModel).where(AuditEventModel.created_at < older_than))
             deleted += result.rowcount or 0
             result = session.execute(delete(ToolCallEventModel).where(ToolCallEventModel.created_at < older_than))
+            deleted += result.rowcount or 0
+        if relay_older_than is not None:
+            result = session.execute(
+                delete(RelayConnectionEventModel).where(RelayConnectionEventModel.created_at < relay_older_than)
+            )
             deleted += result.rowcount or 0
         if keep_max is not None and keep_max > 0:
             # Keep newest keep_max rows
@@ -134,5 +172,43 @@ def prune_audit_events(*, older_than: datetime | None = None, keep_max: int | No
                     delete(AuditEventModel).where(AuditEventModel.id.notin_(ids_to_keep))
                 )
                 deleted += result.rowcount or 0
+            tool_ids_to_keep = list(
+                session.scalars(
+                    select(ToolCallEventModel.id)
+                    .order_by(ToolCallEventModel.created_at.desc(), ToolCallEventModel.id.desc())
+                    .limit(keep_max)
+                )
+            )
+            if tool_ids_to_keep:
+                result = session.execute(
+                    delete(ToolCallEventModel).where(ToolCallEventModel.id.notin_(tool_ids_to_keep))
+                )
+                deleted += result.rowcount or 0
+        if relay_keep_max is not None and relay_keep_max > 0:
+            relay_ids_to_keep = list(
+                session.scalars(
+                    select(RelayConnectionEventModel.id)
+                    .order_by(RelayConnectionEventModel.created_at.desc(), RelayConnectionEventModel.id.desc())
+                    .limit(relay_keep_max)
+                )
+            )
+            if relay_ids_to_keep:
+                result = session.execute(
+                    delete(RelayConnectionEventModel).where(
+                        RelayConnectionEventModel.id.notin_(relay_ids_to_keep)
+                    )
+                )
+                deleted += result.rowcount or 0
+        session.commit()
+    return deleted
+
+
+def clear_monitoring_history() -> int:
+    """Remove all request, assistant-tool, and relay lifecycle history."""
+    with get_audit_session() as session:
+        deleted = 0
+        for model in (AuditEventModel, ToolCallEventModel, RelayConnectionEventModel):
+            result = session.execute(delete(model))
+            deleted += result.rowcount or 0
         session.commit()
     return deleted

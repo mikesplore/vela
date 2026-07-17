@@ -21,6 +21,7 @@ SKIP_PATH_PREFIXES = (
     "/ping",
     "/admin/",
 )
+MAX_LOOKBACK_MINUTES = 60 * 24 * 90
 
 
 def should_audit_path(path: str) -> bool:
@@ -31,8 +32,15 @@ def should_audit_path(path: str) -> bool:
 
 def maybe_prune() -> None:
     cfg = get_config()
-    older = datetime.now(UTC) - timedelta(days=max(1, cfg.audit_retention_days))
-    prune_audit_events(older_than=older, keep_max=cfg.audit_max_rows)
+    now = datetime.now(UTC)
+    audit_older_than = now - timedelta(days=max(1, cfg.audit_retention_days))
+    relay_older_than = now - timedelta(days=max(1, cfg.relay_audit_retention_days))
+    prune_audit_events(
+        older_than=audit_older_than,
+        relay_older_than=relay_older_than,
+        keep_max=cfg.audit_max_rows,
+        relay_keep_max=cfg.relay_audit_max_rows,
+    )
 
 
 def list_events(
@@ -62,7 +70,7 @@ def list_events(
 
 
 def summary(*, since_minutes: int = 60) -> dict[str, Any]:
-    since_minutes = max(1, min(since_minutes, 60 * 24 * 14))
+    since_minutes = max(1, min(since_minutes, MAX_LOOKBACK_MINUTES))
     since = datetime.now(UTC) - timedelta(minutes=since_minutes)
 
     with get_audit_session() as session:
@@ -130,7 +138,7 @@ def summary(*, since_minutes: int = 60) -> dict[str, Any]:
 
 
 def assistant_summary(*, since_minutes: int = 60) -> dict[str, Any]:
-    since_minutes = max(1, min(since_minutes, 60 * 24 * 14))
+    since_minutes = max(1, min(since_minutes, MAX_LOOKBACK_MINUTES))
     since = datetime.now(UTC) - timedelta(minutes=since_minutes)
     with get_audit_session() as session:
         rows = list(

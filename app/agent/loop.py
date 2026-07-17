@@ -7,6 +7,7 @@ import asyncio
 from app.agent.local_auth import wait_for_local_service
 from app.agent.pairing import refresh_ws_token
 from app.agent.tunnel import tunnel
+from app.services import relay_status
 from app.utils.config import get_config
 
 
@@ -34,6 +35,7 @@ async def start_agent_loop() -> None:
 
     while True:
         try:
+            relay_status.mark_connecting()
             token = await asyncio.to_thread(refresh_ws_token)
             print(f"Refreshed ws_token: {token[:10]}...")
             await tunnel(token)

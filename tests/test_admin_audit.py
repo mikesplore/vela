@@ -65,6 +65,19 @@ def test_summary_aggregates_endpoints():
     assert summary["median_ms"] > 0
 
 
+def test_relay_summary_counts_disconnects_and_reconnects():
+    audit_log.insert_relay_connection_event(event_type="connected")
+    audit_log.insert_relay_connection_event(event_type="disconnected", detail="websocket closed")
+    audit_log.insert_relay_connection_event(event_type="reconnected")
+
+    from app.services import relay_status
+
+    summary = relay_status.summary(since_minutes=60)
+    assert summary["disconnect_count"] == 1
+    assert summary["reconnect_count"] == 1
+    assert summary["recent_events"][0]["event_type"] == "reconnected"
+
+
 @pytest.mark.anyio
 async def test_audited_tool_execution_persists_failure(monkeypatch):
     async def failing_tool(*_args, **_kwargs):
@@ -115,6 +128,44 @@ async def test_admin_summary_and_events(async_client):
     body = events.json()
     assert body["total_stored"] >= 1
     assert any(e["path"] == "/system/info" for e in body["events"])
+
+
+@pytest.mark.anyio
+async def test_admin_status_reports_backend_and_relay(async_client):
+    audit_log.insert_relay_connection_event(event_type="disconnected", detail="relay unavailable")
+    response = await async_client.get("/admin/status?since_minutes=60", headers=_auth_headers())
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["backend_status"] == "online"
+    assert payload["relay"]["disconnect_count"] >= 1
+
+
+@pytest.mark.anyio
+async def test_admin_clear_monitoring_history_requires_confirmation(async_client):
+    audit_log.insert_audit_event(
+        request_id="request-1",
+        method="GET",
+        path="/system/info",
+        status_code=200,
+        duration_ms=1.0,
+    )
+    audit_log.insert_tool_call_event(
+        request_id="tool-1",
+        tool_name="get_system_info",
+        duration_ms=1.0,
+        succeeded=True,
+    )
+    audit_log.insert_relay_connection_event(event_type="connected")
+    headers = _auth_headers()
+
+    rejected = await async_client.post("/admin/clear", headers=headers, json={"confirmation": "no"})
+    assert rejected.status_code == 400
+
+    cleared = await async_client.post("/admin/clear", headers=headers, json={"confirmation": "CLEAR"})
+    assert cleared.status_code == 200
+    assert cleared.json()["deleted"] == 3
+    assert audit_service.count_events() == 0
+    assert audit_service.count_tool_events() == 0
 
 
 @pytest.mark.anyio

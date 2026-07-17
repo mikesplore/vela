@@ -6,6 +6,7 @@ from urllib.parse import urlencode
 import requests
 import websockets
 
+from app.services import relay_status
 from app.utils.config import get_config
 
 config = get_config()
@@ -33,6 +34,7 @@ async def tunnel(token):
                 close_timeout=10,
         ) as websocket:
             print("Tunnel established. Waiting for requests...")
+            relay_status.mark_connected()
 
             # Start heartbeat sender
             heartbeat_task = asyncio.create_task(_heartbeat_loop(websocket))
@@ -40,6 +42,7 @@ async def tunnel(token):
             while True:
                 try:
                     message = await asyncio.wait_for(websocket.recv(), timeout=config.relay_read_timeout)
+                    relay_status.mark_message_received()
                 except asyncio.TimeoutError:
                     print(f"No message from relay in {config.relay_read_timeout}s — assuming connection is dead")
                     raise  # Bubble up to outer handler; triggers reconnect
@@ -172,8 +175,11 @@ async def tunnel(token):
                         pass
 
     except Exception as tunnel_exc:
+        relay_status.mark_disconnected(tunnel_exc)
         print(f"Tunnel connection error: {tunnel_exc}")
         raise
+    else:
+        relay_status.mark_disconnected("Tunnel closed")
 
 
 async def _heartbeat_loop(websocket):
