@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from app.auth import router as auth_router
-from app.utils.config import Config
+from app.utils.config import get_config
 from app.dependencies import get_current_user
 from app.agent.helpers import start_agent_loop
 from app.utils.errors import ErrorResponse
@@ -23,7 +23,7 @@ from app.routers import scheduler as scheduler_module
 API_NAME = "Vela"
 API_VERSION = "1.0.0"
 
-config = Config()
+config = get_config()
 logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INFO))
 logger = logging.getLogger("vela.main")
 
@@ -101,6 +101,13 @@ async def lifespan(app: FastAPI):
         logger.warning("Scheduler failed to start or was already running")
 
     # Auto-start spike monitoring + daily summary if email is configured
+    try:
+        from app.utils.desktop_env import refresh_desktop_env
+
+        refresh_desktop_env(force=True, persist=True)
+    except Exception as e:
+        logger.warning("Could not refresh desktop session env: %s", e)
+
     try:
         from app.services.alerts import setup_monitoring_schedule, RECIPIENT_EMAIL, RESEND_AVAILABLE
         if RESEND_AVAILABLE and RECIPIENT_EMAIL:

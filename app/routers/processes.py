@@ -11,6 +11,7 @@ from app.dependencies import get_current_user
 from app.domain.processes import ProcessInfo
 from app.domain.processes import ProcessList, ActionResponse, LaunchRequest, ApplicationRequest, ApplicationCloseRequest
 from app.services.processes import kill_processes_by_name as kill_processes_by_name_svc
+from app.services.processes import spawn_detached
 from app.utils.run_command import run_command
 
 router = APIRouter(prefix="/processes", tags=["processes"])
@@ -83,10 +84,10 @@ async def kill_processes_by_name(name: str) -> Any:
 
 @router.post("/launch", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
 async def launch_process(request: LaunchRequest) -> Any:
-    """Launch a new process with optional arguments."""
+    """Launch a process detached from the Vela service cgroup when possible."""
     try:
-        proc = subprocess.Popen([request.command, *request.args])
-        return ActionResponse(success=True, message="Process launched.", pid=proc.pid)
+        result = spawn_detached([request.command, *request.args])
+        return ActionResponse(success=True, message=result.message, pid=result.pid)
     except FileNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Command not found")
     except Exception as exc:
@@ -95,10 +96,10 @@ async def launch_process(request: LaunchRequest) -> Any:
 
 @router.post("/app/open", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
 async def open_application(request: ApplicationRequest) -> Any:
-    """Open an application by name with optional arguments."""
+    """Open an application detached from the Vela service cgroup when possible."""
     try:
-        proc = subprocess.Popen([request.name, *request.args])
-        return ActionResponse(success=True, message="Application launched.", pid=proc.pid)
+        result = spawn_detached([request.name, *request.args])
+        return ActionResponse(success=True, message=result.message, pid=result.pid)
     except FileNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
     except Exception as exc:

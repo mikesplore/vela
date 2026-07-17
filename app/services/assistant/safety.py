@@ -4,11 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, UTC
 from typing import Any, Literal
 from uuid import uuid4
-from app.utils.config import Config
+from app.utils.config import get_config
 from app.db.models import PendingAction
 from app.domain.assistant import ConfirmationCard
 
-config = Config()
+config = get_config()
 
 RiskLevel = Literal["low", "medium", "high"]
 

@@ -60,6 +60,9 @@ WorkingDirectory={target_dir}
 Environment=START_AGENT=false
 EnvironmentFile={desktop_env_file}
 ExecStart={vela_exec}
+# Keep launched desktop apps alive when Vela restarts/stops.
+# Preferred path is systemd-run scopes; this is a safety net for fallback Popen.
+KillMode=process
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

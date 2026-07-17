@@ -8,10 +8,10 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import BaseModel
 
-from app.utils.config import Config
+from app.utils.config import get_config
 from app.rate_limiter import limit_route
 
-config = Config()
+config = get_config()
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 logger = logging.getLogger("vela.auth")

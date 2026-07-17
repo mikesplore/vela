@@ -66,9 +66,9 @@ def main() -> None:
 
     # Default: run the local API server (imports app stack only now).
     import uvicorn
-    from app.utils.config import Config
+    from app.utils.config import get_config
 
-    config = Config()
+    config = get_config()
     uvicorn.run(
         "app.main:app",
         host=config.host,

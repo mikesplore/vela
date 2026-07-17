@@ -4,9 +4,11 @@ from fastapi.responses import StreamingResponse
 from app.dependencies import get_current_user
 from app.domain.assistant import AssistantResponse, AssistantRequest
 from app.services.assistant.helpers import (
-    SESSION_STORE,
     config,
-    logger, get_api_key, get_or_init_session, trim_history, plan_tool_calls,
+    logger,
+    get_api_key,
+    plan_tool_calls,
+    expires_in_s,
 )
 from app.services.assistant.safety import (
     PIN_MAX_ATTEMPTS,
@@ -22,7 +24,13 @@ from app.services.assistant.safety import (
     requires_auth,
     requires_gate,
 )
-from app.services.assistant.helpers import extract_session_id, execute_tool_calls, expires_in_s
+from app.services.assistant.session import (
+    SESSION_STORE,
+    extract_session_id,
+    get_or_init_session,
+    trim_history,
+)
+from app.services.assistant.tool_exec import execute_tool_calls
 from app.services.assistant.stream import StreamRequest
 from app.services.assistant.stream import stream_chat as s_c
 

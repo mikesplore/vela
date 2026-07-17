@@ -429,10 +429,16 @@ vela/
 │   ├── agent/
 │   │   ├── __init__.py
 │   │   ├── agent.py          # Agent CLI entry point
-│   │   ├── helpers.py        # Agent onboarding and tunnel orchestration
+│   │   ├── helpers.py        # Re-exports for compatibility
+│   │   ├── local_auth.py     # Local API JWT for tunnel forwarding
+│   │   ├── pairing.py        # Relay pairing / activation
+│   │   ├── credentials.py    # Relay credential persistence
+│   │   ├── loop.py           # Agent reconnect loop
+│   │   ├── envutil.py        # Shared agent env helpers
 │   │   └── tunnel.py         # WebSocket tunnel implementation
 │   ├── setup/                # Fresh-start setup (wipe, write config, pair, restart)
 │   ├── ui/                   # Browser pairing + setup wizard pages
+│   ├── cli.py                # Service management CLI (vela --start/--restart/...)
 │   ├── db/
 │   │   ├── __init__.py
 │   │   ├── models.py         # Database models
@@ -457,11 +463,13 @@ vela/
 │   │   └── system_info.py
 │   │   └── assistant/        # LLM assistant service
 │   │       ├── __init__.py
-│   │       ├── helpers.py
-│   │       ├── prompts.py
+│   │       ├── helpers.py    # Fireworks/LLM planning + streaming
+│   │       ├── session.py    # Chat session store
+│   │       ├── tool_exec.py  # Tool call execution against local API
+│   │       ├── tools.py      # Tool registry definitions
 │   │       ├── safety.py
 │   │       ├── stream.py
-│   │       └── tools.py
+│   │       └── prompts.py
 │   └── utils/
 │       ├── __init__.py
 │       ├── config.py         # Configuration loading (pydantic-settings)

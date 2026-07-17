@@ -11,12 +11,12 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from app.utils.config import Config
+from app.utils.config import get_config
 from app.dependencies import get_current_user
 from app.domain.filesystem import FileListResponse, FileEntry, FileActionResponse, PathRequest, RenameRequest
-from app.services.filesystem import validate_path, file_entry, is_allowed
+from app.services.filesystem import validate_path, file_entry, is_allowed, resolve_search_roots
 
-config = Config()
+config = get_config()
 router = APIRouter(prefix="/fs", tags=["filesystem"])
 
 
@@ -246,44 +246,49 @@ async def get_system_config() -> Any:
 
 @router.get("/search", response_model=FileListResponse, dependencies=[Depends(get_current_user)])
 async def search_files(query: str = Query(...), path: str = Query(".")) -> Any:
-    """Search for files and directories by name with tree-enabled results."""
-    target = validate_path(path, must_exist=True)
-    if not target.is_dir():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Path must be a directory")
-        
-    
+    """Search for files and directories by name with tree-enabled results.
+
+    Broad roots like ``/`` are clamped to configured ``allowed_base_dirs``.
+    """
+    roots = resolve_search_roots(path)
     matches: List[FileEntry] = []
+    seen: set[str] = set()
+
     try:
-        # Use find command for efficient searching
-        process = subprocess.run(
-            ["find", str(target), "-iname", f"*{query}*"],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        if process.returncode != 0 and not process.stdout:
-            raise OSError(process.stderr.strip() if process.stderr else "Search failed")
-        
-        for line in process.stdout.strip().split('\n'):
-            if line:
+        for target in roots:
+            process = subprocess.run(
+                ["find", str(target), "-iname", f"*{query}*"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if process.returncode != 0 and not process.stdout:
+                raise OSError(process.stderr.strip() if process.stderr else "Search failed")
+
+            for line in process.stdout.strip().split("\n"):
+                if not line:
+                    continue
                 found_path = Path(line)
-                # Only include paths within allowed base directories
+                key = str(found_path)
+                if key in seen:
+                    continue
                 if is_allowed(found_path):
+                    seen.add(key)
                     entry_dict = file_entry(found_path)
                     matches.append(FileEntry(**entry_dict))
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Search timed out")
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Search failed: {exc}")
-    
-    # Sort results: folders first, then by name
+
     matches.sort(key=lambda x: (x.type != "directory", x.name.lower()))
-    
+
+    current = str(roots[0]) if len(roots) == 1 else ",".join(str(r) for r in roots)
     return FileListResponse(
         files=matches,
-        current_path=str(target),
+        current_path=current,
         parent_path=None,
-        total_items=len(matches)
+        total_items=len(matches),
     )
 
 
@@ -374,8 +379,15 @@ async def unzip_path(request: UnzipRequest) -> Any:
 @router.post("/open", response_model=FileActionResponse, dependencies=[Depends(get_current_user)])
 async def open_path(request: PathRequest) -> Any:
     """Open a file or directory with the default system application."""
+    from app.utils.desktop_env import ensure_desktop_env
+    from app.services.processes import spawn_detached
+
     target = validate_path(request.path, must_exist=True)
-    process = subprocess.run(["xdg-open", str(target)], capture_output=True, text=True, timeout=10, check=False)
-    if process.returncode != 0:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=process.stderr or "Could not open path")
-    return FileActionResponse(success=True, message=f"Opened {target}")
+    ensure_desktop_env()
+    try:
+        result = spawn_detached(["xdg-open", str(target)])
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="xdg-open not found")
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+    return FileActionResponse(success=True, message=f"Opened {target}. {result.message}")

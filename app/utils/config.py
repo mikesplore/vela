@@ -224,3 +224,10 @@ class Config(BaseSettings):
                     except Exception as e:
                         logger.error(f"Failed to parse configuration at {config_path}: {e}")
             return {}
+
+# Shared process-wide config instance (validators run once at import).
+_CONFIG = Config()
+
+
+def get_config() -> Config:
+    return _CONFIG

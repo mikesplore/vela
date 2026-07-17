@@ -6,8 +6,9 @@ from urllib.parse import urlencode
 import requests
 import websockets
 
-from app.utils.config import Config
-config = Config()
+from app.utils.config import get_config
+
+config = get_config()
 
 _local_token: str | None = None
 _local_token_expires = datetime.min.replace(tzinfo=timezone.utc)
@@ -17,8 +18,9 @@ HEARTBEAT_INTERVAL = 30  # seconds
 
 async def tunnel(token):
     """Maintain WebSocket tunnel to relay server with heartbeat and request forwarding."""
-    # Lazy imports to break circular dependency with app.agent.helpers
-    from app.agent.helpers import agent_settings, websocket_tunnel_url, async_get_local_auth_token
+    # Lazy imports to avoid circular imports with agent modules
+    from app.agent.envutil import agent_settings, websocket_tunnel_url
+    from app.agent.local_auth import async_get_local_auth_token
 
     vps_url, agent_id, _ = agent_settings()
     uri = websocket_tunnel_url(vps_url, agent_id, token)

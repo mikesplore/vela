@@ -2,9 +2,9 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from fastapi import Request
 
-from app.utils.config import Config
+from app.utils.config import get_config
 
-config = Config()
+config = get_config()
 
 
 def get_client_ip(request: Request) -> str:

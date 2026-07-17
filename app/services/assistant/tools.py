@@ -361,8 +361,8 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "search_files": {
         "method": "GET",
         "path": "/fs/search",
-        "description": "Search files and directories by name.",
-        "input": {"query": "string", "path": "string"},
+        "description": "Search files and directories by name under allowed directories. Prefer path under the user home (e.g. /home/<user>). If path is / or omitted, search is automatically limited to configured allowed_base_dirs.",
+        "input": {"query": "string", "path": "string?"},
     },
     "get_disk_usage": {
         "method": "GET",

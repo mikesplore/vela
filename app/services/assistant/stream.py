@@ -35,14 +35,19 @@ from pydantic import BaseModel
 from app.services.assistant.tools import TOOL_DISPLAY_NAMES
 
 from app.services.assistant.helpers import (
-    SESSION_STORE,
-    get_or_init_session,
     plan_tool_calls_streaming,
     stream_llm_response,
-    trim_history,
     config,
-    logger, execute_tool_safe, compose_final_reply, get_api_key,
+    logger,
+    compose_final_reply,
+    get_api_key,
 )
+from app.services.assistant.session import (
+    SESSION_STORE,
+    get_or_init_session,
+    trim_history,
+)
+from app.services.assistant.tool_exec import execute_tool_safe
 from app.services.assistant.safety import (
     PIN_MAX_ATTEMPTS,
     build_confirmation_card,
