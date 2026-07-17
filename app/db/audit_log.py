@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, UTC
 from pathlib import Path
 
-from sqlalchemy import create_engine, delete, select
+from sqlalchemy import create_engine, delete, event, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 
@@ -51,12 +51,32 @@ class RelayConnectionEventModel(Base):
     detail: Mapped[str | None] = mapped_column(nullable=True)
 
 
+class AdminActionEventModel(Base):
+    """Administrative actions retained separately from clearable monitoring data."""
+    __tablename__ = "admin_action_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(index=True)
+    actor: Mapped[str | None] = mapped_column(nullable=True)
+    action: Mapped[str] = mapped_column(index=True)
+    detail: Mapped[str | None] = mapped_column(nullable=True)
+
+
 db_path = Path.cwd() / "audit_log.sqlite"
 engine = create_engine(
     f"sqlite:///{db_path}",
     echo=False,
-    connect_args={"check_same_thread": False},
+    connect_args={"check_same_thread": False, "timeout": 5},
 )
+
+
+@event.listens_for(engine, "connect")
+def _configure_sqlite_connection(dbapi_connection, _connection_record) -> None:
+    """Allow the API and tunnel agent to write telemetry concurrently."""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
 
 
 def init_audit_db() -> None:
@@ -138,10 +158,24 @@ def insert_relay_connection_event(
         session.commit()
 
 
+def insert_admin_action_event(*, actor: str | None, action: str, detail: str | None = None) -> None:
+    with get_audit_session() as session:
+        session.add(
+            AdminActionEventModel(
+                created_at=datetime.now(UTC),
+                actor=actor,
+                action=action,
+                detail=detail,
+            )
+        )
+        session.commit()
+
+
 def prune_audit_events(
     *,
     older_than: datetime | None = None,
     relay_older_than: datetime | None = None,
+    admin_action_older_than: datetime | None = None,
     keep_max: int | None = None,
     relay_keep_max: int | None = None,
 ) -> int:
@@ -184,6 +218,11 @@ def prune_audit_events(
                     delete(ToolCallEventModel).where(ToolCallEventModel.id.notin_(tool_ids_to_keep))
                 )
                 deleted += result.rowcount or 0
+        if admin_action_older_than is not None:
+            result = session.execute(
+                delete(AdminActionEventModel).where(AdminActionEventModel.created_at < admin_action_older_than)
+            )
+            deleted += result.rowcount or 0
         if relay_keep_max is not None and relay_keep_max > 0:
             relay_ids_to_keep = list(
                 session.scalars(
@@ -204,7 +243,7 @@ def prune_audit_events(
 
 
 def clear_monitoring_history() -> int:
-    """Remove all request, assistant-tool, and relay lifecycle history."""
+    """Remove monitoring data while retaining administrative-action records."""
     with get_audit_session() as session:
         deleted = 0
         for model in (AuditEventModel, ToolCallEventModel, RelayConnectionEventModel):

@@ -2,6 +2,7 @@ import threading
 import time
 
 from app.setup import deps, wizard
+from app.setup import preflight
 
 
 def test_dependency_install_plan_deduplicates_suggested_packages(monkeypatch):
@@ -49,3 +50,18 @@ def test_browser_dependency_choice_unblocks_setup():
     assert selected == "skip"
     assert state["phase"] == "dependencies"
     assert state["dependency_decision_required"] is False
+
+
+def test_preflight_reports_headless_session_as_warning(monkeypatch):
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    check = preflight._check_desktop_session()
+
+    assert check["status"] == "warning"
+    assert "No desktop session" in check["detail"]
+
+
+def test_preflight_failure_detection():
+    assert preflight.has_failures([{"status": "pass"}, {"status": "failure"}]) is True
+    assert preflight.has_failures([{"status": "pass"}, {"status": "warning"}]) is False

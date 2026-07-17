@@ -73,7 +73,9 @@ class Config(BaseSettings):
     audit_retention_days: int = 30
     audit_max_rows: int = 50_000
     relay_audit_retention_days: int = 90
-    relay_audit_max_rows: int = 50_000
+    relay_audit_max_rows: int = 150_000
+    admin_action_retention_days: int = 365
+    maintenance_prune_interval_minutes: int = 60
     assistant_system_prompt: str = DEFAULT_ASSISTANT_SYSTEM_PROMPT
 
     # ==================================================================

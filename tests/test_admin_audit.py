@@ -1,6 +1,7 @@
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 
 import pytest
+from sqlalchemy import select
 from app.auth import create_access_token
 from app.db import audit_log
 from app.services import audit as audit_service
@@ -76,6 +77,17 @@ def test_relay_summary_counts_disconnects_and_reconnects():
     assert summary["disconnect_count"] == 1
     assert summary["reconnect_count"] == 1
     assert summary["recent_events"][0]["event_type"] == "reconnected"
+
+
+def test_relay_summary_marks_stale_liveness():
+    audit_log.insert_relay_connection_event(
+        event_type="heartbeat",
+        created_at=datetime.now(UTC) - timedelta(minutes=4),
+    )
+
+    from app.services import relay_status
+
+    assert relay_status.summary(since_minutes=60)["status"] == "stale"
 
 
 @pytest.mark.anyio
@@ -166,6 +178,11 @@ async def test_admin_clear_monitoring_history_requires_confirmation(async_client
     assert cleared.json()["deleted"] == 3
     assert audit_service.count_events() == 0
     assert audit_service.count_tool_events() == 0
+    with audit_log.get_audit_session() as session:
+        action = session.scalar(select(audit_log.AdminActionEventModel))
+    assert action is not None
+    assert action.actor == "admin"
+    assert action.action == "clear_monitoring_history"
 
 
 @pytest.mark.anyio

@@ -128,6 +128,12 @@ async def admin_clear_monitoring_history(
     _require_admin_feature()
     if confirmation != "CLEAR":
         raise HTTPException(status_code=400, detail="Set confirmation to CLEAR to remove monitoring history")
-    from app.db.audit_log import clear_monitoring_history
+    from app.db.audit_log import clear_monitoring_history, insert_admin_action_event
 
-    return {"success": True, "deleted": clear_monitoring_history()}
+    deleted = clear_monitoring_history()
+    insert_admin_action_event(
+        actor=_user,
+        action="clear_monitoring_history",
+        detail=f"deleted={deleted}",
+    )
+    return {"success": True, "deleted": deleted}

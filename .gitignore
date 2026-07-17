@@ -70,4 +70,6 @@ Thumbs.db
 config.yaml
 *.sqlite
 .spotify_token_cache
+*.sqlite-wal
+*.sqlite-shm
 

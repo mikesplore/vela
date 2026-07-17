@@ -34,6 +34,7 @@ def start_setup_wizard(defaults: dict[str, str]):
         "pairing_status": None,
         "dependency": None,
         "dependency_decision_required": False,
+        "preflight": None,
         "done": False,
         "error": None,
     }
@@ -152,6 +153,7 @@ def start_setup_wizard(defaults: dict[str, str]):
             packages,
             timeout,
         ),
+        "set_preflight": lambda checks: _set_preflight(state_lock, state, checks),
         "set_phase": lambda phase, message: _set_phase(state_lock, state, phase, message),
         "set_pairing_session": lambda payload: _set_pairing_session(state_lock, state, payload),
         "set_pairing_status": lambda status: _set_pairing_status(state_lock, state, status),
@@ -192,6 +194,13 @@ def _set_phase(lock: threading.Lock, state: dict, phase: str, message: str) -> N
     with lock:
         state["phase"] = phase
         state["message"] = message
+
+
+def _set_preflight(lock: threading.Lock, state: dict, checks: list[dict]) -> None:
+    with lock:
+        state["phase"] = "preflight"
+        state["message"] = "Checking host readiness..."
+        state["preflight"] = checks
 
 
 def _set_pairing_session(lock: threading.Lock, state: dict, payload: dict) -> None:

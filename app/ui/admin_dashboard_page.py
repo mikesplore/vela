@@ -492,13 +492,15 @@ def render_admin_dashboard_page() -> str:
     const isConnected = status === 'connected';
     const isWaiting = status === 'connecting' || status === 'reconnecting';
     const dot = document.getElementById('relayStatusDot');
-    dot.className = `status-dot${isConnected ? '' : isWaiting || status === 'unknown' ? ' stale' : ' off'}`;
+    dot.className = `status-dot${isConnected ? '' : isWaiting || status === 'unknown' || status === 'stale' ? ' stale' : ' off'}`;
     document.getElementById('relayStatus').textContent = status.replace('_', ' ');
     document.getElementById('relayState').textContent = isConnected
       ? 'Relay tunnel connected'
       : status === 'unknown'
         ? 'No relay telemetry received yet'
-        : isWaiting ? 'Relay tunnel connecting' : 'Relay tunnel disconnected';
+        : isWaiting ? 'Relay tunnel connecting'
+          : status === 'stale' ? 'Relay tunnel has stopped reporting'
+            : 'Relay tunnel disconnected';
     document.getElementById('relayDisconnects').textContent = fmtNum(relay.disconnect_count);
     document.getElementById('relayReconnects').textContent = fmtNum(relay.reconnect_count);
     document.getElementById('relayUptime').textContent = fmtDuration(relay.connected_seconds);

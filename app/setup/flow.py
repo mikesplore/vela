@@ -25,6 +25,7 @@ from app.setup.deps import (
     dependency_install_plan,
     install_packages,
 )
+from app.setup.preflight import format_preflight, has_failures, run_preflight
 from app.setup.services import enable_services, restart_all_services, write_systemd_units
 from app.setup.wizard import browser_is_available, browser_onboarding_enabled, start_setup_wizard
 from app.setup.writers import (
@@ -186,6 +187,19 @@ def run_setup() -> None:
     optional = dict(values["optional"])  # type: ignore[arg-type]
 
     if wizard:
+        wizard["set_phase"]("preflight", "Checking host readiness...")
+    preflight = run_preflight(target_dir=target_dir, host=host, port=port, vps_url=vps_url)
+    print("Setup preflight:")
+    print(format_preflight(preflight))
+    if wizard:
+        wizard["set_preflight"](preflight)
+    if has_failures(preflight):
+        message = "Setup preflight failed. Resolve the reported issues before continuing."
+        if wizard:
+            wizard["set_error"](message)
+        raise RuntimeError(message)
+
+    if wizard:
         wizard["set_phase"]("dependencies", "Checking dependencies...")
         missing, pkg_manager, packages = dependency_install_plan()
         if missing:
@@ -211,6 +225,15 @@ def run_setup() -> None:
                     except Exception as exc:
                         wizard["set_error"](f"Could not install selected packages: {exc}")
                         raise
+                    remaining, _, _ = dependency_install_plan()
+                    if remaining:
+                        features = ", ".join(group["feature"] for group in remaining)
+                        wizard["set_phase"](
+                            "dependencies",
+                            f"Installation finished, but these tools are still unavailable: {features}.",
+                        )
+                    else:
+                        wizard["set_phase"]("dependencies", "Package installation verified successfully.")
             else:
                 wizard["set_phase"]("dependencies", "Optional package installation skipped.")
         else:

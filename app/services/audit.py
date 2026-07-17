@@ -35,9 +35,11 @@ def maybe_prune() -> None:
     now = datetime.now(UTC)
     audit_older_than = now - timedelta(days=max(1, cfg.audit_retention_days))
     relay_older_than = now - timedelta(days=max(1, cfg.relay_audit_retention_days))
+    admin_action_older_than = now - timedelta(days=max(1, cfg.admin_action_retention_days))
     prune_audit_events(
         older_than=audit_older_than,
         relay_older_than=relay_older_than,
+        admin_action_older_than=admin_action_older_than,
         keep_max=cfg.audit_max_rows,
         relay_keep_max=cfg.relay_audit_max_rows,
     )

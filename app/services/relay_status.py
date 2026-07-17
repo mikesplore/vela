@@ -21,6 +21,9 @@ _state: dict[str, Any] = {
     "last_error": None,
     "has_connected": False,
 }
+LIVENESS_PERSIST_INTERVAL_SECONDS = 60
+STALE_AFTER_SECONDS = 180
+_relay_event_count = 0
 
 
 def _now() -> datetime:
@@ -28,8 +31,16 @@ def _now() -> datetime:
 
 
 def _record(event_type: str, detail: str | None = None) -> None:
+    global _relay_event_count
     try:
         insert_relay_connection_event(event_type=event_type, detail=detail)
+        _relay_event_count += 1
+        # Relay-only installations may receive little or no HTTP traffic, so
+        # retention cannot depend solely on request-audit writes.
+        if _relay_event_count % 12 == 0:
+            from app.services.audit import maybe_prune
+
+            maybe_prune()
     except Exception:
         # Tunnel availability must never depend on diagnostic storage.
         pass
@@ -59,7 +70,9 @@ def mark_message_received() -> None:
     # Persist a lightweight liveness marker at most every five minutes. This
     # lets the dashboard observe an already-open tunnel across processes
     # without growing the event table on every relay heartbeat.
-    if last_persisted is None or (now - last_persisted).total_seconds() >= 300:
+    if last_persisted is None or (
+        now - last_persisted
+    ).total_seconds() >= LIVENESS_PERSIST_INTERVAL_SECONDS:
         _state["last_persisted_message_at"] = now
         _record("heartbeat")
 
@@ -118,6 +131,11 @@ def summary(*, since_minutes: int = 60) -> dict[str, Any]:
     elif last_event.event_type == "disconnected":
         status = "disconnected"
         connected_since = None
+    elif last_liveness is None or (
+        _now() - _as_utc(last_liveness.created_at)
+    ).total_seconds() > STALE_AFTER_SECONDS:
+        status = "stale"
+        connected_since = _as_utc(last_connection.created_at) if last_connection else None
     else:
         status = "connected"
         connected_since = _as_utc(last_connection.created_at) if last_connection else None
@@ -131,7 +149,13 @@ def summary(*, since_minutes: int = 60) -> dict[str, Any]:
         "last_connected_at": _iso(last_connection.created_at) if last_connection else None,
         "last_disconnected_at": _iso(last_disconnection.created_at) if last_disconnection else None,
         "last_message_at": _iso(last_liveness.created_at) if last_liveness else None,
-        "last_error": last_disconnection.detail if last_event and last_event.event_type == "disconnected" else None,
+        "last_error": (
+            last_disconnection.detail
+            if last_event and last_event.event_type == "disconnected"
+            else f"No relay liveness received for more than {STALE_AFTER_SECONDS} seconds."
+            if status == "stale"
+            else None
+        ),
         "connected_seconds": round((_now() - connected_since).total_seconds()) if connected_since else None,
         "disconnect_count": sum(event.event_type == "disconnected" for event in events),
         "reconnect_count": sum(event.event_type == "reconnected" for event in events),

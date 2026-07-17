@@ -105,6 +105,12 @@ async def lifespan(app: FastAPI):
         scheduler_module.scheduler.start()
     except Exception:
         logger.warning("Scheduler failed to start or was already running")
+    try:
+        from app.services.maintenance_tasks import setup_maintenance_schedule
+
+        setup_maintenance_schedule()
+    except Exception as e:
+        logger.warning("Could not schedule maintenance: %s", e)
 
     # Auto-start spike monitoring + daily summary if email is configured
     try:

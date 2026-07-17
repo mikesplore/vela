@@ -64,6 +64,10 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
   .dependency-list{margin:0 0 12px;padding:0;list-style:none;}.dependency-list li{padding:8px 0;border-top:1px solid rgba(79,124,255,.14);font-size:12px;}
   .dependency-list li:first-child{border-top:0;}.dependency-list strong{display:block;font-size:12.5px;}.dependency-list span{display:block;margin-top:2px;color:var(--ink-soft);}
   .dependency-actions{display:flex;justify-content:flex-end;gap:10px;}.dependency-actions .btn-primary{padding:9px 12px;font-size:12.5px;}
+  .preflight-panel{display:none;margin:16px 0 6px;padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--panel);}
+  .preflight-panel h2{font-size:14px;margin:0 0 8px;}.preflight-list{margin:0;padding:0;list-style:none;}
+  .preflight-list li{display:flex;gap:8px;padding:7px 0;border-top:1px solid var(--line-soft);font-size:12px;line-height:1.4;}.preflight-list li:first-child{border-top:0;}
+  .preflight-list b{min-width:62px;font:10px var(--mono);letter-spacing:.04em;text-transform:uppercase;}.preflight-list .pass{color:var(--good);}.preflight-list .warning{color:var(--warn);}.preflight-list .failure{color:var(--bad);}
   .status-pill{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;font-weight:600;padding:5px 11px;border-radius:20px;background:#FFF6E6;color:var(--warn);text-transform:uppercase;letter-spacing:.05em;margin-bottom:18px;}
   .status-pill .dot{width:6px;height:6px;border-radius:50%;background:var(--warn);animation:blink 1.4s infinite;}
   .status-pill.paired{background:#E8F7F0;color:var(--good);} .status-pill.paired .dot{background:var(--good);animation:none;}
@@ -150,6 +154,10 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
       <div class="review-row"><span>Spotify client secret</span><span id="r-spotify-secret"></span></div>
     </div>
     <p class="hint" id="phaseText">[collect] Waiting for form submission...</p>
+    <section class="preflight-panel" id="preflightPanel" aria-labelledby="preflightTitle">
+      <h2 id="preflightTitle">Host readiness</h2>
+      <ul class="preflight-list" id="preflightList"></ul>
+    </section>
     <section class="dependency-panel" id="dependencyPanel" aria-labelledby="dependencyTitle">
       <h2 id="dependencyTitle">Optional system tools are missing</h2>
       <p id="dependencyMessage"></p>
@@ -290,6 +298,25 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
     document.getElementById('skipDependenciesBtn').disabled = false;
   }
 
+  function renderPreflight(data){
+    const panel = document.getElementById('preflightPanel');
+    const checks = data.preflight || [];
+    panel.style.display = checks.length && !data.pairing && !data.done ? 'block' : 'none';
+    if (!checks.length) return;
+    const list = document.getElementById('preflightList');
+    list.replaceChildren();
+    checks.forEach(check => {
+      const item = document.createElement('li');
+      const status = document.createElement('b');
+      status.className = check.status || '';
+      status.textContent = check.status || 'info';
+      const copy = document.createElement('span');
+      copy.textContent = `${check.label || 'Check'}: ${check.detail || ''}`;
+      item.append(status, copy);
+      list.append(item);
+    });
+  }
+
   async function submitDependencyDecision(decision){
     const install = document.getElementById('installDependenciesBtn');
     const skip = document.getElementById('skipDependenciesBtn');
@@ -383,6 +410,7 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
         goTo(3);
       }
       renderDependencyPrompt(data);
+      renderPreflight(data);
       updatePairingDisplay(data);
     } catch (_) {}
   }
