@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.domain.assistant import AssistantResponse
 from app.services.assistant.tools import INPUT_CONFIRM_TOOLS, TOOL_ALIASES, TOOL_DEFINITIONS
+from app.services.assistant.workflow import next_execution_stage, prepare_tool_calls
 from app.services.filesystem import validate_path
 from app.utils.config import get_config
 
@@ -283,25 +284,50 @@ async def execute_tool_audited(
     return result
 
 
-async def execute_tool_calls(request: Request, tool_calls: list[dict[str, object]], auth_header: str | None,
-                              user_message: str = "", confirmed: bool = False) -> AssistantResponse:
-    # Lazy import avoids circular dependency with helpers.compose_final_reply
-    from app.services.assistant.helpers import compose_final_reply
+async def execute_tool_plan(
+        prepared_calls: list[dict[str, Any]],
+        execute_call,
+) -> list[dict[str, Any]]:
+    """Run a dependency plan in parallel stages, preserving result order."""
+    completed: dict[str, dict[str, Any]] = {}
 
-    tasks = [
-        execute_tool_audited(
+    while len(completed) < len(prepared_calls):
+        ready, skipped = next_execution_stage(prepared_calls, completed)
+        for call, result in skipped:
+            completed[call["id"]] = result
+        if ready:
+            results = await asyncio.gather(*(execute_call(call) for call in ready))
+            for call, result in zip(ready, results):
+                completed[call["id"]] = result
+
+    return [completed[call["id"]] for call in prepared_calls]
+
+
+async def execute_tool_results(
+        request: Request,
+        tool_calls: list[dict[str, object]],
+        auth_header: str | None,
+        confirmed: bool = False,
+) -> list[dict[str, Any]]:
+    prepared_calls = prepare_tool_calls(tool_calls)
+
+    async def _execute_call(call: dict[str, Any]) -> dict[str, Any]:
+        return await execute_tool_audited(
             request.app,
-            tc["tool"],
-            tc.get("tool_input") or {},
+            call["tool"],
+            call["tool_input"],
             auth_header,
             request_id=getattr(request.state, "request_id", None),
             user_id=getattr(request.state, "audit_user_id", None),
             confirmed=confirmed,
         )
-        for tc in tool_calls
-        if tc.get("tool") and tc["tool"] != "none"
-    ]
-    tool_results = list(await asyncio.gather(*tasks))
+
+    return await execute_tool_plan(prepared_calls, _execute_call)
+
+
+async def response_from_tool_results(user_message: str, tool_results: list[dict[str, Any]]) -> AssistantResponse:
+    # Lazy import avoids circular dependency with helpers.compose_final_reply
+    from app.services.assistant.helpers import compose_final_reply
 
     if len(tool_results) == 1 and tool_results[0].get("tool") == "display_screenshot":
         result = tool_results[0].get("result") or {}
@@ -325,3 +351,9 @@ async def execute_tool_calls(request: Request, tool_calls: list[dict[str, object
         )
         art_url = None
     return AssistantResponse(reply=reply_text, art_url=art_url)
+
+
+async def execute_tool_calls(request: Request, tool_calls: list[dict[str, object]], auth_header: str | None,
+                              user_message: str = "", confirmed: bool = False) -> AssistantResponse:
+    tool_results = await execute_tool_results(request, tool_calls, auth_header, confirmed=confirmed)
+    return await response_from_tool_results(user_message, tool_results)

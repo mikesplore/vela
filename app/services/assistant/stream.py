@@ -41,6 +41,7 @@ from app.services.assistant.helpers import (
     logger,
     compose_final_reply,
     get_api_key,
+    plan_conditional_followup,
 )
 from app.services.assistant.session import (
     SESSION_STORE,
@@ -51,6 +52,11 @@ from app.services.assistant.tool_exec import (
     download_image_payload,
     execute_tool_audited,
     sanitize_tool_result_for_llm,
+)
+from app.services.assistant.workflow import (
+    needs_conditional_followup,
+    next_execution_stage,
+    prepare_tool_calls,
 )
 from app.services.assistant.safety import (
     PIN_MAX_ATTEMPTS,
@@ -154,31 +160,95 @@ async def _run_tools_and_reply(
     if already_running is None:
         already_running = set()
 
-    real_calls = [tc for tc in tool_calls if tc.get("tool") and tc["tool"] != "none"]
+    prepared_calls = prepare_tool_calls(tool_calls)
+    completed: dict[str, dict] = {}
+    tool_results: list[dict] = []
 
-    for tc in real_calls:
-        if tc["tool"] not in already_running:
-            yield _sse_tool(tc["tool"], "running")
+    while len(completed) < len(prepared_calls):
+        ready, skipped = next_execution_stage(prepared_calls, completed)
+        for call, result in skipped:
+            completed[call["id"]] = result
+            tool_results.append(result)
+            yield _sse_tool(result["tool"], "error", error=result["error"])
 
-    tasks = [
-        execute_tool_audited(
-            request.app, tc["tool"], tc.get("tool_input") or {},
-            auth_header,
-            request_id=getattr(request.state, "request_id", None),
-            user_id=current_user,
-            confirmed=confirmed,
-        )
-        for tc in real_calls
-    ]
+        async def _run_call(call: dict) -> tuple[dict, dict]:
+            result = await execute_tool_audited(
+                request.app,
+                call["tool"],
+                call["tool_input"],
+                auth_header,
+                request_id=getattr(request.state, "request_id", None),
+                user_id=current_user,
+                confirmed=confirmed,
+            )
+            return call, result
 
-    tool_results = []
-    for coro in asyncio.as_completed(tasks):
-        r = await coro
-        tool_results.append(r)
-        if r.get("error"):
-            yield _sse_tool(r["tool"], "error", error=r["error"])
+        if ready:
+            for call in ready:
+                if call["tool"] not in already_running:
+                    yield _sse_tool(call["tool"], "running")
+
+            tasks = [_run_call(call) for call in ready]
+            for coro in asyncio.as_completed(tasks):
+                call, result = await coro
+                completed[call["id"]] = result
+                tool_results.append(result)
+                if result.get("error"):
+                    yield _sse_tool(result["tool"], "error", error=result["error"])
+                else:
+                    yield _sse_tool(result["tool"], "done", result=result.get("result"))
+
+    if needs_conditional_followup(user_message, tool_calls):
+        try:
+            followup_calls = await plan_conditional_followup(user_message, tool_results)
+        except Exception as exc:
+            logger.error("Conditional follow-up planning failed: %s", exc, exc_info=True)
         else:
-            yield _sse_tool(r["tool"], "done", result=r.get("result"))
+            followup_real_calls = [
+                call for call in followup_calls if call.get("tool") and call["tool"] != "none"
+            ]
+            followup_gated = [
+                call for call in followup_real_calls if requires_gate(str(call["tool"]))
+            ]
+            if followup_gated:
+                require_pin = bool(config.assistant_action_pin) and any(
+                    requires_auth(str(call["tool"])) for call in followup_gated
+                )
+                session_id = _extract_session_id(request)
+                pending = register_pending_action(
+                    current_user,
+                    session_id,
+                    user_message,
+                    followup_real_calls,
+                    requires_auth=require_pin,
+                )
+                card = build_confirmation_card(
+                    pending.tool_calls, pending.requires_auth, pin_attempts=pending.pin_attempts
+                )
+                yield _sse_gate(
+                    pending.action_id,
+                    pending.requires_auth,
+                    card.model_dump(),
+                    _expires_in(pending.expires_at),
+                )
+                yield _sse_content(pending.prompt)
+                yield _sse_done()
+                return
+
+            if followup_real_calls:
+                async for chunk in _run_tools_and_reply(
+                    request,
+                    followup_real_calls,
+                    auth_header,
+                    user_message,
+                    history,
+                    current_user,
+                    confirmed=confirmed,
+                    enable_thinking=enable_thinking,
+                    already_running={result["tool"] for result in tool_results},
+                ):
+                    yield chunk
+                return
 
     # Deliver downloaded images on the same channel as screenshots (client already handles this).
     for r in tool_results:

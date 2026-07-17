@@ -951,6 +951,18 @@ VALID RESPONSE PATTERNS:
 - Tool call + text: [{{"tool":"mute_audio","tool_input":{{"muted":true}}}},{{"tool":"none","tool_input":{{}},"conversational_reply":"Muted. 🔇"}}]
 - Text ONLY (no action needed): [{{"tool":"none","tool_input":{{}},"conversational_reply":"Hello! How can I help?"}}]
 
+TOOL DEPENDENCIES:
+- Independent tool calls run in parallel. When one action must finish before another, add `"depends_on":[N]` to the dependent call, where N is the zero-based position of its prerequisite in this JSON array.
+- Example: `[{{"tool":"open_application","tool_input":{{"name":"spotify"}}}},{{"tool":"toggle_play_pause","tool_input":{{}},"depends_on":[0]}},{{"tool":"search_and_play","tool_input":{{"query":"Wicked by Future"}},"depends_on":[1]}}]`
+- Only add dependencies for real prerequisites; do not serialize unrelated operations.
+- For "open Spotify and play <song>", emit open Spotify → toggle playback → search_and_play in that order with dependencies. The backend will enforce this workflow too.
+
+CONDITIONAL REQUESTS:
+- When the request says "if", "if yes/no", or "otherwise", this is a two-stage workflow.
+- In the FIRST stage, emit ONLY read-only inspection tools needed to evaluate the conditions. Do NOT guess a branch or emit actions yet.
+- Vela will send the inspection results in one follow-up planning request. In that follow-up, emit only the actions for the branch whose condition is true.
+- Example: for "if music is playing mute it, otherwise set volume to 60", first emit only get_currently_playing_song.
+
 Intent → Tool mappings (use these as a starting point — always reason about what the situation fully requires, do not limit yourself to the exact tools shown):
 - "leaving"/"going out"/"stepping away"/"brb" → lock_screen_security + mute_audio(muted:true) + monitor_off
 - "nap"/"sleeping"/"going to sleep"/"bed" → set_display_brightness(0) + mute_audio(muted:true) + monitor_off + power_sleep

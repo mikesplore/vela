@@ -85,11 +85,19 @@ def render_admin_dashboard_page() -> str:
   .status-dot.off{background:var(--bad)}
   .status-dot.stale{background:var(--warn)}
   .meta{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .tool-overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:0 0 16px}
+  .tool-stat{background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+  .tool-stat .tool-stat-label{display:block;color:var(--faint);font:10px var(--mono);letter-spacing:.05em;text-transform:uppercase}
+  .tool-stat strong{display:block;margin-top:5px;font-size:16px;font-variant-numeric:tabular-nums}
+  .tool-block{border-top:1px solid var(--line);padding-top:14px;margin-top:14px}
+  .tool-block h3{font-size:12px;margin:0 0 10px;color:var(--muted);font-weight:600}
+  .tool-block.failure-block h3{color:#FFB4B9}
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
   @media (max-width:960px){
     .grid{grid-template-columns:repeat(2,1fr)}
     .charts,.split{grid-template-columns:1fr}
   }
+  @media (max-width:540px){.tool-overview{grid-template-columns:1fr}}
   @media (prefers-reduced-motion:reduce){
     *{animation-duration:.001ms !important;transition-duration:.001ms !important}
   }
@@ -173,7 +181,7 @@ def render_admin_dashboard_page() -> str:
           <tbody id="eventsBody"></tbody>
         </table>
       </div>
-    </div>
+    </section>
   </div>
 
   <div class="chart-card" style="margin-top:12px">
@@ -189,28 +197,44 @@ def render_admin_dashboard_page() -> str:
 
   <div class="chart-card" style="margin-top:12px">
     <h2><span>Assistant tools</span><span class="meta" id="assistantToolSummary">No tool calls in this window</span></h2>
-    <div class="split">
+
+    <div class="tool-overview">
+      <div class="tool-stat"><span class="tool-stat-label">Tool calls</span><strong id="toolCallCount">0</strong></div>
+      <div class="tool-stat"><span class="tool-stat-label">Failed</span><strong id="toolFailureCount">0</strong></div>
+      <div class="tool-stat"><span class="tool-stat-label">Success rate</span><strong id="toolSuccessRate">—</strong></div>
+    </div>
+
+    <section class="tool-block" aria-labelledby="toolHealthHeading">
+      <h3 id="toolHealthHeading">Tool health</h3>
       <div style="overflow:auto;max-height:300px">
         <table>
-          <caption class="sr-only">Assistant tool usage by tool</caption>
-          <thead><tr><th>Tool</th><th>Calls</th><th>Err%</th><th>Med</th><th>p95</th></tr></thead>
+          <caption class="sr-only">Assistant tool usage and latency by tool</caption>
+          <thead><tr><th>Tool</th><th>Calls</th><th>Failure rate</th><th>Typical</th><th>Slow 5%</th></tr></thead>
           <tbody id="toolsBody"></tbody>
         </table>
       </div>
+    </section>
+
+    <section class="tool-block" aria-labelledby="toolActivityHeading">
+      <h3 id="toolActivityHeading">Latest tool executions</h3>
       <div style="overflow:auto;max-height:300px">
         <table>
-          <caption class="sr-only">Recent assistant tool calls</caption>
-          <thead><tr><th>When</th><th>Tool</th><th>Outcome</th><th>ms</th></tr></thead>
+          <caption class="sr-only">Latest assistant tool executions</caption>
+          <thead><tr><th>When</th><th>Tool</th><th>Outcome</th><th>Duration</th></tr></thead>
           <tbody id="toolEventsBody"></tbody>
         </table>
       </div>
-    </div>
-    <div style="overflow:auto;max-height:210px;margin-top:14px">
-      <table>
-        <caption class="sr-only">Recent assistant tool failures</caption>
-        <thead><tr><th>Recent tool failures</th><th>Request ID</th><th>Error</th></tr></thead>
-        <tbody id="toolErrorsBody"></tbody>
-      </table>
+    </section>
+
+    <section class="tool-block failure-block" id="toolFailurePanel" aria-labelledby="toolFailureHeading">
+      <h3 id="toolFailureHeading">Recent tool failures</h3>
+      <div style="overflow:auto;max-height:210px">
+        <table>
+          <caption class="sr-only">Recent assistant tool failures</caption>
+          <thead><tr><th>Tool</th><th>Request ID</th><th>Error</th></tr></thead>
+          <tbody id="toolErrorsBody"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 </div>
@@ -422,6 +446,10 @@ def render_admin_dashboard_page() -> str:
   function renderAssistant(summary, payload){
     document.getElementById('assistantToolSummary').textContent =
       `${fmtNum(summary.total_tool_calls)} calls · ${fmtNum(summary.tool_error_count)} failed · ${fmtPct(summary.tool_error_rate)} error rate`;
+    document.getElementById('toolCallCount').textContent = fmtNum(summary.total_tool_calls);
+    document.getElementById('toolFailureCount').textContent = fmtNum(summary.tool_error_count);
+    document.getElementById('toolSuccessRate').textContent =
+      summary.total_tool_calls ? fmtPct(1 - summary.tool_error_rate) : '—';
 
     const toolRows = (summary.by_tool||[]).map(row => `
       <tr>
@@ -444,6 +472,7 @@ def render_admin_dashboard_page() -> str:
         <td>${esc(e.error || 'Unknown error')}</td>
       </tr>`).join('');
     document.getElementById('toolErrorsBody').innerHTML = rowsOrEmpty(toolErrorRows, 3, 'No tool failures.');
+    document.getElementById('toolFailurePanel').hidden = !(summary.recent_failures||[]).length;
   }
 
   // --- refresh / polling -------------------------------------------------

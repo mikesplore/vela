@@ -192,6 +192,30 @@ async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | Non
     return [{"tool": "none", "tool_input": {}, "conversational_reply": "I'm sorry, I couldn't process that request. Please try rephrasing it."}]
 
 
+async def plan_conditional_followup(
+        original_request: str,
+        inspection_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Plan one action-only follow-up after a conditional inspection stage."""
+    from app.services.assistant.tool_exec import sanitize_tool_results_for_llm
+
+    safe_results = sanitize_tool_results_for_llm(inspection_results)
+    results_text = "\n".join(
+        f"Tool: {item['tool']}\nResult: {json.dumps(item['result'], separators=(',', ':'))}"
+        + (f"\nError: {item['error']}" if item.get("error") else "")
+        for item in safe_results
+    )
+    followup_prompt = (
+        "This is the action stage of a two-stage conditional request. "
+        "Use the inspection results below to decide which branch of the original request applies. "
+        "Return only the required actions; do not repeat the inspection tools. "
+        "If no condition is met, return tool='none' with a concise explanation.\n\n"
+        f"Original request:\n{original_request}\n\n"
+        f"Inspection results:\n{results_text}"
+    )
+    return await plan_tool_calls(followup_prompt)
+
+
 async def compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tuple[str, str | None]:
     """
     Second LLM call — summarises ALL tool results into one clean Markdown reply.

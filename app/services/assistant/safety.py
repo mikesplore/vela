@@ -96,6 +96,7 @@ MEDIUM_RISK_TOOLS = {
     "scroll_mouse",
     "launch_process",
     "open_application",
+    "close_application",
     "open_path",
     "rename_path",
     "schedule_job",
