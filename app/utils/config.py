@@ -29,6 +29,7 @@ for dotenv_path in ENV_CANDIDATES:
         load_dotenv(dotenv_path)
 
 _RATE_LIMIT_RE = re.compile(r"\d+/(second|minute|hour|day)")
+_TIME_OF_DAY_RE = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 
 
 def _default_agent_id() -> str:
@@ -59,6 +60,9 @@ class Config(BaseSettings):
     password_hash: str
     assistant_action_pin: str | None = None
     assistant_action_timeout_seconds: int = 120
+    daily_summary_time: str = "18:00"
+    fcm_service_account_path: str | None = None
+    alertmanager_webhook_secret: str | None = None
     assistant_enable_thinking: bool = False
     # Max bytes the assistant will transfer via download_file (base64 over chat/SSE).
     assistant_max_download_bytes: int = 5 * 1024 * 1024
@@ -190,6 +194,13 @@ class Config(BaseSettings):
     def rate_limit_format(cls, v: str) -> str:
         if not _RATE_LIMIT_RE.fullmatch(v):
             raise ValueError(f"rate_limit_default '{v}' must match '<number>/<time_unit>'.")
+        return v
+
+    @field_validator("daily_summary_time")
+    @classmethod
+    def daily_summary_time_format(cls, v: str) -> str:
+        if not _TIME_OF_DAY_RE.fullmatch(v):
+            raise ValueError("daily_summary_time must use 24-hour HH:MM format.")
         return v
 
     @field_validator("route_rate_limits")

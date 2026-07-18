@@ -122,9 +122,15 @@ async def lifespan(app: FastAPI):
 
     try:
         from app.services.alerts import setup_monitoring_schedule, RECIPIENT_EMAIL, RESEND_AVAILABLE
-        if RESEND_AVAILABLE and RECIPIENT_EMAIL:
-            setup_monitoring_schedule()
-            logger.info("Monitoring auto-started — spikes every 5min, daily summary at 18:00, email: %s", RECIPIENT_EMAIL)
+        from app.services.push import is_configured as fcm_configured
+
+        if (RESEND_AVAILABLE and RECIPIENT_EMAIL) or fcm_configured():
+            setup_monitoring_schedule(daily_summary_time=config.daily_summary_time)
+            logger.info(
+                "Monitoring auto-started — spikes every 5min, daily summary at %s, email: %s",
+                config.daily_summary_time,
+                RECIPIENT_EMAIL,
+            )
         else:
             logger.debug("Monitoring not auto-started: set RESEND_API_KEY + RECIPIENT_EMAIL in .env")
     except Exception as e:

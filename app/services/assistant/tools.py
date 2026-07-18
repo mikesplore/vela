@@ -788,7 +788,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_system_usb": "Listing USB devices",
     "get_system_monitors": "Reading monitor info",
     "get_system_bios": "Reading BIOS information",
-    "get_device_info": "Identifying your device",
+    "get_device_info": "Identifying your device/laptop/computer",
     "get_network_ip": "Looking up IP addresses",
     "get_network_location": "Looking up network location",
     "get_wifi_status": "Checking WiFi status",

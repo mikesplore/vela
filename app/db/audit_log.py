@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, UTC
 from pathlib import Path
 
-from sqlalchemy import create_engine, delete, event, select
+from sqlalchemy import UniqueConstraint, create_engine, delete, event, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 
@@ -60,6 +60,29 @@ class AdminActionEventModel(Base):
     actor: Mapped[str | None] = mapped_column(nullable=True)
     action: Mapped[str] = mapped_column(index=True)
     detail: Mapped[str | None] = mapped_column(nullable=True)
+
+
+class PushDeviceModel(Base):
+    """An FCM registration token for an authenticated Vela app installation."""
+    __tablename__ = "push_devices"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    token: Mapped[str] = mapped_column(unique=True)
+    user_id: Mapped[str] = mapped_column(index=True)
+    installation_id: Mapped[str | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(index=True)
+    updated_at: Mapped[datetime] = mapped_column(index=True)
+
+
+class ExternalAlertDeliveryModel(Base):
+    """Deduplication state for Alertmanager notifications delivered to Vela."""
+    __tablename__ = "external_alert_deliveries"
+    __table_args__ = (UniqueConstraint("fingerprint", "status", name="uq_alert_fingerprint_status"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    fingerprint: Mapped[str] = mapped_column(index=True)
+    status: Mapped[str] = mapped_column(index=True)
+    received_at: Mapped[datetime] = mapped_column(index=True)
 
 
 db_path = Path.cwd() / "audit_log.sqlite"

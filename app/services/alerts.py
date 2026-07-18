@@ -7,6 +7,8 @@ Reads RECIPIENT_EMAIL from .env so no email prompts needed.
 import logging
 import os
 import platform
+import hashlib
+import json
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 
@@ -72,6 +74,19 @@ def _get_uptime_string() -> str:
         return "unknown"
 
 
+def _send_push_spike(*, resource: str, value: float, threshold: float) -> None:
+    try:
+        from app.services.push import send_push
+
+        send_push(
+            title=f"Vela alert · {resource} spike",
+            body=f"{resource} is {value:.1f}% (threshold {threshold:.1f}%).",
+            data={"source": "vela", "resource": resource.lower(), "value": f"{value:.1f}", "threshold": f"{threshold:.1f}"},
+        )
+    except Exception as exc:
+        logger.warning("Could not deliver FCM spike notification: %s", exc)
+
+
 # ── Spike monitoring (reads email from env) ────────────────────────────────────
 
 def check_and_send_spike_alert(
@@ -83,12 +98,9 @@ def check_and_send_spike_alert(
     Check current CPU and memory. If thresholds exceeded, send spike alert
     to the email in RECIPIENT_EMAIL env var. No need to pass email.
     """
-    if not RESEND_AVAILABLE:
-        logger.error("Resend not available")
-        return None
-    if not RECIPIENT_EMAIL:
-        logger.error("RECIPIENT_EMAIL not set")
-        return None
+    email_enabled = RESEND_AVAILABLE and bool(RECIPIENT_EMAIL)
+    if not email_enabled:
+        logger.info("Email alert delivery is unavailable; continuing with configured push delivery.")
 
     alerts_sent = []
     cpu_usage = get_cpu_usage()
@@ -99,17 +111,19 @@ def check_and_send_spike_alert(
         if not _is_in_cooldown(alert_key, cooldown_minutes):
             try:
                 top_process, _ = _get_top_process_info()
-                result = emails.send_spike_alert(
-                    to=RECIPIENT_EMAIL,
-                    device_name=platform.node(),
-                    cpu_percent=cpu_usage.overall,
-                    memory_percent=get_ram_status().percent,
-                    cpu_threshold=cpu_threshold,
-                    memory_threshold=memory_threshold,
-                    top_process=top_process,
-                    uptime=_get_uptime_string(),
-                    os_info=_get_os_info_string(),
-                )
+                if email_enabled:
+                    emails.send_spike_alert(
+                        to=RECIPIENT_EMAIL,
+                        device_name=platform.node(),
+                        cpu_percent=cpu_usage.overall,
+                        memory_percent=get_ram_status().percent,
+                        cpu_threshold=cpu_threshold,
+                        memory_threshold=memory_threshold,
+                        top_process=top_process,
+                        uptime=_get_uptime_string(),
+                        os_info=_get_os_info_string(),
+                    )
+                _send_push_spike(resource="CPU", value=cpu_usage.overall, threshold=cpu_threshold)
                 _update_cooldown(alert_key)
                 alerts_sent.append({"type": "cpu_spike", "value": cpu_usage.overall, "threshold": cpu_threshold})
                 logger.info(f"CPU spike alert sent: {cpu_usage.overall}% >= {cpu_threshold}%")
@@ -123,17 +137,19 @@ def check_and_send_spike_alert(
         if not _is_in_cooldown(alert_key, cooldown_minutes):
             try:
                 top_process, _ = _get_top_process_info()
-                result = emails.send_spike_alert(
-                    to=RECIPIENT_EMAIL,
-                    device_name=platform.node(),
-                    cpu_percent=cpu_usage.overall,
-                    memory_percent=ram_status.percent,
-                    cpu_threshold=cpu_threshold,
-                    memory_threshold=memory_threshold,
-                    top_process=top_process,
-                    uptime=_get_uptime_string(),
-                    os_info=_get_os_info_string(),
-                )
+                if email_enabled:
+                    emails.send_spike_alert(
+                        to=RECIPIENT_EMAIL,
+                        device_name=platform.node(),
+                        cpu_percent=cpu_usage.overall,
+                        memory_percent=ram_status.percent,
+                        cpu_threshold=cpu_threshold,
+                        memory_threshold=memory_threshold,
+                        top_process=top_process,
+                        uptime=_get_uptime_string(),
+                        os_info=_get_os_info_string(),
+                    )
+                _send_push_spike(resource="Memory", value=ram_status.percent, threshold=memory_threshold)
                 _update_cooldown(alert_key)
                 alerts_sent.append({"type": "memory_spike", "value": ram_status.percent, "threshold": memory_threshold})
                 logger.info(f"Memory spike alert sent: {ram_status.percent}% >= {memory_threshold}%")
@@ -152,28 +168,101 @@ def collect_daily_stats() -> Dict[str, Any]:
     cpu_usage = get_cpu_usage()
     ram_status = get_ram_status()
     network_data = _vnstat_run("day")
+    try:
+        disk_io = psutil.disk_io_counters()
+    except Exception:
+        disk_io = None
 
     today = datetime.now().strftime("%Y-%m-%d")
     if today not in _daily_stats:
         _daily_stats[today] = {
             "cpu_readings": [], "memory_readings": [],
             "disk_read_bytes": 0, "disk_write_bytes": 0,
+            "disk_read_baseline": disk_io.read_bytes if disk_io else 0,
+            "disk_write_baseline": disk_io.write_bytes if disk_io else 0,
             "net_sent_bytes": 0, "net_recv_bytes": 0,
             "alerts_count": 0, "last_alert_time": None,
         }
     stats = _daily_stats[today]
     stats["cpu_readings"].append(cpu_usage.overall)
     stats["memory_readings"].append(ram_status.percent)
-    try:
-        disk_io = psutil.disk_io_counters()
-        if disk_io:
-            stats["disk_read_bytes"] = disk_io.read_bytes
-            stats["disk_write_bytes"] = disk_io.write_bytes
-    except Exception:
-        pass
+    if disk_io:
+        stats["disk_read_bytes"] = max(0, disk_io.read_bytes - stats["disk_read_baseline"])
+        stats["disk_write_bytes"] = max(0, disk_io.write_bytes - stats["disk_write_baseline"])
     stats["net_sent_bytes"] = network_data.get("tx_bytes", 0)
     stats["net_recv_bytes"] = network_data.get("rx_bytes", 0)
     return stats
+
+
+def scheduled_spike_check(
+    cpu_threshold: float = DEFAULT_CPU_THRESHOLD,
+    memory_threshold: float = DEFAULT_MEMORY_THRESHOLD,
+) -> None:
+    """Persistent-scheduler-safe monitoring job; callable by import path."""
+    try:
+        # Sampling here makes daily averages and peaks reflect the whole
+        # runtime day, rather than only the instant the summary is sent.
+        collect_daily_stats()
+        result = check_and_send_spike_alert(
+            cpu_threshold=cpu_threshold,
+            memory_threshold=memory_threshold,
+        )
+        if result:
+            for alert in result:
+                _alert_history.append({
+                    "type": alert["type"],
+                    "value": alert["value"],
+                    "threshold": alert["threshold"],
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "time": datetime.now().strftime("%H:%M"),
+                })
+    except Exception as exc:
+        logger.error("Spike check job error: %s", exc)
+
+
+def scheduled_daily_summary() -> None:
+    """Persistent-scheduler-safe daily summary job."""
+    try:
+        send_daily_summary()
+    except Exception as exc:
+        logger.error("Daily summary job error: %s", exc)
+
+
+def handle_alertmanager_webhook(payload: dict[str, Any]) -> dict[str, int]:
+    """Deliver deduplicated Alertmanager firing/resolved events to FCM devices."""
+    from app.services.push import claim_external_alert, send_push
+
+    accepted = delivered = 0
+    for alert in payload.get("alerts") or []:
+        if not isinstance(alert, dict):
+            continue
+        labels = alert.get("labels") or {}
+        annotations = alert.get("annotations") or {}
+        status = str(alert.get("status") or payload.get("status") or "firing").lower()
+        fingerprint = str(alert.get("fingerprint") or "")
+        if not fingerprint:
+            fingerprint = hashlib.sha256(
+                json.dumps({"labels": labels, "startsAt": alert.get("startsAt")}, sort_keys=True).encode()
+            ).hexdigest()
+        if not claim_external_alert(fingerprint=fingerprint, status=status):
+            continue
+        name = str(labels.get("alertname") or "System alert")
+        severity = str(labels.get("severity") or "warning").lower()
+        summary = str(annotations.get("summary") or annotations.get("description") or name)
+        title = f"Vela {'resolved' if status == 'resolved' else 'alert'} · {name}"
+        delivered += send_push(
+            title=title,
+            body=summary,
+            data={
+                "source": "alertmanager",
+                "fingerprint": fingerprint,
+                "status": status,
+                "severity": severity,
+                "alertname": name,
+            },
+        )
+        accepted += 1
+    return {"accepted": accepted, "delivered": delivered}
 
 
 def send_daily_summary() -> Optional[Dict[str, Any]]:
@@ -290,43 +379,23 @@ def setup_monitoring_schedule(
 
     scheduler = get_scheduler()
 
-    def spike_check_job():
-        try:
-            result = check_and_send_spike_alert(
-                cpu_threshold=cpu_threshold,
-                memory_threshold=memory_threshold,
-            )
-            if result:
-                for alert in result:
-                    _alert_history.append({
-                        "type": alert["type"],
-                        "value": alert["value"],
-                        "threshold": alert["threshold"],
-                        "date": datetime.now().strftime("%Y-%m-%d"),
-                        "time": datetime.now().strftime("%H:%M"),
-                    })
-        except Exception as e:
-            logger.error(f"Spike check job error: {e}")
-
     scheduler.add_job(
-        spike_check_job,
+        scheduled_spike_check,
         trigger=IntervalTrigger(minutes=spike_check_interval_minutes),
         id="vela_spike_monitor",
         name="Vela Spike Monitor",
         replace_existing=True,
+        kwargs={
+            "cpu_threshold": cpu_threshold,
+            "memory_threshold": memory_threshold,
+        },
     )
 
     hour, minute = map(int, daily_summary_time.split(":"))
 
-    def daily_summary_job():
-        try:
-            send_daily_summary()
-        except Exception as e:
-            logger.error(f"Daily summary job error: {e}")
-
     scheduler.add_job(
-        daily_summary_job,
-        trigger=CronTrigger(hour=hour, minute=minute),
+        scheduled_daily_summary,
+        trigger=CronTrigger(hour=hour, minute=minute, timezone=scheduler.timezone),
         id="vela_daily_summary",
         name="Vela Daily Summary",
         replace_existing=True,

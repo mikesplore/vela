@@ -17,6 +17,7 @@ from .system_info import router as system_info_router
 from .assistant import router as assistant_router
 from .spotify import spotify_router
 from .admin import router as admin_router
+from .push import router as push_router
 
 all_routers = [
     alerts_router,
@@ -38,4 +39,5 @@ all_routers = [
     assistant_router,
     spotify_router,
     admin_router,
+    push_router,
 ]

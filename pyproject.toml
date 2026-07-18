@@ -29,6 +29,7 @@ dependencies = [
   "websockets",
   "requests",
   "spotipy>=2.24.0",
+  "firebase-admin>=6.0.0",
 ]
 
 [project.scripts]

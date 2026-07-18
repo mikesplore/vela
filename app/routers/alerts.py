@@ -5,9 +5,10 @@ Spike monitoring and daily summary are auto-scheduled on startup.
 """
 
 import logging
+import hmac
 from typing import Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel
 
 from app.dependencies import get_current_user
@@ -19,11 +20,33 @@ from app.services.alerts import (
     RECIPIENT_EMAIL,
     DEFAULT_CPU_THRESHOLD,
     DEFAULT_MEMORY_THRESHOLD,
+    handle_alertmanager_webhook,
 )
+from app.utils.config import get_config
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
+
+
+@router.post("/webhook/alertmanager")
+async def alertmanager_webhook(
+    request: Request,
+    x_webhook_secret: str | None = Header(default=None),
+) -> Dict[str, int]:
+    """Receive Alertmanager events and forward them to registered FCM devices."""
+    secret = get_config().alertmanager_webhook_secret
+    if not secret:
+        raise HTTPException(status_code=503, detail="Alertmanager webhook is not configured")
+    if not x_webhook_secret or not hmac.compare_digest(x_webhook_secret, secret):
+        raise HTTPException(status_code=401, detail="Invalid webhook secret")
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Alertmanager payload must be valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Alertmanager payload must be a JSON object")
+    return handle_alertmanager_webhook(payload)
 
 
 @router.get("/status")

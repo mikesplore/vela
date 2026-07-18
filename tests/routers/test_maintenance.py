@@ -19,7 +19,12 @@ async def test_maintenance_logs_updates_services_and_sync(monkeypatch, async_cli
         if cmd[:2] == ["timedatectl", "set-ntp"]:
             return "NTP enabled", "", 0
         if cmd[:2] == ["systemctl", "list-units"]:
-            return "nginx.service loaded active running nginx web server", "", 0
+            return (
+                '[{"unit":"nginx.service","load":"loaded","active":"active",'
+                '"sub":"running","description":"nginx web server"}]',
+                "",
+                0,
+            )
         if cmd[:2] == ["systemctl", "restart"]:
             return "", "", 0
         if cmd[:2] == ["systemctl", "stop"]:
@@ -29,6 +34,7 @@ async def test_maintenance_logs_updates_services_and_sync(monkeypatch, async_cli
         return "", "", 1
 
     monkeypatch.setattr(maintenance_module, "run_command", fakerun_command)
+    monkeypatch.setattr("app.services.maintenance.run_command", fakerun_command)
     monkeypatch.setattr(maintenance_module.shutil, "which", lambda name: "/usr/bin/apt" if name == "apt-get" else None)
 
     logs_response = await async_client.get(

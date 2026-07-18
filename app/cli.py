@@ -17,6 +17,11 @@ def main() -> None:
     parser.add_argument("--status", action="store_true", help="Show vela service status")
     parser.add_argument("--logs", action="store_true", help="Tail vela service logs")
     parser.add_argument("--dashboard", action="store_true", help="Open the local Operations dashboard")
+    parser.add_argument(
+        "--env",
+        action="store_true",
+        help="Open the active credentials .env (same file vela-agent loads)",
+    )
     args = parser.parse_args()
 
     services = ["vela.service", "vela-agent.service"]
@@ -76,6 +81,14 @@ def main() -> None:
             print(f"Opened Operations dashboard: {url}")
         else:
             print(f"Open the Operations dashboard in your browser: {url}")
+        return
+
+    if args.env:
+        from app.utils.env_paths import open_dotenv_in_editor
+
+        env_path = open_dotenv_in_editor()
+        print(f"Active Vela .env: {env_path}")
+        print("After saving changes, run: vela --restart")
         return
 
     # Default: run the local API server (imports app stack only now).

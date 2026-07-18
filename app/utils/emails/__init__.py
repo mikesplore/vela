@@ -5,6 +5,7 @@ Uses Resend API to send emails. HTML templates are managed on the Resend side.
 
 import os
 from datetime import datetime
+from html import escape
 import logging
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,55 @@ except ImportError:
     logger.warning("resend package not installed. Install it with: pip install resend")
 
 FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "Vela <alerts@yourdomain.com>")
+
+
+def _text(value: object) -> str:
+    return escape(str(value), quote=True)
+
+
+def _layout(*, eyebrow: str, title: str, subtitle: str, content: str, accent: str = "#4F7CFF") -> str:
+    """A compact, table-based email shell matching the Operations dashboard."""
+    return f"""<!doctype html>
+<html lang="en">
+<body style="margin:0;padding:0;background:#F3F6FC;color:#E8ECF4;font-family:Inter,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#F3F6FC;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#171C26;border:1px solid #2A3344;border-radius:12px;overflow:hidden;">
+        <tr><td style="padding:20px 24px;border-bottom:1px solid #2A3344;">
+          <table role="presentation" cellspacing="0" cellpadding="0"><tr>
+            <td style="width:18px;height:18px;background:{accent};border-radius:5px;"></td>
+            <td style="padding-left:10px;color:#8B95A8;font-family:monospace;font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">Vela Operations · {_text(eyebrow)}</td>
+          </tr></table>
+        </td></tr>
+        <tr><td style="padding:24px;">
+          <h1 style="margin:0;color:#E8ECF4;font-size:22px;line-height:28px;">{_text(title)}</h1>
+          <p style="margin:7px 0 20px;color:#8B95A8;font-size:13px;line-height:20px;">{_text(subtitle)}</p>
+          {content}
+        </td></tr>
+        <tr><td style="padding:16px 24px;border-top:1px solid #2A3344;color:#5C667A;font-size:11px;line-height:16px;">
+          Sent by Vela · Local device monitoring
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+
+def _metric(label: str, value: str, color: str = "#E8ECF4") -> str:
+    return f"""<td width="50%" style="padding:8px;">
+  <div style="background:#1D2430;border:1px solid #2A3344;border-radius:9px;padding:12px;">
+    <div style="color:#8B95A8;font-family:monospace;font-size:10px;letter-spacing:.5px;text-transform:uppercase;">{_text(label)}</div>
+    <div style="margin-top:5px;color:{color};font-size:17px;font-weight:700;">{_text(value)}</div>
+  </div>
+</td>"""
+
+
+def _detail_row(label: str, value: object) -> str:
+    return f"""<tr>
+  <td style="padding:8px 0;color:#8B95A8;font-size:12px;border-bottom:1px solid #2A3344;">{_text(label)}</td>
+  <td style="padding:8px 0;color:#E8ECF4;font-family:monospace;font-size:12px;text-align:right;border-bottom:1px solid #2A3344;">{_text(value)}</td>
+</tr>"""
 
 
 def is_configured() -> bool:
@@ -41,8 +91,6 @@ def send_spike_alert(
 ) -> dict | None:
     """
     Send a spike alert email when CPU or memory usage exceeds thresholds.
-    HTML template is managed on Resend (not stored locally).
-
     Args:
         to: Recipient email address
         device_name: Name of the monitored device
@@ -64,8 +112,24 @@ def send_spike_alert(
     return resend.Emails.send({
         "from": FROM_EMAIL,
         "to": to,
-        "subject": f"⚠ Spike detected on {device_name}",
-        "html": f"<p>Device: {device_name}<br>CPU: {cpu_percent:.1f}%<br>Memory: {memory_percent:.1f}%<br>Top Process: {top_process}</p>",
+        "subject": f"Vela alert · Spike detected on {device_name}",
+        "html": _layout(
+            eyebrow="System alert",
+            title="Resource spike detected",
+            subtitle=f"{device_name} exceeded its configured monitoring threshold.",
+            accent="#F07178",
+            content=f"""<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>
+              {_metric("CPU", f"{cpu_percent:.1f}%", "#F07178")}
+              {_metric("Memory", f"{memory_percent:.1f}%", "#F07178")}
+            </tr></table>
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:12px;">
+              {_detail_row("CPU threshold", f"{cpu_threshold:.1f}%")}
+              {_detail_row("Memory threshold", f"{memory_threshold:.1f}%")}
+              {_detail_row("Top process", top_process)}
+              {_detail_row("Uptime", uptime)}
+              {_detail_row("System", os_info)}
+            </table>""",
+        ),
     })
 
 
@@ -88,8 +152,6 @@ def send_daily_summary(
 ) -> dict | None:
     """
     Send a daily summary email with system usage statistics.
-    HTML template is managed on Resend (not stored locally).
-
     Args:
         to: Recipient email address
         device_name: Name of the monitored device
@@ -118,23 +180,32 @@ def send_daily_summary(
     while len(procs) < 3:
         procs.append({"name": "—", "cpu": 0.0})
 
-    top_procs_text = ", ".join(f"{p['name']} ({p['cpu']:.1f}%)" for p in procs)
+    process_rows = "".join(
+        _detail_row(f"Process {index + 1}", f"{process.get('name', '—')} · {float(process.get('cpu', 0)):.1f}%")
+        for index, process in enumerate(procs)
+    )
 
     return resend.Emails.send({
         "from": FROM_EMAIL,
         "to": to,
-        "subject": f"Vela daily summary — {device_name}",
-        "html": (
-            f"<p><b>Device:</b> {device_name}<br>"
-            f"<b>Date:</b> {datetime.now().strftime('%d %b %Y')}<br><br>"
-            f"<b>CPU:</b> Avg {cpu_avg:.1f}% / Peak {cpu_peak:.1f}%<br>"
-            f"<b>Memory:</b> Avg {memory_avg:.1f}% / Peak {memory_peak:.1f}%<br>"
-            f"<b>Disk:</b> R: {disk_read} / W: {disk_write}<br>"
-            f"<b>Network (vnstat):</b> Sent {net_sent} / Recv {net_recv}<br>"
-            f"<b>Top processes:</b> {top_procs_text}<br><br>"
-            f"<b>Alerts today:</b> {alerts_count}<br>"
-            f"<b>Last alert:</b> {last_alert_time}<br>"
-            f"<b>Uptime:</b> {uptime}<br>"
-            f"<b>OS:</b> {os_info}</p>"
+        "subject": f"Vela Operations · Daily summary for {device_name}",
+        "html": _layout(
+            eyebrow="Daily report",
+            title="System summary",
+            subtitle=f"{device_name} · {datetime.now().strftime('%d %b %Y')}",
+            content=f"""<table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+              <tr>{_metric("CPU average", f"{cpu_avg:.1f}%")}{_metric("CPU peak", f"{cpu_peak:.1f}%", "#E6B450")}</tr>
+              <tr>{_metric("Memory average", f"{memory_avg:.1f}%")}{_metric("Memory peak", f"{memory_peak:.1f}%", "#E6B450")}</tr>
+            </table>
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:12px;">
+              {_detail_row("Disk I/O", f"Read {disk_read} · Write {disk_write}")}
+              {_detail_row("Network", f"Sent {net_sent} · Received {net_recv}")}
+              {_detail_row("Alerts today", alerts_count)}
+              {_detail_row("Last alert", last_alert_time)}
+              {_detail_row("Uptime", uptime)}
+              {_detail_row("System", os_info)}
+            </table>
+            <div style="margin:18px 0 8px;color:#8B95A8;font-family:monospace;font-size:10px;letter-spacing:.5px;text-transform:uppercase;">Top processes</div>
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0">{process_rows}</table>""",
         ),
     })

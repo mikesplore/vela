@@ -186,6 +186,49 @@ async def test_admin_clear_monitoring_history_requires_confirmation(async_client
 
 
 @pytest.mark.anyio
+async def test_push_device_registration(async_client):
+    response = await async_client.post(
+        "/push/devices",
+        headers=_auth_headers(),
+        json={"token": "a" * 32, "installation_id": "android-main"},
+    )
+    assert response.status_code == 200
+    with audit_log.get_audit_session() as session:
+        device = session.scalar(select(audit_log.PushDeviceModel))
+    assert device is not None
+    assert device.user_id == "admin"
+    assert device.installation_id == "android-main"
+
+
+@pytest.mark.anyio
+async def test_alertmanager_webhook_forwards_new_alert(async_client, monkeypatch):
+    from app.services import push
+    from app.utils.config import get_config
+
+    monkeypatch.setattr(get_config(), "alertmanager_webhook_secret", "webhook-secret")
+    monkeypatch.setattr(push, "claim_external_alert", lambda **_kwargs: True)
+    sent = []
+    monkeypatch.setattr(push, "send_push", lambda **kwargs: sent.append(kwargs) or 1)
+
+    response = await async_client.post(
+        "/alerts/webhook/alertmanager",
+        headers={"X-Webhook-Secret": "webhook-secret"},
+        json={
+            "status": "firing",
+            "alerts": [{
+                "fingerprint": "cpu-1",
+                "status": "firing",
+                "labels": {"alertname": "HighCPU", "severity": "critical"},
+                "annotations": {"summary": "CPU has been high for one minute"},
+            }],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {"accepted": 1, "delivered": 1}
+    assert sent[0]["title"] == "Vela alert · HighCPU"
+
+
+@pytest.mark.anyio
 async def test_admin_assistant_audit_endpoints(async_client):
     audit_log.insert_tool_call_event(
         request_id="assistant-abc",

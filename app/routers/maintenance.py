@@ -1,4 +1,3 @@
-import re
 import shutil
 from pathlib import Path
 from typing import Any, List
@@ -7,8 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.dependencies import get_current_user
 from app.domain.audio import ActionResponse
-from app.domain.maintenance import LogResponse, UpdateEntry, UpdateResponse, ServiceListResponse, ServiceEntry
-from app.services.maintenance import detect_package_manager
+from app.domain.maintenance import LogResponse, UpdateEntry, UpdateResponse, ServiceListResponse
+from app.services.maintenance import detect_package_manager, list_systemd_services
 from app.utils.run_command import run_command
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
@@ -127,17 +126,9 @@ async def sync_time() -> Any:
 @router.get("/services", response_model=ServiceListResponse, dependencies=[Depends(get_current_user)])
 async def list_services() -> Any:
     """List systemd services and their status."""
-    stdout, stderr, rc = run_command(
-        ["systemctl", "list-units", "--type=service", "--all", "--no-legend", "--no-pager"])
-    if rc != 0:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=stderr or "Could not list services")
-    services: List[ServiceEntry] = []
-    for line in stdout.splitlines():
-        parts = re.split(r"\s+", line, maxsplit=4)
-        if len(parts) == 5:
-            services.append(
-                ServiceEntry(name=parts[0], load=parts[1], active=parts[2], sub=parts[3], description=parts[4]))
+    services, error = list_systemd_services()
+    if error:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error)
     return ServiceListResponse(services=services)
 
 
