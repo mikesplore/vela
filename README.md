@@ -4,6 +4,8 @@
 
 Vela is a FastAPI-based remote PC agent for Linux. It exposes your desktop's capabilities (filesystem, audio, display, processes, notifications, power management, etc.) through a secure REST API, optionally tunneled through a WebSocket relay for remote access.
 
+**New here?** Read **[How it works](doc/HOW_IT_WORKS.md)** first for the mental model (API vs agent, tunnel, auth, config). Then come back here for setup.
+
 ## Features
 
 - **Full system control API** — filesystem, audio, display, power, notifications, network, input control, system info, monitoring, processes, security, scheduler, maintenance, media, clipboard, Spotify, alerts
@@ -15,89 +17,20 @@ Vela is a FastAPI-based remote PC agent for Linux. It exposes your desktop's cap
 - **Rate limiting** — per-endpoint rate limits (default 150/min, auth endpoints 10/min)
 - **systemd integration** — runs as user services with auto-restart
 
-## Architecture
+## How it works (summary)
 
-Vela connects your phone to your Linux desktop through a secure relay. Here's how the data flows:
+Vela runs as **two processes**:
 
-### Direct command flow (e.g. "Lock screen", "List files")
+| Process | Role |
+|---------|------|
+| **Vela API** (`vela.service`) | Local FastAPI server that executes desktop operations |
+| **Vela Agent** (`vela-agent.service`) | Outbound WebSocket tunnel to your VPS; forwards phone requests to the API |
 
-```mermaid
-sequenceDiagram
-    participant Phone as Phone / Client
-    participant VPS as VPS Relay
-    participant Agent as Vela Agent (tunnel)
-    participant API as Vela API Server
-    participant Desktop as Linux Desktop
+Your phone → VPS relay → agent tunnel → `127.0.0.1:8765` → Linux.
 
-    Phone->>VPS: REST / API call (X-API-Key or JWT)
-    VPS->>Agent: Forward via WebSocket tunnel
-    Agent->>API: Forward to local FastAPI (127.0.0.1:8765)
-    API->>Desktop: Execute system operation
-    Desktop-->>API: Result
-    API-->>Agent: Response
-    Agent-->>VPS: Forward response
-    VPS-->>Phone: Response
-```
+The optional assistant uses the same API: an LLM picks tools, Vela runs them, the LLM summarizes.
 
-### AI assistant flow (e.g. "How much storage do I have left?")
-
-```mermaid
-sequenceDiagram
-    participant Phone as Phone / Client
-    participant VPS as VPS Relay
-    participant Agent as Vela Agent (tunnel)
-    participant API as Vela API Server
-    participant LLM as Fireworks AI LLM
-    participant Desktop as Linux Desktop
-
-    Phone->>VPS: POST /assistant/chat "How much storage?"
-    VPS->>Agent: Forward via WebSocket
-    Agent->>API: Forward to local FastAPI /assistant/chat
-    API->>LLM: Send message + available tools
-    LLM-->>API: Intent: check disk space → select filesystem tool
-    API->>Desktop: Run df / lsblk
-    Desktop-->>API: Disk usage data
-    API->>LLM: Send tool result for summarization
-    LLM-->>API: Natural language response
-    API-->>Agent: Response
-    Agent-->>VPS: Forward response
-    VPS-->>Phone: "Your SSD is 340/500 GB full"
-```
-
-### Registration flow
-
-```mermaid
-sequenceDiagram
-    participant App as Android App
-    participant Browser as Local Pairing UI
-    participant Agent as Vela Agent (tunnel)
-    participant VPS as VPS Relay
-
-    Agent->>VPS: POST /agents/register/start
-    VPS-->>Agent: {agent_id, pairing_code, pairing_pin?, ttl}
-    Agent->>Browser: Show QR + code/PIN
-
-    App->>VPS: POST /pair/complete {pairing_code, pairing_pin}
-    VPS-->>Agent: status=PAIRED + activation_token
-    Agent->>VPS: POST /agents/register/activate
-    VPS-->>Agent: {relay_secret, credential, scopes}
-
-    Note over Agent,VPS: Normal reconnects
-    Agent->>VPS: POST /agents/{agent_id}/ws-token + X-Secret(relay_secret)
-    VPS-->>Agent: {ws_token, expires_at}
-
-```
-
-### The role of each layer
-
-| Layer | Does | Doesn't |
-|-------|------|---------|
-| **Phone / Client** | Sends requests, displays results | Parse commands, execute anything |
-| **VPS Relay** | Routes requests via WebSocket, manages agent registration | Execute system operations, understand intent |
-| **Vela Agent (tunnel)** | Maintains WebSocket tunnel to VPS, forwards requests to local API server | Execute system operations, communicate with LLM |
-| **Vela API Server** | Executes system operations via routers, handles AI chat with LLM, enforces auth & safety | Connect to the VPS directly — the agent handles that |
-| **LLM (Fireworks AI)** | Understands natural language, selects tools, summarizes results | Execute system calls — the API server handles that |
-| **Linux Desktop** | Runs the actual system (files, processes, audio, etc.) | Make decisions — it just follows OS calls |
+**Full explanation** (flows, auth layers, pairing, config paths, code map): **[doc/HOW_IT_WORKS.md](doc/HOW_IT_WORKS.md)**
 
 ## Quick Start
 
@@ -173,10 +106,10 @@ This will:
 ### Post-Setup
 
 Optional integrations (Fireworks, Resend, Spotify) can be filled during `vela --setup`.
-If you skipped them, open `.env` afterward and add the keys you need:
+If you skipped them, edit the live credentials file afterward:
 
 ```bash
-nano .env
+vela --env
 ```
 
 At minimum, set your **Fireworks AI API key** if you want the assistant:
@@ -215,12 +148,14 @@ vela --restart
 vela --status
 vela --logs
 vela --dashboard
+vela --env
 vela-agent --start
 vela-agent --stop
 ```
 
 > `vela --setup` is the only onboarding path. It always starts fresh (no credential reuse).
-> After editing `.env`, run `vela --restart` so both services reload the new values.
+> `vela --env` opens the `.env` file your services actually load (may differ from the repo copy).
+> After editing credentials, run `vela --restart` so both services reload the new values.
 
 ## Agent Registration
 

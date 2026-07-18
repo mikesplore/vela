@@ -22,7 +22,8 @@ Linux remote-PC agent: FastAPI REST API (+ optional WebSocket tunnel to a VPS re
 | LLM assistant | `app/services/assistant/` | Tools, prompts, execution |
 | Tests | `tests/`, `tests/routers/` | Mirror router names |
 | Full API shapes | `doc/API_DOCUMENTATION.md` | Request/response examples (may lag code) |
-| Human overview | `README.md` | Architecture, setup |
+| How it works | `doc/HOW_IT_WORKS.md` | Architecture, flows, auth, mental model |
+| Human overview | `README.md` | Pitch, setup, config reference |
 | Raw file tree | `ProjectTree.md` | Generated dump; ignore for navigation |
 
 **Convention:** feature `X` → `routers/X.py` → `services/X.py` → `domain/X.py` → `tests/routers/test_X.py`.
