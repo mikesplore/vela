@@ -242,13 +242,9 @@ app/
 Further reading:
 
 - [API reference](API_DOCUMENTATION.md) — request/response shapes (may lag code; check routers when unsure)
-- [Android scheduler & maintenance](ANDROID_SCHEDULER_AND_MAINTENANCE.md) — client integration notes
 - [AGENTS.md](../AGENTS.md) — quick index for AI/code navigation
 
 ---
 
-## Explain it in 30 seconds
-
-> I run a small web server on my Linux PC that can control the machine — volume, files, power, services. My phone doesn't hit my home network directly; a VPS holds a persistent connection from my PC, and my Android app talks to that relay. When I use the AI assistant, it translates natural language into those same API calls.
 
 That is the whole product. Everything else is reliability: reconnect, auth, rate limits, audit log, scheduler, alerts.

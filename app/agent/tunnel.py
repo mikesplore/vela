@@ -1,9 +1,10 @@
 import asyncio
+import base64
 import json
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
-import requests
+import httpx
 import websockets
 
 from app.services import relay_status
@@ -15,13 +16,254 @@ _local_token: str | None = None
 _local_token_expires = datetime.min.replace(tzinfo=timezone.utc)
 
 HEARTBEAT_INTERVAL = 30  # seconds
+STREAM_PATH_SUFFIX = "/assistant/stream"
+CHUNK_SIZE = 4096
+
+
+def _is_streaming_request(path: str, method: str) -> bool:
+    return method.upper() == "POST" and path.rstrip("/").endswith(STREAM_PATH_SUFFIX)
+
+
+def _is_streaming_response(content_type: str | None) -> bool:
+    if not content_type:
+        return False
+    return "text/event-stream" in content_type.lower()
+
+
+def _encode_ws_chunk(chunk: bytes) -> dict[str, str]:
+    try:
+        return {"body": chunk.decode("utf-8"), "body_encoding": "utf-8"}
+    except UnicodeDecodeError:
+        return {
+            "body": base64.b64encode(chunk).decode("ascii"),
+            "body_encoding": "base64",
+        }
+
+
+async def _send_forward_response(
+        websocket,
+        *,
+        request_id: str | None,
+        status_code: int,
+        body: str,
+        headers: dict | None = None,
+) -> None:
+    await websocket.send(json.dumps({
+        "type": "forward_response",
+        "request_id": request_id,
+        "status_code": status_code,
+        "headers": headers or {},
+        "body": body,
+    }))
+
+
+async def _send_stream_start(
+        websocket,
+        *,
+        request_id: str | None,
+        status_code: int,
+        headers: dict,
+) -> None:
+    await websocket.send(json.dumps({
+        "type": "forward_response_start",
+        "request_id": request_id,
+        "status_code": status_code,
+        "headers": headers,
+    }))
+
+
+async def _send_stream_chunk(websocket, *, request_id: str | None, chunk: bytes) -> None:
+    await websocket.send(json.dumps({
+        "type": "forward_response_chunk",
+        "request_id": request_id,
+        **_encode_ws_chunk(chunk),
+    }))
+
+
+async def _send_stream_end(websocket, *, request_id: str | None) -> None:
+    await websocket.send(json.dumps({
+        "type": "forward_response_end",
+        "request_id": request_id,
+    }))
+
+
+def _local_timeout() -> httpx.Timeout:
+    seconds = float(config.local_service_timeout)
+    return httpx.Timeout(connect=30.0, read=seconds, write=seconds, pool=seconds)
+
+
+def _prepare_body(body, headers: dict):
+    if body is None:
+        return None
+
+    if isinstance(body, str):
+        content_type = headers.get("content-type", "")
+        if content_type.startswith("application/json"):
+            try:
+                return json.loads(body)
+            except json.JSONDecodeError:
+                pass
+        return body
+
+    return body
+
+
+def _build_request_kwargs(method: str, headers: dict, body) -> dict:
+    request_kwargs: dict = {"headers": headers}
+    prepared = _prepare_body(body, headers)
+    if prepared is None:
+        return request_kwargs
+    if isinstance(prepared, (dict, list)):
+        request_kwargs["json"] = prepared
+    else:
+        request_kwargs["content"] = prepared
+    return request_kwargs
+
+
+async def _relay_streaming_response(websocket, request_id: str | None, response: httpx.Response) -> None:
+    await _send_stream_start(
+        websocket,
+        request_id=request_id,
+        status_code=response.status_code,
+        headers=dict(response.headers),
+    )
+    try:
+        async for chunk in response.aiter_bytes(CHUNK_SIZE):
+            if chunk:
+                await _send_stream_chunk(websocket, request_id=request_id, chunk=chunk)
+    finally:
+        await _send_stream_end(websocket, request_id=request_id)
+
+
+async def _relay_buffered_response(websocket, request_id: str | None, response: httpx.Response) -> None:
+    body = response.text
+    print(f"Sending response payload for request_id={request_id}, status_code={response.status_code}")
+    await _send_forward_response(
+        websocket,
+        request_id=request_id,
+        status_code=response.status_code,
+        headers=dict(response.headers),
+        body=body,
+    )
+
+
+async def _forward_local_request(
+        websocket,
+        *,
+        request_id: str | None,
+        method: str,
+        local_url: str,
+        headers: dict,
+        body,
+        expect_stream: bool,
+) -> None:
+    timeout = _local_timeout()
+    request_kwargs = _build_request_kwargs(method, headers, body)
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream(method, local_url, **request_kwargs) as response:
+            if response.status_code == 401:
+                global _local_token
+                _local_token = None
+                config.local_service_auth_token = None
+                config.local_service_auth_token_expires = None
+
+                from app.agent.local_auth import async_get_local_auth_token
+
+                headers["Authorization"] = f"Bearer {await async_get_local_auth_token()}"
+                request_kwargs = _build_request_kwargs(method, headers, body)
+                await response.aclose()
+                async with client.stream(method, local_url, **request_kwargs) as retry_response:
+                    stream_response = (
+                        expect_stream or _is_streaming_response(retry_response.headers.get("content-type"))
+                    )
+                    if stream_response:
+                        await _relay_streaming_response(websocket, request_id, retry_response)
+                    else:
+                        await retry_response.aread()
+                        await _relay_buffered_response(websocket, request_id, retry_response)
+                return
+
+            stream_response = expect_stream or _is_streaming_response(response.headers.get("content-type"))
+            if stream_response:
+                await _relay_streaming_response(websocket, request_id, response)
+            else:
+                await response.aread()
+                await _relay_buffered_response(websocket, request_id, response)
+
+
+async def _handle_forward_request(websocket, req_data: dict) -> None:
+    from app.agent.local_auth import async_get_local_auth_token
+
+    request_id = req_data.get("request_id") or req_data.get("id")
+    method = req_data.get("method", "GET")
+    path = req_data.get("path", "/")
+    body = req_data.get("body", None)
+    headers = {k: v for k, v in (req_data.get("headers") or {}).items()}
+    query_params = req_data.get("query") or req_data.get("query_params")
+    if query_params:
+        if isinstance(query_params, dict):
+            query_string = urlencode(query_params, doseq=True)
+        else:
+            query_string = str(query_params).lstrip("?")
+    else:
+        query_string = ""
+
+    local_url = f"{config.local_service_url}{path}"
+    if query_string and "?" not in local_url:
+        local_url = f"{local_url}?{query_string}"
+
+    upstream_authorization = next(
+        (value for key, value in headers.items() if key.lower() == "authorization"),
+        None,
+    )
+    if upstream_authorization:
+        headers["X-Upstream-Authorization"] = upstream_authorization
+
+    try:
+        headers["Authorization"] = f"Bearer {await async_get_local_auth_token()}"
+    except Exception as auth_exc:
+        print(f"Local auth failed while processing request: {auth_exc}")
+        await _send_forward_response(
+            websocket,
+            request_id=request_id,
+            status_code=500,
+            body=f"Local auth failed: {auth_exc}",
+        )
+        return
+
+    expect_stream = _is_streaming_request(path, method)
+    try:
+        await _forward_local_request(
+            websocket,
+            request_id=request_id,
+            method=method,
+            local_url=local_url,
+            headers=headers,
+            body=body,
+            expect_stream=expect_stream,
+        )
+    except httpx.TimeoutException:
+        print(f"Local request timed out after {config.local_service_timeout}s: {local_url}")
+        await _send_forward_response(
+            websocket,
+            request_id=request_id,
+            status_code=504,
+            body=f"Local service did not respond within {config.local_service_timeout}s",
+        )
+    except httpx.ConnectError as exc:
+        print(f"Connection error to local service: {exc}")
+        await _send_forward_response(
+            websocket,
+            request_id=request_id,
+            status_code=502,
+            body=f"Bad Gateway: Could not connect to local service: {exc}",
+        )
 
 
 async def tunnel(token):
     """Maintain WebSocket tunnel to relay server with heartbeat and request forwarding."""
-    # Lazy imports to avoid circular imports with agent modules
     from app.agent.envutil import agent_settings, websocket_tunnel_url
-    from app.agent.local_auth import async_get_local_auth_token
 
     vps_url, agent_id, _ = agent_settings()
     uri = websocket_tunnel_url(vps_url, agent_id, token)
@@ -36,8 +278,7 @@ async def tunnel(token):
             print("Tunnel established. Waiting for requests...")
             relay_status.mark_connected()
 
-            # Start heartbeat sender
-            heartbeat_task = asyncio.create_task(_heartbeat_loop(websocket))
+            asyncio.create_task(_heartbeat_loop(websocket))
 
             while True:
                 try:
@@ -45,132 +286,35 @@ async def tunnel(token):
                     relay_status.mark_message_received()
                 except asyncio.TimeoutError:
                     print(f"No message from relay in {config.relay_read_timeout}s — assuming connection is dead")
-                    raise  # Bubble up to outer handler; triggers reconnect
+                    raise
 
-                request_id = None  # Reset per message so error handler always has it
                 try:
                     req_data = json.loads(message)
                     msg_type = req_data.get("type")
 
                     if msg_type == "heartbeat":
-                        # Heartbeat received from relay (or echo of our own), ignore
                         continue
 
                     if msg_type != "forward_request":
                         print(f"Unexpected message type: {msg_type}")
                         continue
 
-                    request_id = req_data.get("request_id") or req_data.get("id")
-                    method = req_data.get("method", "GET")
-                    path = req_data.get("path", "/")
-                    body = req_data.get("body", None)
-                    headers = {k: v for k, v in (req_data.get("headers") or {}).items()}
-                    query_params = req_data.get("query") or req_data.get("query_params")
-                    if query_params:
-                        if isinstance(query_params, dict):
-                            query_string = urlencode(query_params, doseq=True)
-                        else:
-                            query_string = str(query_params).lstrip("?")
-                    else:
-                        query_string = ""
-
-                    local_url = f"{config.local_service_url}{path}"
-                    if query_string and "?" not in local_url:
-                        local_url = f"{local_url}?{query_string}"
-
-                    upstream_authorization = next(
-                        (value for key, value in headers.items() if key.lower() == "authorization"),
-                        None,
-                    )
-                    if upstream_authorization:
-                        # Keep upstream auth available for debugging/auditing while ensuring
-                        # local API auth always uses a local token issued by this host.
-                        headers["X-Upstream-Authorization"] = upstream_authorization
-
+                    await _handle_forward_request(websocket, req_data)
+                except Exception as exc:
+                    print(f"Error processing request: {exc}")
+                    request_id = None
                     try:
-                        headers["Authorization"] = f"Bearer {await async_get_local_auth_token()}"
-                    except Exception as auth_exc:
-                        print(f"Local auth failed while processing request: {auth_exc}")
-                        await websocket.send(json.dumps({
-                            "type": "forward_response",
-                            "status_code": 500,
-                            "body": f"Local auth failed: {auth_exc}",
-                            "request_id": request_id,
-                        }))
-                        continue
-
-                    request_kwargs = {"headers": headers, "timeout": config.local_service_timeout}
-                    if body is not None:
-                        if isinstance(body, str):
-                            content_type = headers.get("content-type", "")
-                            if content_type.startswith("application/json"):
-                                try:
-                                    body = json.loads(body)
-                                except json.JSONDecodeError:
-                                    pass
-                        if isinstance(body, (dict, list)):
-                            request_kwargs["json"] = body
-                        else:
-                            request_kwargs["data"] = body
-
-                    resp = await asyncio.to_thread(
-                        requests.request,
-                        method,
-                        local_url,
-                        **request_kwargs,
-                    )
-
-                    if resp.status_code == 401:
-                        print("Local request returned 401, refreshing local auth token and retrying once")
-                        global _local_token
-                        _local_token = None
-                        config.local_service_auth_token = None
-                        config.local_service_auth_token_expires = None
-
-                        headers["Authorization"] = f"Bearer {await async_get_local_auth_token()}"
-                        resp = await asyncio.to_thread(
-                            requests.request,
-                            method,
-                            local_url,
-                            **request_kwargs,
+                        req_data = json.loads(message)
+                        request_id = req_data.get("request_id") or req_data.get("id")
+                    except Exception:
+                        pass
+                    try:
+                        await _send_forward_response(
+                            websocket,
+                            request_id=request_id,
+                            status_code=500,
+                            body=str(exc),
                         )
-
-                    response_payload = {
-                        "type": "forward_response",
-                        "request_id": request_id,
-                        "status_code": resp.status_code,
-                        "headers": dict(resp.headers),
-                        "body": resp.text,
-                    }
-                    print(f"Sending response payload for request_id={request_id}, status_code={resp.status_code}")
-                    await websocket.send(json.dumps(response_payload))
-
-                # --- except blocks at same level as try ---
-                except requests.exceptions.Timeout:
-                    print(f"Local request timed out after {config.local_service_timeout}s: {local_url}")
-                    await websocket.send(json.dumps({
-                        "type": "forward_response",
-                        "status_code": 504,
-                        "body": f"Local service did not respond within {config.local_service_timeout}s",
-                        "request_id": request_id,
-                    }))
-                except requests.exceptions.ConnectionError as e:
-                    print(f"Connection error to local service: {e}")
-                    await websocket.send(json.dumps({
-                        "type": "forward_response",
-                        "status_code": 502,
-                        "body": f"Bad Gateway: Could not connect to local service: {e}",
-                        "request_id": request_id,
-                    }))
-                except Exception as e:
-                    print(f"Error processing request: {e}")
-                    try:
-                        await websocket.send(json.dumps({
-                            "type": "forward_response",
-                            "status_code": 500,
-                            "body": str(e),
-                            "request_id": request_id,
-                        }))
                     except Exception:
                         pass
 
@@ -192,5 +336,5 @@ async def _heartbeat_loop(websocket):
                 await websocket.send(heartbeat_msg)
             except Exception:
                 break
-    except Exception as e:
-        print(f"Heartbeat loop error: {e}")
+    except Exception as exc:
+        print(f"Heartbeat loop error: {exc}")
