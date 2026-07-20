@@ -114,6 +114,48 @@ def explain_fireworks_issue(info: Any) -> str:
     return "An unknown error occurred while contacting Fireworks AI."
 
 
+def format_media_time(seconds: Any) -> str | None:
+    """Format playback position/length for human-readable replies."""
+    if seconds is None:
+        return None
+    try:
+        total_seconds = max(0, int(round(float(seconds))))
+    except (TypeError, ValueError):
+        return None
+    minutes, remaining_seconds = divmod(total_seconds, 60)
+    if minutes:
+        return f"{minutes}:{remaining_seconds:02d}"
+    return f"{remaining_seconds}s"
+
+
+def format_media_playback_summary(media: dict[str, Any]) -> str:
+    """Structured now-playing facts — used to keep timing accurate in LLM replies."""
+    title = media.get("title") or "Unknown track"
+    artist = media.get("artist")
+    status = (media.get("status") or "unknown").lower()
+    elapsed = format_media_time(media.get("position_seconds"))
+    length = format_media_time(media.get("length_seconds"))
+    heading = f"{title} by {artist}" if artist else str(title)
+
+    parts = [f"**{heading}** is {status}."]
+    if elapsed:
+        parts.append(f"Elapsed: {elapsed}.")
+    if length:
+        parts.append(f"Length: {length}.")
+    return " ".join(parts)
+
+
+def extract_media_playback_context(results: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    """Return (art_url, formatted_summary) when the only tool result is now-playing."""
+    if len(results) != 1 or results[0].get("tool") != "get_currently_playing_song":
+        return None, None
+    media = results[0].get("result") or {}
+    if not isinstance(media, dict):
+        return None, None
+    art_url = media.get("art_url")
+    return art_url, format_media_playback_summary(media)
+
+
 def _build_planner_messages(
     user_message: str,
     history: list[dict[str, str]] | None = None,
@@ -234,43 +276,12 @@ async def plan_conditional_followup(
 
 async def compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tuple[str, str | None]:
     """
-    Second LLM call — summarises ALL tool results into one clean Markdown reply.
+    Second LLM call — summarises tool results into a human reply.
     Returns (reply_text, art_url) where art_url is present for media status queries.
-    Called only when at least one real tool was executed.
     """
-    if len(results) == 1 and results[0].get("tool") == "get_currently_playing_song":
-        media = results[0].get("result") or {}
-        title = media.get("title") or "The current track"
-        artist = media.get("artist")
-        status = (media.get("status") or "unknown").lower()
-        position_seconds = media.get("position_seconds")
-        length_seconds = media.get("length_seconds")
-        art_url = media.get("art_url")
-
-        def _format_time(seconds: Any) -> str | None:
-            if seconds is None:
-                return None
-            try:
-                total_seconds = max(0, int(round(float(seconds))))
-            except (TypeError, ValueError):
-                return None
-            minutes, remaining_seconds = divmod(total_seconds, 60)
-            if minutes:
-                return f"{minutes}:{remaining_seconds:02d}"
-            return f"{remaining_seconds}s"
-
-        elapsed_text = _format_time(position_seconds)
-        length_text = _format_time(length_seconds)
-        heading = f"{title} by {artist}" if artist else str(title)
-
-        parts = [f"**{heading}** is {status}."]
-        if elapsed_text:
-            parts.append(f"Elapsed: {elapsed_text}.")
-        if length_text:
-            parts.append(f"Length: {length_text}.")
-        return " ".join(parts), art_url
-
     from app.services.assistant.tool_exec import sanitize_tool_results_for_llm
+
+    art_url, media_summary = extract_media_playback_context(results)
 
     system = config.assistant_system_prompt
     safe_results = sanitize_tool_results_for_llm(results)
@@ -279,6 +290,12 @@ async def compose_final_reply(user_message: str, results: list[dict[str, Any]]) 
         + (f"\nError: {r['error']}" if r.get("error") else "")
         for r in safe_results
     )
+    media_block = ""
+    if media_summary:
+        media_block = (
+            f"\nNow playing (use these exact facts — title, artist, status, elapsed, length):\n"
+            f"{media_summary}\n"
+        )
     try:
         api_key = get_api_key()
         if not api_key:
@@ -299,9 +316,11 @@ async def compose_final_reply(user_message: str, results: list[dict[str, Any]]) 
                 {"role": "system", "content": system},
                 {"role": "user",
                  "content": (
-                     f"User request: {user_message}\n\n{results_text}\n\n"
-                     "Answer in clean Markdown. Any URL from the results must be a Markdown "
-                     "hyperlink like [label](url) — never a bare URL."
+                     f"User request: {user_message}\n\n{results_text}"
+                     f"{media_block}\n"
+                     "Reply in plain Markdown with Vela's voice — short, human, not corporate. "
+                     "You can react (praise, roast, joke) when it fits the tool results. "
+                     "Any URL must be a Markdown hyperlink [label](url), never bare."
                  )},
             ],
             "top_k": 1,  # More deterministic, reduces token waste
@@ -318,7 +337,7 @@ async def compose_final_reply(user_message: str, results: list[dict[str, Any]]) 
     except Exception as exc:
         logger.error("Fireworks AI chat.completions.create failed: %s", exc, exc_info=True)
         raise ValueError(explain_fireworks_issue(exc)) from exc
-    return clean_text(text), None
+    return clean_text(text), art_url
 
 
 def split_think_stream(text: str):

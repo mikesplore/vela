@@ -312,9 +312,9 @@ async def _run_tools_and_reply(
         "role": "user",
         "content": (
             f"Tool execution results:\n{results_text}\n\n"
-            "Please provide a final answer to my original request based on these results. "
-            "Any URL in the results must be included as a Markdown hyperlink like "
-            "[label](url) — never paste a bare URL, and do not omit links."
+            "Final answer for the user. Vela voice: short, human, not corporate — "
+            "opinions and jokes ok if grounded in these results. "
+            "URLs as Markdown hyperlinks [label](url), never bare."
         ),
     })
 
