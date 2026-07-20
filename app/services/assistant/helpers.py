@@ -33,6 +33,22 @@ def clean_text(text: str) -> str:
     return cleaned.strip()
 
 
+def fireworks_stream_delta(chunk: dict[str, Any]) -> dict[str, Any]:
+    """Extract the delta dict from a Fireworks/OpenAI-style streaming chunk.
+
+    Some providers emit SSE frames with ``choices: []`` (metadata/keepalive).
+    Treat those as empty deltas instead of crashing.
+    """
+    choices = chunk.get("choices")
+    if not choices:
+        return {}
+    first = choices[0]
+    if not isinstance(first, dict):
+        return {}
+    delta = first.get("delta")
+    return delta if isinstance(delta, dict) else {}
+
+
 def get_api_key() -> str | None:
     """Read FIREWORKS_API_KEY strictly from dotfiles only.
 
@@ -403,7 +419,7 @@ async def stream_llm_response(
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    delta = fireworks_stream_delta(chunk)
                     if enable_thinking and delta.get("reasoning_content"):
                         yield {"type": "thinking", "text": delta["reasoning_content"]}
                         yielded_anything = True
@@ -510,7 +526,7 @@ async def plan_tool_calls_streaming(
                             chunk = json.loads(data)
                         except json.JSONDecodeError:
                             continue
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        delta = fireworks_stream_delta(chunk)
                         if enable_thinking and delta.get("reasoning_content"):
                             yield {"type": "thinking", "text": delta["reasoning_content"]}
                         if delta.get("content"):
