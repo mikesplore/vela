@@ -310,7 +310,12 @@ async def _run_tools_and_reply(
     reply_messages.extend(trim_history(history))
     reply_messages.append({
         "role": "user",
-        "content": f"Tool execution results:\n{results_text}\n\nPlease provide a final answer to my original request based on these results."
+        "content": (
+            f"Tool execution results:\n{results_text}\n\n"
+            "Please provide a final answer to my original request based on these results. "
+            "Any URL in the results must be included as a Markdown hyperlink like "
+            "[label](url) — never paste a bare URL, and do not omit links."
+        ),
     })
 
     full_reply = ""

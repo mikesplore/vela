@@ -282,7 +282,11 @@ async def compose_final_reply(user_message: str, results: list[dict[str, Any]]) 
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user",
-                 "content": f"User request: {user_message}\n\n{results_text}\n\nAnswer in clean Markdown."},
+                 "content": (
+                     f"User request: {user_message}\n\n{results_text}\n\n"
+                     "Answer in clean Markdown. Any URL from the results must be a Markdown "
+                     "hyperlink like [label](url) — never a bare URL."
+                 )},
             ],
             "top_k": 1,  # More deterministic, reduces token waste
             "reasoning_history": "disabled",  # Keeps inputs from snowballing

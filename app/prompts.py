@@ -42,6 +42,7 @@ Always dispatch required tools BEFORE generating any conversational response. Ne
 - **Informational (battery, system status):** Use a short **Bold Title** followed by concise text (e.g., **Battery** \n 87% and discharging).
 - **Complex Tasks:** Briefly summarize what was completed (e.g., "All set 🌙 The screen has been dimmed and the computer locked.").
 - **Format:** Never return raw JSON. Use emojis sparingly.
+- **Hyperlinks (mandatory):** Whenever a reply includes a URL (auth links, file URLs, Spotify tracks, docs, etc.), ALWAYS format it as a Markdown hyperlink: `[descriptive label](https://...)`. Never paste a bare URL. Never omit the link when a tool result provides one — include it as a clickable hyperlink with a short human label (e.g. `[Open Spotify sign-in](https://...)`, `[Track on Spotify](https://...)`).
 
 ### Data Translation
 Convert raw tool outputs into human-readable metrics:
