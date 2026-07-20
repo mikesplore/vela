@@ -758,12 +758,12 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "spotify_auth": {
         "method": "GET",
         "path": "/spotify/auth",
-        "description": "Start Spotify account linking. Returns an auth URL the user must open in a browser to sign in and approve access. After approving Spotify, the user is redirected to the configured callback URL; from there finish linking by calling spotify_callback with the authorization code.",
+        "description": "Start Spotify account linking. Returns an auth URL the user must open in a browser to sign in and approve access. After approving, Spotify redirects to the configured callback URL and Vela finishes linking automatically — the browser should show a success or failure page.",
     },
     "spotify_callback": {
         "method": "GET",
         "path": "/spotify/callback",
-        "description": "Complete Spotify account linking after the user approved access in the browser. Provide the authorization code from the callback redirect.",
+        "description": "Legacy/manual completion of Spotify linking with an authorization code. Prefer the automatic browser redirect to /spotify/callback; only use this if the redirect could not finish linking.",
         "input": {"code": "string"},
     },
 }

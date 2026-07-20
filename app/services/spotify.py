@@ -1,5 +1,6 @@
+import html
 import os
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 
 from dotenv import load_dotenv
 import spotipy
@@ -33,10 +34,67 @@ def get_spotify_client() -> spotipy.Spotify:
         redirect_uri=redirect_uri,
         scope=" ".join(SCOPES),
         cache_path=".spotify_token_cache",
-        open_browser=True,
+        open_browser=False,
     )
     sp = spotipy.Spotify(auth_manager=auth_manager)
     return sp
+
+
+def complete_spotify_link(code: str) -> None:
+    """Exchange an OAuth authorization code and persist the Spotify token cache."""
+    sp = get_spotify_client()
+    token_info = sp.auth_manager.get_access_token(code, as_dict=True, check_cache=False)
+    if not token_info or not token_info.get("access_token"):
+        raise ValueError("Spotify token exchange returned no access token")
+    sp.auth_manager.cache_handler.save_token_to_cache(token_info)
+
+
+def oauth_result_page(*, title: str, message: str, ok: bool) -> str:
+    """Simple browser page shown after Spotify redirects back to Vela."""
+    accent = "#1DB954" if ok else "#c0392b"
+    safe_title = html.escape(title)
+    safe_message = html.escape(message)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{safe_title}</title>
+  <style>
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: Georgia, "Times New Roman", serif;
+      background: #0f1410;
+      color: #e8efe9;
+    }}
+    main {{
+      width: min(28rem, calc(100% - 2rem));
+      padding: 2rem;
+      border-top: 4px solid {accent};
+    }}
+    h1 {{
+      margin: 0 0 0.75rem;
+      font-size: 1.6rem;
+      font-weight: 600;
+    }}
+    p {{
+      margin: 0;
+      line-height: 1.5;
+      color: #b7c4ba;
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>{safe_title}</h1>
+    <p>{safe_message}</p>
+  </main>
+</body>
+</html>
+"""
 
 
 # ──────────────────────────────────────────────
