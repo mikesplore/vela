@@ -45,7 +45,7 @@ Linux remote-PC agent: FastAPI REST API (+ optional WebSocket tunnel to a VPS re
 | `network` | `/network` | IP, wifi, bluetooth, ping, speed, vnstat, port/health/firewall/VPN |
 | `notifications` | `/notifications` | Desktop notifications |
 | `power` | `/power` | Shutdown/restart/sleep, power profile |
-| `processes` | `/processes` | List/kill/open apps, running check, window control (`POST /processes/launch` is API-only — not an assistant tool) |
+| `processes` | `/processes` | List/kill/open apps, installed app catalog (`.desktop`), running check, window control (`POST /processes/launch` is API-only — not an assistant tool) |
 | `push` | `/push` | FCM device registration + send to user's devices |
 | `scheduler` | `/scheduler` | Create/list/cancel/run tasks |
 | `security` | `/security` | Lock, webcam/mic, login/SSH history |
@@ -86,6 +86,8 @@ Also: `GET /`, `GET /health`, `GET /ping` in `app/main.py`.
 
 **Process / network probes** (for “is X up?” without starting anything):
 
+- `GET /processes/apps?filter=` — installed GUI apps from Freedesktop `.desktop` files (name, id, exec binary)
+- `POST /processes/app/open` — opens by friendly name / desktop id / exec; resolved via `.desktop` entries (+ `gtk-launch` when available)
 - `GET /processes/running/{name}` — process running by name
 - `GET /network/port/{port}` — local TCP listener check
 - `GET /network/health-check?url=` — HTTP(S) probe
@@ -106,7 +108,10 @@ Key assistant tools for ops:
 | Docker containers up? | `get_docker_info`, `list_docker_containers`, `get_container_status` |
 | Compose stack status? | `compose_status` |
 | Is app/process open? | `is_process_running` |
+| What apps are installed? / open Chrome? | `list_installed_applications`, then `open_application` |
 | Port / HTTP endpoint up? | `check_port`, `health_check` |
+
+**Desktop app launch:** Logic in `app/services/processes.py` scans `*/applications/*.desktop`, caches ~5 min, matches friendly names/aliases to entries, then launches via `gtk-launch` or parsed `Exec=`. Alias map: `APP_ALIASES` in same file. Assistant: `list_installed_applications` (read-only), `open_application` (confirmation).
 
 **Tool execution notes** (`tool_exec.py`):
 

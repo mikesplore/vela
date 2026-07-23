@@ -8,11 +8,24 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.dependencies import get_current_user
-from app.domain.processes import ProcessInfo
-from app.domain.processes import ProcessList, ActionResponse, LaunchRequest, ApplicationRequest, ApplicationCloseRequest, ProcessRunningResponse
-from app.services.processes import kill_processes_by_name as kill_processes_by_name_svc
-from app.services.processes import is_process_running as is_process_running_svc
-from app.services.processes import spawn_detached
+from app.domain.processes import (
+    ProcessInfo,
+    ProcessList,
+    ActionResponse,
+    LaunchRequest,
+    ApplicationRequest,
+    ApplicationCloseRequest,
+    ProcessRunningResponse,
+    InstalledApplicationList,
+)
+from app.services.processes import (
+    ApplicationNotFoundError,
+    kill_processes_by_name as kill_processes_by_name_svc,
+    is_process_running as is_process_running_svc,
+    list_installed_applications as list_installed_applications_svc,
+    open_installed_application,
+    spawn_detached,
+)
 from app.utils.run_command import run_command
 
 router = APIRouter(prefix="/processes", tags=["processes"])
@@ -44,6 +57,12 @@ async def list_processes() -> Any:
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return ProcessList(processes=sorted(processes, key=lambda item: item.cpu_percent, reverse=True))
+
+
+@router.get("/apps", response_model=InstalledApplicationList, dependencies=[Depends(get_current_user)])
+async def list_applications(filter: str | None = None) -> Any:
+    """List installed desktop applications from .desktop entries."""
+    return list_installed_applications_svc(filter_text=filter)
 
 
 @router.get("/running/{name}", response_model=ProcessRunningResponse, dependencies=[Depends(get_current_user)])
@@ -104,10 +123,18 @@ async def launch_process(request: LaunchRequest) -> Any:
 
 @router.post("/app/open", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
 async def open_application(request: ApplicationRequest) -> Any:
-    """Open an application detached from the Vela service cgroup when possible."""
+    """Open an application by friendly name, .desktop id, or exec binary."""
     try:
-        result = spawn_detached([request.name, *request.args])
-        return ActionResponse(success=True, message=result.message, pid=result.pid)
+        result = open_installed_application(request.name, request.args)
+        return ActionResponse(
+            success=True,
+            message=result.message,
+            pid=result.pid,
+            application_id=result.application_id,
+            application_name=result.application_name,
+        )
+    except ApplicationNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except FileNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
     except Exception as exc:

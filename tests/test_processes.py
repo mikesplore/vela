@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch, mock_open
 import pytest
 from app.auth import create_access_token
 from app.routers import processes as processes_module
+from app.services import processes as processes_service
 
 
 class FakeProcess:
@@ -127,7 +128,16 @@ async def test_launch_process(monkeypatch, async_client):
 @pytest.mark.anyio
 async def test_open_application(monkeypatch, async_client):
     token = create_access_token({"sub": "admin"})
-    monkeypatch.setattr(subprocess, "Popen", lambda args: FakePopen(pid=555))
+    monkeypatch.setattr(
+        processes_module,
+        "open_installed_application",
+        lambda name, args=None: processes_service.LaunchResult(
+            pid=555,
+            message="Opened spotify.",
+            detached=True,
+            application_name="Spotify",
+        ),
+    )
 
     response = await async_client.post(
         "/processes/app/open",

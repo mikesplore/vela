@@ -77,6 +77,7 @@ LOW_RISK_TOOLS = {
     "search_files",
     "list_processes",
     "is_process_running",
+    "list_installed_applications",
     "list_jobs",
     "cancel_job",
     "power_sleep",

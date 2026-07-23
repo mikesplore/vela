@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -29,11 +29,28 @@ class ApplicationRequest(BaseModel):
 class ApplicationCloseRequest(BaseModel):
     name: str
 
+
+class InstalledApplication(BaseModel):
+    id: str
+    name: str
+    generic_name: Optional[str] = None
+    exec_command: str
+    exec_binary: Optional[str] = None
+    keywords: List[str] = Field(default_factory=list)
+    categories: List[str] = Field(default_factory=list)
+
+
+class InstalledApplicationList(BaseModel):
+    applications: List[InstalledApplication]
+
+
 class ActionResponse(BaseModel):
     success: bool
     message: Optional[str] = None
     pid: Optional[int] = None
     killed_count: Optional[int] = None
+    application_id: Optional[str] = None
+    application_name: Optional[str] = None
 
 
 class ProcessRunningResponse(BaseModel):

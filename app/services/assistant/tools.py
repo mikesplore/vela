@@ -441,6 +441,12 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": "Check whether a process or app is currently running by name. Use FIRST when asked if an application/process is open — do NOT launch it just to check.",
         "input": {"name": "string"},
     },
+    "list_installed_applications": {
+        "method": "GET",
+        "path": "/processes/apps",
+        "description": "List installed desktop applications from this machine (.desktop entries): display name, desktop id, exec binary. Use when the user asks what apps are installed, what browser/IDE they have, or before opening an ambiguous app name.",
+        "input": {"filter": "string?"},
+    },
     "kill_process": {
         "method": "DELETE",
         "path": "/processes/{pid}",
@@ -502,7 +508,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "open_application": {
         "method": "POST",
         "path": "/processes/app/open",
-        "description": "Open a user-facing application by its common name (e.g. 'firefox', 'gedit', 'vlc', 'spotify'). Use for everyday app launches.",
+        "description": "Open a desktop/GUI application. Accepts friendly names ('Chrome', 'firefox'), .desktop ids ('google-chrome.desktop'), or exec binaries — resolved against installed .desktop entries on this PC. Use list_installed_applications when unsure of the exact name.",
         "input": {"name": "string", "args": "array of strings"},
     },
     "close_application": {
@@ -967,6 +973,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "type_keyboard": "Typing text",
     "press_keyboard_keys": "Pressing keys",
     "list_processes": "Listing processes",
+    "list_installed_applications": "Listing installed applications",
     "kill_process": "Killing process",
     "kill_process_by_name": "Killing processes by name",
     "power_shutdown": "Shutting down",
@@ -1103,6 +1110,7 @@ COMMON PATTERNS (hints only — adapt, extend, ignore if wrong):
 - is service running? → get_service_status (scope=all for Vela user units); answer before start/restart
 - are containers running? → list_docker_containers or get_container_status; answer before start/restart
 - is app/process open? → is_process_running; do NOT open_application just to check
+- open app / launch chrome / start firefox → open_application (names resolved via .desktop entries); if ambiguous → list_installed_applications first
 - port listening / what uses port X / what's on 8765? → check_port ONLY
 - HTTP endpoint up? → health_check (e.g. http://127.0.0.1:8765/health for Vela API)
 - docker/compose status → get_docker_info, list_docker_containers, compose_status
