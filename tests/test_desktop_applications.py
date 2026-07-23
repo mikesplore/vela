@@ -75,23 +75,69 @@ def test_open_installed_application_uses_exec(monkeypatch, desktop_dir):
     monkeypatch.setattr(processes_service, "spawn_detached", fake_spawn)
     monkeypatch.setattr(processes_service.shutil, "which", lambda name: None)
 
+    seen: list[int] = []
+
+    def fake_matching(query, entry=None):
+        seen.append(1)
+        return [] if len(seen) == 1 else [456]
+
+    monkeypatch.setattr(processes_service, "_matching_pids", fake_matching)
+    monkeypatch.setattr(processes_service.time, "sleep", lambda _seconds: None)
+
     result = processes_service.open_installed_application("chrome")
     assert result.application_id == "google-chrome.desktop"
     assert captured[0][0] == "/usr/bin/google-chrome-stable"
 
 
-def test_open_installed_application_uses_gtk_launch_when_available(monkeypatch, desktop_dir):
+def test_open_installed_application_uses_exec_even_when_gtk_launch_available(monkeypatch, desktop_dir):
     captured: list[list[str]] = []
+    seen: list[int] = []
 
     def fake_spawn(argv):
         captured.append(argv)
         return processes_service.LaunchResult(pid=123, message="ok", detached=True)
 
+    def fake_matching(query, entry=None):
+        seen.append(1)
+        return [] if len(seen) == 1 else [456]
+
     monkeypatch.setattr(processes_service, "spawn_detached", fake_spawn)
     monkeypatch.setattr(processes_service.shutil, "which", lambda name: "/usr/bin/gtk-launch" if name == "gtk-launch" else None)
+    monkeypatch.setattr(processes_service, "_matching_pids", fake_matching)
+    monkeypatch.setattr(processes_service.time, "sleep", lambda _seconds: None)
 
     processes_service.open_installed_application("firefox")
-    assert captured[0] == ["/usr/bin/gtk-launch", "firefox.desktop"]
+    assert captured[0] == ["firefox"]
+
+
+def test_open_installed_application_reports_already_running(monkeypatch, desktop_dir):
+    seen: list[set[int]] = []
+
+    def fake_matching(query, entry=None):
+        seen.append(set())
+        return [999] if len(seen) == 1 else [999]
+
+    monkeypatch.setattr(processes_service, "spawn_detached", lambda argv: processes_service.LaunchResult(pid=123, message="ok", detached=True))
+    monkeypatch.setattr(processes_service.shutil, "which", lambda name: None)
+    monkeypatch.setattr(processes_service, "_matching_pids", fake_matching)
+    monkeypatch.setattr(processes_service.time, "sleep", lambda _seconds: None)
+
+    result = processes_service.open_installed_application("chrome")
+    assert result.message == "Google Chrome is already running."
+
+
+def test_open_installed_application_fails_when_process_never_starts(monkeypatch, desktop_dir):
+    monkeypatch.setattr(
+        processes_service,
+        "spawn_detached",
+        lambda argv: processes_service.LaunchResult(pid=123, message="ok", detached=True),
+    )
+    monkeypatch.setattr(processes_service.shutil, "which", lambda name: None)
+    monkeypatch.setattr(processes_service, "_matching_pids", lambda query, entry=None: [])
+    monkeypatch.setattr(processes_service.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(processes_service.ApplicationLaunchError):
+        processes_service.open_installed_application("chrome")
 
 
 def test_close_installed_application_matches_chrome_alias(monkeypatch, desktop_dir):

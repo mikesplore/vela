@@ -10,9 +10,12 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_desktop_env_last_check: float = 0.0
 
 DESKTOP_ENV_KEYS = (
     "DISPLAY",
@@ -116,15 +119,24 @@ def refresh_desktop_env(*, force: bool = False, persist: bool = True) -> dict[st
 
 def ensure_desktop_env() -> None:
     """Ensure GUI env matches the live graphical session before X11/Wayland clients."""
-    session_env = _parse_systemctl_environment()
-    session_xauth = (session_env.get("XAUTHORITY") or "").strip()
-    current_xauth = os.environ.get("XAUTHORITY", "")
+    global _desktop_env_last_check
 
-    if session_xauth and session_xauth != current_xauth and _xauthority_usable(session_xauth):
-        refresh_desktop_env(force=True, persist=True)
+    current_xauth = os.environ.get("XAUTHORITY", "")
+    if _xauthority_usable(current_xauth):
         return
 
-    if _xauthority_usable(current_xauth):
+    from app.utils.config import get_config
+
+    interval = max(5, get_config().desktop_env_check_interval_seconds)
+    now = time.monotonic()
+    if now - _desktop_env_last_check < interval:
+        return
+    _desktop_env_last_check = now
+
+    session_env = _parse_systemctl_environment()
+    session_xauth = (session_env.get("XAUTHORITY") or "").strip()
+    if session_xauth and session_xauth != current_xauth and _xauthority_usable(session_xauth):
+        refresh_desktop_env(force=True, persist=True)
         return
 
     refresh_desktop_env(force=True, persist=True)

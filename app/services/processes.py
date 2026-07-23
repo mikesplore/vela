@@ -48,6 +48,14 @@ class LaunchResult:
     detached: bool
     application_id: str | None = None
     application_name: str | None = None
+    systemd_unit: str | None = None
+
+
+class ApplicationLaunchError(RuntimeError):
+    def __init__(self, query: str, detail: str) -> None:
+        self.query = query
+        self.detail = detail
+        super().__init__(f"Failed to start {query!r}: {detail}")
 
 
 @dataclass
@@ -231,30 +239,95 @@ def open_installed_application(name: str, args: list[str] | None = None) -> Laun
     try:
         entry = resolve_application(name)
     except ApplicationNotFoundError:
+        before_pids = set(_matching_pids(name, None))
         if shutil.which(name):
             result = spawn_detached([name, *extra_args])
             result.application_name = name
-            return result
+            return _finalize_launch(name, None, result, before_pids=before_pids)
         raise
 
-    gtk_launch = shutil.which("gtk-launch")
-    if gtk_launch and not extra_args:
-        result = spawn_detached([gtk_launch, entry.id])
-        result.application_id = entry.id
-        result.application_name = entry.name
-        result.message = f"Opened {entry.name} via gtk-launch."
-        return result
+    before_pids = set(_matching_pids(name, entry))
 
     if not entry.exec_argv:
         raise ApplicationNotFoundError(name, [entry.name])
 
+    # Launch the parsed Exec= binary directly. gtk-launch does not work reliably
+    # under systemd-run (our preferred detach path) — the unit exits without
+    # starting the GUI process.
     argv = list(entry.exec_argv)
     argv.extend(extra_args)
     result = spawn_detached(argv)
     result.application_id = entry.id
     result.application_name = entry.name
     result.message = f"Opened {entry.name}."
+    return _finalize_launch(name, entry, result, before_pids=before_pids)
+
+
+def _matching_pids(query: str, entry: DesktopEntry | None = None) -> list[int]:
+    candidates = _collect_process_name_candidates(query, entry)
+    return _find_matching_pids(candidates)
+
+
+def _finalize_launch(
+        query: str,
+        entry: DesktopEntry | None,
+        result: LaunchResult,
+        *,
+        before_pids: set[int],
+) -> LaunchResult:
+    """Confirm the app process actually appeared; systemd-run success alone is not enough."""
+    started, pids, already_running = _wait_for_application_start(
+        query, entry, before_pids=before_pids, timeout=5.0,
+    )
+    if not started:
+        detail = _describe_launch_failure(result)
+        raise ApplicationLaunchError(query, detail)
+    if already_running:
+        result.message = f"{result.application_name or query} is already running."
+    if pids:
+        result.pid = pids[0]
     return result
+
+
+def _wait_for_application_start(
+        query: str,
+        entry: DesktopEntry | None,
+        *,
+        before_pids: set[int],
+        timeout: float,
+        interval: float = 0.25,
+) -> tuple[bool, list[int], bool]:
+    """Return (started, pids, already_running).
+
+    Success requires a newly appeared matching PID. Matching only pre-existing
+    PIDs counts as already running (no new window), not a fresh launch.
+    """
+    queries = [query]
+    if entry is not None and entry.name.casefold() != query.casefold():
+        queries.append(entry.name)
+
+    deadline = time.monotonic() + max(0.5, timeout)
+    while time.monotonic() < deadline:
+        current: set[int] = set()
+        for candidate_query in queries:
+            current.update(_matching_pids(candidate_query, entry))
+        new_pids = current - before_pids
+        if new_pids:
+            return True, sorted(new_pids), False
+        if before_pids and current:
+            return True, sorted(current), True
+        time.sleep(interval)
+    return False, [], False
+
+
+def _describe_launch_failure(result: LaunchResult) -> str:
+    if result.systemd_unit:
+        state = _systemd_unit_state(result.systemd_unit)
+        if state:
+            return state
+    if result.pid:
+        return f"launch helper exited (pid {result.pid}) but no application process was detected"
+    return "no application process was detected after launch"
 
 
 def spawn_detached(argv: list[str]) -> LaunchResult:
@@ -303,13 +376,17 @@ def spawn_detached(argv: list[str]) -> LaunchResult:
                 pid=pid,
                 message=f"Launched detached from Vela service (unit {unit}.service).",
                 detached=True,
+                systemd_unit=unit,
             )
         # Fall through if systemd-run rejected the command (e.g. missing binary).
-        # Keep stderr available for debugging rare failures.
-        if completed.stderr:
+        if completed.stderr or completed.stdout:
             import logging
 
-            logging.getLogger(__name__).debug("systemd-run failed: %s", completed.stderr.strip())
+            logging.getLogger(__name__).warning(
+                "systemd-run failed (rc=%s): %s",
+                completed.returncode,
+                (completed.stderr or completed.stdout).strip(),
+            )
 
     # Fallback: new session. Survives Vela stop when KillMode=process on vela.service.
     try:
@@ -346,6 +423,45 @@ def _unit_main_pid(unit: str) -> int | None:
     if raw.isdigit() and int(raw) > 0:
         return int(raw)
     return None
+
+
+def _systemd_unit_state(unit: str) -> str | None:
+    name = unit if unit.endswith((".service", ".scope")) else f"{unit}.service"
+    try:
+        proc = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                name,
+                "-p",
+                "Result",
+                "-p",
+                "ExecMainStatus",
+                "-p",
+                "ExecMainCode",
+                "-p",
+                "SubState",
+                "--value",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    values = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
+    if not values:
+        return None
+    result, status, code, substate = (values + ["", "", "", ""])[:4]
+    parts = [part for part in (f"result={result}" if result else None,
+                               f"exit={status}" if status else None,
+                               f"code={code}" if code else None,
+                               f"substate={substate}" if substate else None) if part]
+    return "; ".join(parts) if parts else None
 
 
 def _desktop_search_dirs() -> list[Path]:

@@ -19,6 +19,7 @@ from app.domain.processes import (
     InstalledApplicationList,
 )
 from app.services.processes import (
+    ApplicationLaunchError,
     ApplicationNotFoundError,
     ApplicationNotRunningError,
     kill_processes_by_name as kill_processes_by_name_svc,
@@ -137,6 +138,8 @@ async def open_application(request: ApplicationRequest) -> Any:
         )
     except ApplicationNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ApplicationLaunchError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
     except FileNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
     except Exception as exc:

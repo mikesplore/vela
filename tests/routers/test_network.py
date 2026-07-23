@@ -7,8 +7,8 @@ from app.routers import network as network_module
 async def test_network_ip_and_speedtest(monkeypatch, async_client):
     token = create_access_token({"sub": "admin"})
 
-    monkeypatch.setattr(network_module, "_local_ip", lambda: "192.168.1.10")
-    monkeypatch.setattr(network_module, "_public_ip", lambda: "1.2.3.4")
+    monkeypatch.setattr(network_module, "local_ip", lambda: "192.168.1.10")
+    monkeypatch.setattr(network_module, "p_ip", lambda: "1.2.3.4")
     monkeypatch.setattr(network_module, "run_command", lambda cmd, timeout=10: ("Ping: 15.0 ms\nDownload: 100.00 Mbit/s\nUpload: 20.00 Mbit/s", "", 0) if "speedtest-cli" in cmd else ("", "", 1))
 
     ip_response = await async_client.get(
@@ -33,8 +33,10 @@ async def test_network_wifi_bluetooth_and_ping(monkeypatch, async_client):
     token = create_access_token({"sub": "admin"})
 
     def fakerun_command(cmd, timeout=10):
-        if cmd[:5] == ["nmcli", "-t", "-f", "ACTIVE,SSID,SECURITY,SIGNAL", "device"]:
+        if cmd[:8] == ["nmcli", "--terse", "--escape", "no", "-f", "ACTIVE,SSID,SECURITY,SIGNAL", "device", "wifi"]:
             return "yes:MyWifi:WPA2:70\nno:Other:WPA3:30", "", 0
+        if cmd[:8] == ["nmcli", "--terse", "--escape", "no", "-f", "DEVICE,TYPE,STATE", "device", "status"]:
+            return "wlan0:wifi:connected", "", 0
         if cmd[:5] == ["nmcli", "device", "wifi", "connect", "MyWifi"]:
             return "Device 'MyWifi' successfully activated", "", 0
         if cmd[:4] == ["nmcli", "radio", "wifi", "off"]:
@@ -58,9 +60,9 @@ async def test_network_wifi_bluetooth_and_ping(monkeypatch, async_client):
         return "", "", 0
 
     monkeypatch.setattr(network_module, "run_command", fakerun_command)
-    monkeypatch.setattr(network_module, "_local_ip", lambda: "192.168.1.10")
-    monkeypatch.setattr(network_module, "_public_ip", lambda: "1.2.3.4")
-    monkeypatch.setattr(network_module, "_geolocate_ip", lambda ip: {
+    monkeypatch.setattr(network_module, "local_ip", lambda: "192.168.1.10")
+    monkeypatch.setattr(network_module, "p_ip", lambda: "1.2.3.4")
+    monkeypatch.setattr(network_module, "geolocate_ip", lambda ip: {
         "status": "success",
         "query": ip,
         "country": "United States",

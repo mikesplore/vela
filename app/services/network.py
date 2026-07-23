@@ -20,12 +20,113 @@ except ImportError:  # pragma: no cover
 from app.services.monitoring import get_top_processes, get_uptime
 from app.services.system_info import get_os_info
 from app.utils.config import get_config
+from app.utils.run_command import run_command
 
 logger = logging.getLogger(__name__)
 
 # In-memory cache for geo-location to avoid external provider rate limits.
 _geo_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _GEO_CACHE_TTL = 30  # seconds
+
+_public_ip_cache: tuple[float, str] | None = None
+_wifi_scan_cache: tuple[float, list[Any]] | None = None
+
+
+class WifiScanError(RuntimeError):
+    """Raised when nmcli WiFi listing fails."""
+
+
+def wifi_list_command() -> list[str]:
+    return [
+        "nmcli",
+        "--terse",
+        "--escape",
+        "no",
+        "-f",
+        "ACTIVE,SSID,SECURITY,SIGNAL",
+        "device",
+        "wifi",
+        "list",
+    ]
+
+
+def trigger_wifi_rescan() -> None:
+    run_command(["nmcli", "device", "wifi", "rescan"], timeout=15)
+
+
+def parse_nmcli_wifi_list(raw: str) -> list[Any]:
+    """Parse nmcli WiFi list output into WifiNetwork models."""
+    from app.domain.network import WifiNetwork
+
+    networks: list[WifiNetwork] = []
+    for line in raw.splitlines():
+        parts = line.split(":", 3)
+        if len(parts) < 4:
+            continue
+        active, ssid, security, signal = parts[0], parts[1], parts[2], parts[3]
+        if not ssid:
+            continue
+        networks.append(
+            WifiNetwork(
+                ssid=ssid,
+                security=security.strip() or None,
+                signal=int(signal) if signal.strip().isdigit() else None,
+                active=active.lower() == "yes",
+            )
+        )
+    return networks
+
+
+def load_wifi_networks(*, rescan: bool) -> list[Any]:
+    """Load visible WiFi networks; full scans are cached for dashboard polling."""
+    global _wifi_scan_cache
+
+    ttl = max(1, get_config().network_wifi_list_cache_seconds)
+    now = time.time()
+    if rescan and _wifi_scan_cache is not None:
+        cached_at, cached_networks = _wifi_scan_cache
+        if (now - cached_at) < ttl:
+            return cached_networks
+
+    if rescan:
+        trigger_wifi_rescan()
+
+    stdout, stderr, rc = run_command(wifi_list_command())
+    if rc != 0:
+        raise WifiScanError(stderr or "WiFi status unavailable")
+
+    networks = parse_nmcli_wifi_list(stdout)
+    if rescan:
+        _wifi_scan_cache = (now, networks)
+    return networks
+
+
+def active_wifi_device() -> str | None:
+    stdout, _, rc = run_command(
+        ["nmcli", "--terse", "--escape", "no", "-f", "DEVICE,TYPE,STATE", "device", "status"]
+    )
+    if rc != 0:
+        return None
+    for line in stdout.splitlines():
+        parts = line.split(":", 2)
+        if len(parts) == 3 and parts[1] == "wifi" and parts[2] == "connected":
+            return parts[0]
+    return None
+
+
+def build_wifi_status(*, rescan: bool):
+    from app.domain.network import WifiStatusResponse
+
+    networks = load_wifi_networks(rescan=rescan)
+    active_network = next((n for n in networks if n.active), None)
+    device = active_wifi_device()
+    return WifiStatusResponse(
+        connected=bool(active_network),
+        ssid=active_network.ssid if active_network else None,
+        device=device,
+        signal=active_network.signal if active_network else None,
+        networks=networks,
+    )
 
 
 def run_command_input(cmd: list[str], input_text: str, timeout: int = 10) -> tuple[str, str, int]:
@@ -55,12 +156,29 @@ def local_ip() -> str:
         sock.close()
 
 
-def public_ip() -> str:
+def _fetch_public_ip() -> str:
     try:
         with urllib.request.urlopen("https://api.ipify.org", timeout=5) as response:
             return response.read().decode().strip()
     except Exception:
         return ""
+
+
+def public_ip(*, force_refresh: bool = False) -> str:
+    """Return the machine's public IP, cached for ``network_public_ip_cache_seconds``."""
+    global _public_ip_cache
+
+    ttl = max(1, get_config().network_public_ip_cache_seconds)
+    now = time.time()
+    if not force_refresh and _public_ip_cache is not None:
+        cached_at, cached_ip = _public_ip_cache
+        if (now - cached_at) < ttl:
+            return cached_ip
+
+    resolved = _fetch_public_ip()
+    if resolved:
+        _public_ip_cache = (now, resolved)
+    return resolved
 
 # ---------------------------------------------------------------------------
 # Geo-location helper

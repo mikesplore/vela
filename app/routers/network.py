@@ -8,7 +8,15 @@ from app.domain.network import IPResponse, LocationResponse, GeoLocation, WifiNe
     WifiConnectRequest, ToggleRequest, BluetoothDevice, BluetoothDevicesResponse, BluetoothActionResponse, \
     BluetoothActionRequest, PingResponse, PingRequest, SpeedTestResponse, PortCheckResponse, HealthCheckResponse, \
     FirewallStatusResponse, VpnStatusResponse
-from app.services.network import local_ip, public_ip as p_ip, geolocate_ip, run_command_input
+from app.services.network import (
+    active_wifi_device,
+    build_wifi_status,
+    geolocate_ip,
+    local_ip,
+    public_ip as p_ip,
+    run_command_input,
+    WifiScanError,
+)
 from app.utils.run_command import run_command
 
 try:
@@ -19,6 +27,16 @@ except ImportError:  # pragma: no cover
 from app.dependencies import get_current_user
 
 router = APIRouter(prefix="/network", tags=["network"])
+
+
+def _current_wifi_status(*, rescan: bool) -> WifiStatusResponse:
+    try:
+        return build_wifi_status(rescan=rescan)
+    except WifiScanError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
 
 
 @router.get("/ip", response_model=IPResponse, dependencies=[Depends(get_current_user)])
@@ -40,88 +58,19 @@ async def network_location() -> Any:
 
 
 # ---------------------------------------------------------------------------
-# WiFi helpers
-# ---------------------------------------------------------------------------
-
-def _parse_nmcli_wifi_list(raw: str) -> List[WifiNetwork]:
-    """
-    Parse `nmcli --terse --escape no -f ACTIVE,SSID,SECURITY,SIGNAL device wifi list`.
-
-    Using --escape no means colons inside SSIDs are NOT escaped, so we must
-    split on the *first* 3 colons only to avoid breaking on SSIDs like
-    "My:Home:Network".
-    """
-    networks: List[WifiNetwork] = []
-    for line in raw.splitlines():
-        # Split into at most 4 parts so an SSID with colons stays intact
-        parts = line.split(":", 3)
-        if len(parts) < 4:
-            continue
-        active, ssid, security, signal = parts[0], parts[1], parts[2], parts[3]
-        if not ssid:
-            continue  # skip hidden networks with empty SSIDs
-        networks.append(
-            WifiNetwork(
-                ssid=ssid,
-                security=security.strip() or None,
-                signal=int(signal) if signal.strip().isdigit() else None,
-                active=active.lower() == "yes",
-            )
-        )
-    return networks
-
-
-def _active_wifi_device() -> Optional[str]:
-    """Return the name of the Wi-Fi device that is currently connected, or None."""
-    stdout, _, rc = run_command(
-        ["nmcli", "--terse", "--escape", "no", "-f", "DEVICE,TYPE,STATE", "device", "status"]
-    )
-    if rc != 0:
-        return None
-    for line in stdout.splitlines():
-        parts = line.split(":", 2)
-        if len(parts) == 3 and parts[1] == "wifi" and parts[2] == "connected":
-            return parts[0]
-    return None
-
-
-def _current_wifi_status() -> WifiStatusResponse:
-    stdout, stderr, rc = run_command(
-        ["nmcli", "--terse", "--escape", "no", "-f", "ACTIVE,SSID,SECURITY,SIGNAL", "device", "wifi", "list"]
-    )
-    if rc != 0:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=stderr or "WiFi status unavailable",
-        )
-    networks = _parse_nmcli_wifi_list(stdout)
-    active_network = next((n for n in networks if n.active), None)
-    device = _active_wifi_device()
-    return WifiStatusResponse(
-        connected=bool(active_network),
-        ssid=active_network.ssid if active_network else None,
-        device=device,
-        signal=active_network.signal if active_network else None,
-        networks=networks,
-    )
-
-
-# ---------------------------------------------------------------------------
 # WiFi endpoints
 # ---------------------------------------------------------------------------
 
 @router.get("/wifi/status", response_model=WifiStatusResponse, dependencies=[Depends(get_current_user)])
 async def wifi_status() -> Any:
-    """Return current WiFi connection status and all visible networks."""
-    return _current_wifi_status()
+    """Return current WiFi connection status using cached scan results (no rescan)."""
+    return _current_wifi_status(rescan=False)
 
 
 @router.get("/wifi/list", response_model=WifiStatusResponse, dependencies=[Depends(get_current_user)])
 async def wifi_list() -> Any:
-    """List all available WiFi networks (triggers a fresh scan)."""
-    # Trigger a rescan so the list is fresh, then return status
-    run_command(["nmcli", "device", "wifi", "rescan"])
-    return _current_wifi_status()
+    """List all available WiFi networks (triggers a fresh scan when cache is stale)."""
+    return _current_wifi_status(rescan=True)
 
 
 @router.post("/wifi/connect", response_model=WifiStatusResponse, dependencies=[Depends(get_current_user)])
@@ -136,7 +85,7 @@ async def wifi_connect(request: WifiConnectRequest) -> Any:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=stderr or stdout or "Could not connect to WiFi",
         )
-    return _current_wifi_status()
+    return _current_wifi_status(rescan=True)
 
 
 @router.post("/wifi/disconnect", response_model=IPResponse, dependencies=[Depends(get_current_user)])
@@ -144,7 +93,7 @@ async def wifi_disconnect() -> Any:
     """Disconnect from the currently active WiFi network (radio stays on)."""
     # Find the active wifi device and disconnect it — this keeps the radio on
     # so the device can reconnect later, unlike `nmcli radio wifi off`.
-    device = _active_wifi_device()
+    device = active_wifi_device()
     if not device:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

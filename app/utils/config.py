@@ -73,6 +73,12 @@ class Config(BaseSettings):
         default=None,
         validation_alias=AliasChoices("IPINFO_TOKEN", "VELA_IPINFO_TOKEN"),
     )
+    # Cache public IP lookups (ipify) to keep dashboard polls fast.
+    network_public_ip_cache_seconds: int = 120
+    # Cache full WiFi scan results from GET /network/wifi/list.
+    network_wifi_list_cache_seconds: int = 45
+    # Min seconds between expensive desktop env refreshes when X11 auth is missing.
+    desktop_env_check_interval_seconds: int = 30
     # Request audit / admin metrics dashboard
     audit_enabled: bool = True
     audit_retention_days: int = 30
