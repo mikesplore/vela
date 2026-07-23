@@ -21,6 +21,21 @@ def test_spotify_workflow_injects_activation_and_dependencies():
     assert prepared[2]["depends_on_ids"] == [prepared[1]["id"]]
 
 
+def test_spotify_workflow_injects_open_when_only_search_and_play():
+    prepared = prepare_tool_calls([
+        {"tool": "search_and_play", "tool_input": {"query": "Blinding Lights"}},
+    ])
+
+    assert [call["tool"] for call in prepared] == [
+        "open_application",
+        "toggle_play_pause",
+        "search_and_play",
+    ]
+    assert prepared[0]["tool_input"] == {"name": "spotify"}
+    assert prepared[1]["depends_on_ids"] == [prepared[0]["id"]]
+    assert prepared[2]["depends_on_ids"] == [prepared[1]["id"]]
+
+
 @pytest.mark.anyio
 async def test_dependency_plan_keeps_independent_calls_parallel():
     prepared = prepare_tool_calls([

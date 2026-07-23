@@ -833,7 +833,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "search_and_play": {
         "method": "POST",
         "path": "/spotify/search-and-play",
-        "description": "Search Spotify for a song and immediately play it. Use when the user wants to hear a specific song.",
+        "description": "Search Spotify for a song and immediately play it. If no active device is available, Vela opens the local Spotify app and registers this PC as a playback device before retrying. Use when the user wants to hear a specific song.",
         "input": {"query": "string", "device_id": "string?"},
     },
     "spotify_devices": {
@@ -1052,7 +1052,7 @@ WHEN TO USE TOOLS:
 TOOL DEPENDENCIES:
 - Independent calls can run in parallel.
 - When B must wait for A, add `"depends_on":[N]` (0-based index of prerequisite).
-- Example: open Spotify → toggle play → search_and_play with depends_on chains.
+- Spotify play: search_and_play alone is enough — the server auto-opens Spotify and activates this PC first. Optional explicit chain: open_application(spotify) → toggle_play_pause → search_and_play.
 
 CONDITIONAL ("if / otherwise"):
 - First pass: read-only inspection tools only. Don't guess the branch.

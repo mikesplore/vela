@@ -158,10 +158,14 @@ def next_execution_stage(
 def _apply_spotify_workflow(calls: list[dict[str, Any]]) -> None:
     """Enforce Spotify launch → local activation → search/play order.
 
-    Opening Spotify and starting a track cannot safely happen concurrently.
-    If a plan launches Spotify and asks to play a search result, inject the
-    local toggle activation step when the planner omitted it.
+    Opening Spotify and registering a Connect device must finish before
+    search_and_play. When the planner only emits search_and_play, inject
+    open_application(spotify) and toggle_play_pause automatically.
     """
+    search_play = next((call for call in calls if call["tool"] == "search_and_play"), None)
+    if not search_play:
+        return
+
     spotify_launch = next(
         (
             call for call in calls
@@ -170,9 +174,16 @@ def _apply_spotify_workflow(calls: list[dict[str, Any]]) -> None:
         ),
         None,
     )
-    search_play = next((call for call in calls if call["tool"] == "search_and_play"), None)
-    if not spotify_launch or not search_play:
-        return
+    if spotify_launch is None:
+        insert_at = calls.index(search_play)
+        spotify_launch = {
+            "id": "generated-spotify-open",
+            "source_index": None,
+            "tool": "open_application",
+            "tool_input": {"name": "spotify"},
+            "depends_on_ids": [],
+        }
+        calls.insert(insert_at, spotify_launch)
 
     toggle = next((call for call in calls if call["tool"] == "toggle_play_pause"), None)
     if toggle is None:
