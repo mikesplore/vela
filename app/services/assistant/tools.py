@@ -259,7 +259,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "display_screenshot": {
         "method": "GET",
         "path": "/display/screenshot",
-        "description": "Capture the current screen with flameshot to ~/Pictures. Returns a confirmation that the screenshot was taken. The image is sent to the user interface (not to the AI model), so the AI model never receives the image binary — it just gets a success confirmation. Do NOT wait for or expect image data in the result.",
+        "description": "Capture the current screen with flameshot to ~/Pictures and return it to the client as base64 image data (compressed for relay delivery when large). The AI model only receives a success confirmation — the image is delivered to the user interface separately.",
     },
     "display_record": {
         "method": "POST",

@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException, Request
 from httpx import ASGITransport, AsyncClient
 
 from app.domain.assistant import AssistantResponse
+from app.services.assistant.images import extract_image_payload
 from app.services.assistant.tools import INPUT_CONFIRM_TOOLS, TOOL_ALIASES, TOOL_DEFINITIONS
 from app.services.assistant.workflow import next_execution_stage, prepare_tool_calls
 from app.services.filesystem import validate_path
@@ -94,23 +95,12 @@ def sanitize_tool_results_for_llm(results: list[dict[str, Any]]) -> list[dict[st
 
 
 def download_image_payload(tool_results: list[dict[str, Any]]) -> tuple[str, str] | None:
-    """
-    If results are a single successful image download, return (display_name, image_base64).
-    Used for screenshot-style fast-path (no second LLM call).
-    """
-    if len(tool_results) != 1:
+    """Backward-compatible wrapper used by older tests and callers."""
+    payload = extract_image_payload(tool_results)
+    if payload is None:
         return None
-    entry = tool_results[0]
-    if entry.get("tool") != "download_file" or entry.get("error"):
-        return None
-    result = entry.get("result") or {}
-    if not isinstance(result, dict):
-        return None
-    image_b64 = result.get("image_base64")
-    if not result.get("is_image") or not image_b64:
-        return None
-    path = result.get("path") or "image"
-    return Path(str(path)).name, image_b64
+    label, image_base64, _content_type = payload
+    return label, image_base64
 
 
 async def _execute_download_file(
@@ -352,16 +342,16 @@ async def response_from_tool_results(user_message: str, tool_results: list[dict[
     # Lazy import avoids circular dependency with helpers.compose_final_reply
     from app.services.assistant.helpers import compose_final_reply
 
-    if len(tool_results) == 1 and tool_results[0].get("tool") == "display_screenshot":
-        result = tool_results[0].get("result") or {}
-        image_base64 = result.get("image_base64") if isinstance(result, dict) else None
-        if image_base64:
-            return AssistantResponse(reply="Screenshot captured.", image_base64=image_base64)
-
-    image_download = download_image_payload(tool_results)
-    if image_download:
-        name, image_base64 = image_download
-        return AssistantResponse(reply=f"Here's {name}.", image_base64=image_base64)
+    image_payload = extract_image_payload(tool_results)
+    if image_payload:
+        label, image_base64, _content_type = image_payload
+        if len(tool_results) == 1 and tool_results[0].get("tool") == "display_screenshot":
+            reply = "Screenshot captured."
+        elif len(tool_results) == 1 and tool_results[0].get("tool") == "download_file":
+            reply = f"Here's {label}."
+        else:
+            reply = f"Here's {label}."
+        return AssistantResponse(reply=reply, image_base64=image_base64)
 
     try:
         reply_text, art_url = await compose_final_reply(user_message, tool_results)

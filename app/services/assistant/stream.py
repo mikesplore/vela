@@ -48,8 +48,8 @@ from app.services.assistant.session import (
     get_or_init_session,
     trim_history,
 )
+from app.services.assistant.images import extract_image_payload
 from app.services.assistant.tool_exec import (
-    download_image_payload,
     execute_tool_audited,
     sanitize_tool_result_for_llm,
 )
@@ -246,31 +246,15 @@ async def _run_tools_and_reply(
                     yield chunk
                 return
 
-    # Deliver downloaded images on the same channel as screenshots (client already handles this).
-    for r in tool_results:
-        if r.get("tool") != "download_file" or r.get("error"):
-            continue
-        result = r.get("result") or {}
-        if isinstance(result, dict) and result.get("is_image") and result.get("image_base64"):
-            yield _sse("screenshot", {"image_base64": result["image_base64"]})
-
-    # Fast-path: screenshot only (no second LLM call — image data is too large)
-    if len(tool_results) == 1 and tool_results[0].get("tool") == "display_screenshot":
-        result = tool_results[0].get("result") or {}
-        img = result.get("image_base64") if isinstance(result, dict) else None
-        if img:
-            yield _sse("screenshot", {"image_base64": img})
-        yield _sse_content("Screenshot captured.")
-        history.append({"role": "assistant", "content": "Screenshot captured."})
-        SESSION_STORE[current_user] = trim_history(history)
-        yield _sse_done()
-        return
-
-    # Fast-path: single image download (same as screenshot — skip second LLM call)
-    image_download = download_image_payload(tool_results)
-    if image_download:
-        name, _img = image_download
-        reply = f"Here's {name}."
+    # Deliver image payloads on the screenshot channel (works for any tool count).
+    image_payload = extract_image_payload(tool_results)
+    if image_payload:
+        label, image_base64, content_type = image_payload
+        yield _sse("screenshot", {"image_base64": image_base64, "content_type": content_type})
+        if len(tool_results) == 1 and tool_results[0].get("tool") == "display_screenshot":
+            reply = "Screenshot captured."
+        else:
+            reply = f"Here's {label}."
         yield _sse_content(reply)
         history.append({"role": "assistant", "content": reply})
         SESSION_STORE[current_user] = trim_history(history)
