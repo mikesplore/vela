@@ -33,6 +33,20 @@ def kill_processes_by_name(name: str) -> int:
     return killed_count
 
 
+def is_process_running(name: str) -> tuple[bool, int, list[int]]:
+    """Return whether any process matches the given name (case-insensitive)."""
+    pids: list[int] = []
+    needle = name.lower()
+    for proc in psutil.process_iter(["pid", "name"]):
+        try:
+            proc_name = proc.info.get("name")
+            if proc_name and proc_name.lower() == needle:
+                pids.append(int(proc.info["pid"]))
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return bool(pids), len(pids), pids
+
+
 def spawn_detached(argv: list[str]) -> LaunchResult:
     """Launch a process outside the vela.service cgroup when possible.
 

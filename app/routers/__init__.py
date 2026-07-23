@@ -5,6 +5,7 @@ from .display import router as display_router
 from .filesystem import router as filesystem_router
 from .input_control import router as input_control_router
 from .maintenance import router as maintenance_router
+from .docker import router as docker_router
 from .media import router as media_router
 from .monitoring import router as monitoring_router
 from .network import router as network_router
@@ -34,6 +35,7 @@ all_routers = [
     security_router,
     scheduler_router,
     maintenance_router,
+    docker_router,
     media_router,
     clipboard_router,
     assistant_router,

@@ -432,8 +432,14 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     # ── Process control ───────────────────────────────────────────────────────
     "list_processes": {
         "method": "GET",
-        "path": "/processes/list",
+        "path": "/processes",
         "description": "Full list of all running processes with PIDs. Use when the user wants to find a specific process by name or get a PID to kill. Do NOT use to see what is consuming the most resources — use get_top_processes for that.",
+    },
+    "is_process_running": {
+        "method": "GET",
+        "path": "/processes/running/{name}",
+        "description": "Check whether a process or app is currently running by name. Use FIRST when asked if an application/process is open — do NOT launch it just to check.",
+        "input": {"name": "string"},
     },
     "kill_process": {
         "method": "DELETE",
@@ -493,16 +499,10 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "input": {"task_id": "string"},
     },
     # ── Process control (extended) ────────────────────────────────────────────
-    "launch_process": {
-        "method": "POST",
-        "path": "/processes/launch",
-        "description": "Launch a raw shell command or system binary with arguments (e.g. 'bash', 'python3', 'ffmpeg'). Use for scripts and CLI tools. Do NOT use for named desktop apps — use open_application for those.",
-        "input": {"command": "string", "args": "array of strings"},
-    },
     "open_application": {
         "method": "POST",
         "path": "/processes/app/open",
-        "description": "Open a user-facing application by its common name (e.g. 'firefox', 'gedit', 'vlc'). Use for everyday app launches. Do NOT use for raw shell commands or system binaries — use launch_process for those.",
+        "description": "Open a user-facing application by its common name (e.g. 'firefox', 'gedit', 'vlc', 'spotify'). Use for everyday app launches.",
         "input": {"name": "string", "args": "array of strings"},
     },
     "close_application": {
@@ -641,6 +641,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "path": "/maintenance/update",
         "description": "Run a full system update (requires confirmation).",
         "input": {"confirm": "boolean"},
+        "query_input": True,
     },
     "sync_time": {
         "method": "POST",
@@ -650,31 +651,135 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "list_services": {
         "method": "GET",
         "path": "/maintenance/services",
-        "description": "List systemd services and their status.",
+        "description": "List systemd services and their status. Use filter to narrow results and scope=system|user|all for system vs user units (Vela runs as user services). Do NOT use to answer whether one specific service is running — use get_service_status instead.",
+        "input": {"filter": "string?", "scope": "system|user|all"},
+    },
+    "get_service_status": {
+        "method": "GET",
+        "path": "/maintenance/service/status",
+        "description": "Check whether a specific systemd service is running, failed, or stopped. Use FIRST when the user asks if a service is up/running/active. Do NOT start or restart the service to answer a status question.",
+        "input": {"name": "string", "scope": "system|user|all"},
+    },
+    "list_failed_services": {
+        "method": "GET",
+        "path": "/maintenance/services/failed",
+        "description": "List failed systemd units from the current boot.",
+        "input": {"scope": "system|user|all"},
+    },
+    "list_timers": {
+        "method": "GET",
+        "path": "/maintenance/timers",
+        "description": "List systemd timers and when they next run.",
+        "input": {"filter": "string?", "scope": "system|user|all"},
+    },
+    "check_package_installed": {
+        "method": "GET",
+        "path": "/maintenance/package-installed",
+        "description": "Check whether a package is installed (apt/dnf/pacman).",
+        "input": {"name": "string"},
+    },
+    "get_boot_errors": {
+        "method": "GET",
+        "path": "/maintenance/boot-errors",
+        "description": "Recent error-level journal entries from the current boot.",
+        "input": {"lines": "integer 1-500"},
     },
     "restart_service": {
         "method": "POST",
         "path": "/maintenance/service/restart",
-        "description": "Restart a systemd service.",
-        "input": {"name": "string"},
+        "description": "Restart a systemd service. Use only when the user asks to restart/fix it — not to check status.",
+        "input": {"name": "string", "scope": "system|user|all"},
+        "query_input": True,
     },
     "stop_service": {
         "method": "POST",
         "path": "/maintenance/service/stop",
         "description": "Stop a systemd service.",
-        "input": {"name": "string"},
+        "input": {"name": "string", "scope": "system|user|all"},
+        "query_input": True,
     },
     "start_service": {
         "method": "POST",
         "path": "/maintenance/service/start",
-        "description": "Start a systemd service.",
-        "input": {"name": "string"},
+        "description": "Start a systemd service. Use get_service_status first when the user asks if it is running; only start when they ask to start it or it is down and they want it fixed.",
+        "input": {"name": "string", "scope": "system|user|all"},
+        "query_input": True,
+    },
+    # ── Docker ────────────────────────────────────────────────────────────────
+    "get_docker_info": {
+        "method": "GET",
+        "path": "/docker/info",
+        "description": "Check whether Docker is installed and the daemon is running.",
+    },
+    "list_docker_containers": {
+        "method": "GET",
+        "path": "/docker/containers",
+        "description": "List Docker containers. Use when the user asks what containers are running or to find a container by name/image.",
+        "input": {"all": "boolean", "filter": "string?"},
+    },
+    "get_container_status": {
+        "method": "GET",
+        "path": "/docker/containers/{name_or_id}",
+        "description": "Detailed status for one Docker container. Use FIRST when asked if a container is running.",
+        "input": {"name_or_id": "string"},
+    },
+    "get_container_logs": {
+        "method": "GET",
+        "path": "/docker/containers/{name_or_id}/logs",
+        "description": "Recent logs from a Docker container.",
+        "input": {"name_or_id": "string", "lines": "integer 1-1000"},
+    },
+    "start_container": {
+        "method": "POST",
+        "path": "/docker/containers/{name_or_id}/start",
+        "description": "Start a Docker container. Check status first unless the user explicitly asked to start it.",
+        "input": {"name_or_id": "string"},
+    },
+    "stop_container": {
+        "method": "POST",
+        "path": "/docker/containers/{name_or_id}/stop",
+        "description": "Stop a Docker container.",
+        "input": {"name_or_id": "string"},
+    },
+    "restart_container": {
+        "method": "POST",
+        "path": "/docker/containers/{name_or_id}/restart",
+        "description": "Restart a Docker container.",
+        "input": {"name_or_id": "string"},
+    },
+    "compose_status": {
+        "method": "GET",
+        "path": "/docker/compose",
+        "description": "List services from a Docker Compose project.",
+        "input": {"project_directory": "string?", "project": "string?"},
     },
     # ── Network (extended) ────────────────────────────────────────────────────
     "speed_test": {
         "method": "GET",
         "path": "/network/speed-test",
         "description": "Run a network speed test (download, upload, ping).",
+    },
+    "check_port": {
+        "method": "GET",
+        "path": "/network/port/{port}",
+        "description": "Find what process is listening on a TCP port on this machine. Use when the user asks what service/app uses a port, what's on port X, or if a port is open (e.g. 8765 for the local Vela API). Returns PID, process name, and command line.",
+        "input": {"port": "integer"},
+    },
+    "health_check": {
+        "method": "GET",
+        "path": "/network/health-check",
+        "description": "Probe an HTTP(S) URL and report whether it responds.",
+        "input": {"url": "string"},
+    },
+    "get_firewall_status": {
+        "method": "GET",
+        "path": "/network/firewall",
+        "description": "Get ufw firewall status when installed.",
+    },
+    "get_vpn_status": {
+        "method": "GET",
+        "path": "/network/vpn",
+        "description": "Check whether a VPN interface or NetworkManager VPN connection is active.",
     },
     # ── Monitoring (extended) ─────────────────────────────────────────────────
     "monitor_battery_health": {
@@ -742,6 +847,13 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "method": "GET",
         "path": "/alerts/stats",
         "description": "Get current system stats on demand: CPU usage, memory, vnstat network (today + month), top processes, uptime. Use when the user asks 'how's my system', 'give me stats', 'show system status'.",
+    },
+    # ── Push ──────────────────────────────────────────────────────────────────
+    "send_push_notification": {
+        "method": "POST",
+        "path": "/push/send",
+        "description": "Send a push notification to the user's registered mobile devices.",
+        "input": {"title": "string", "body": "string", "data": "object?"},
     },
     # ── Spotify ────────────────────────────────────────────────────────────────
     "search_and_play": {
@@ -865,7 +977,6 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "list_jobs": "Listing scheduled tasks",
     "cancel_job": "Cancelling scheduled task",
     "run_job_now": "Running scheduled task now",
-    "launch_process": "Launching process",
     "open_application": "Opening application",
     "close_application": "Closing application",
     "active_window": "Reading active window",
@@ -894,10 +1005,29 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "run_update": "Running system update",
     "sync_time": "Syncing system clock",
     "list_services": "Listing services",
+    "get_service_status": "Checking service status",
+    "list_failed_services": "Listing failed services",
+    "list_timers": "Listing systemd timers",
+    "check_package_installed": "Checking package installation",
+    "get_boot_errors": "Reading boot errors",
     "restart_service": "Restarting service",
     "stop_service": "Stopping service",
     "start_service": "Starting service",
+    "get_docker_info": "Checking Docker status",
+    "list_docker_containers": "Listing Docker containers",
+    "get_container_status": "Checking container status",
+    "get_container_logs": "Reading container logs",
+    "start_container": "Starting container",
+    "stop_container": "Stopping container",
+    "restart_container": "Restarting container",
+    "compose_status": "Checking compose services",
     "speed_test": "Running speed test",
+    "check_port": "Checking port",
+    "health_check": "Probing endpoint",
+    "get_firewall_status": "Checking firewall",
+    "get_vpn_status": "Checking VPN status",
+    "is_process_running": "Checking if process is running",
+    "send_push_notification": "Sending push notification",
     "monitor_battery_health": "Checking battery health",
     "get_uptime": "Checking system uptime",
     "get_system_config": "Reading system config",
@@ -947,6 +1077,7 @@ WHEN TO USE TOOLS:
 - If no tool applies and it's in Vela's scope but unsupported, use tool=none and say there's no tool.
 - If it's pure conversation (thanks, hi, joke in scope), tool=none with a short conversational_reply.
 - **Nicknames / "call me X" / "call yourself X":** no tools. tool=none only. Refuse in conversational_reply — disgusted/blunt ("Ew.", "Wtf.", "That's weird.", "No."). Never use their requested name.
+- **Inspection / status / diagnostics:** read-only tools only. No arbitrary shell or process launch for checks.
 
 TOOL DEPENDENCIES:
 - Independent calls can run in parallel.
@@ -969,6 +1100,12 @@ COMMON PATTERNS (hints only — adapt, extend, ignore if wrong):
 - system check → get_snapshot
 - bluetooth on/off → toggle_bluetooth
 - kill by pid/name → kill_process / kill_process_by_name
+- is service running? → get_service_status (scope=all for Vela user units); answer before start/restart
+- are containers running? → list_docker_containers or get_container_status; answer before start/restart
+- is app/process open? → is_process_running; do NOT open_application just to check
+- port listening / what uses port X / what's on 8765? → check_port ONLY
+- HTTP endpoint up? → health_check (e.g. http://127.0.0.1:8765/health for Vela API)
+- docker/compose status → get_docker_info, list_docker_containers, compose_status
 
 RESPONSE SHAPES:
 - Action only: [{{"tool":"mute_audio","tool_input":{{"muted":true}}}}]

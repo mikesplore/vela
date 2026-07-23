@@ -6,8 +6,26 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.dependencies import get_current_user
 from app.domain.audio import ActionResponse
-from app.domain.maintenance import LogResponse, UpdateEntry, UpdateResponse, ServiceListResponse
-from app.services.maintenance import detect_package_manager, list_systemd_services
+from app.domain.maintenance import (
+    BootErrorsResponse,
+    LogResponse,
+    PackageInstalledResponse,
+    ServiceListResponse,
+    ServiceStatusResponse,
+    TimerListResponse,
+    UpdateEntry,
+    UpdateResponse,
+)
+from app.services.maintenance import (
+    detect_package_manager,
+    get_boot_errors,
+    get_service_status,
+    is_package_installed,
+    list_failed_services,
+    list_systemd_services,
+    list_systemd_timers,
+    service_action,
+)
 from app.utils.run_command import run_command
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
@@ -124,35 +142,93 @@ async def sync_time() -> Any:
 
 
 @router.get("/services", response_model=ServiceListResponse, dependencies=[Depends(get_current_user)])
-async def list_services() -> Any:
+async def list_services(
+    filter: str | None = Query(None, description="Filter by service name or description"),
+    scope: str = Query("system", pattern="^(system|user|all)$"),
+) -> Any:
     """List systemd services and their status."""
-    services, error = list_systemd_services()
+    services, error = list_systemd_services(filter_text=filter, scope=scope)
     if error:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error)
     return ServiceListResponse(services=services)
 
 
-def _service_action(name: str, action: str) -> ActionResponse:
-    stdout, stderr, rc = run_command(["systemctl", action, name])
-    if rc != 0:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=stderr or stdout or f"Could not {action} service")
-    return ActionResponse(success=True, message=f"Service {name} {action}ed.")
+@router.get("/service/status", response_model=ServiceStatusResponse, dependencies=[Depends(get_current_user)])
+async def service_status(
+    name: str = Query(...),
+    scope: str = Query("all", pattern="^(system|user|all)$"),
+) -> Any:
+    """Get status for a single systemd service."""
+    status_info, error = get_service_status(name, scope=scope)
+    if error or not status_info:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=error or "Service not found")
+    return status_info
+
+
+@router.get("/services/failed", response_model=ServiceListResponse, dependencies=[Depends(get_current_user)])
+async def failed_services(scope: str = Query("system", pattern="^(system|user|all)$")) -> Any:
+    """List failed systemd units."""
+    services, error = list_failed_services(scope=scope)
+    if error:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error)
+    return ServiceListResponse(services=services)
+
+
+@router.get("/timers", response_model=TimerListResponse, dependencies=[Depends(get_current_user)])
+async def list_timers(
+    filter: str | None = Query(None, description="Filter by timer name or description"),
+    scope: str = Query("system", pattern="^(system|user|all)$"),
+) -> Any:
+    """List systemd timers."""
+    timers, error = list_systemd_timers(filter_text=filter, scope=scope)
+    if error:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error)
+    return TimerListResponse(timers=timers)
+
+
+@router.get("/package-installed", response_model=PackageInstalledResponse, dependencies=[Depends(get_current_user)])
+async def package_installed(name: str = Query(...)) -> Any:
+    """Check whether a package is installed."""
+    return is_package_installed(name)
+
+
+@router.get("/boot-errors", response_model=BootErrorsResponse, dependencies=[Depends(get_current_user)])
+async def boot_errors(lines: int = Query(50, ge=1, le=500)) -> Any:
+    """Return recent error-level journal entries from the current boot."""
+    return get_boot_errors(lines=lines)
 
 
 @router.post("/service/restart", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
-async def restart_service(name: str = Query(...)) -> Any:
+async def restart_service(
+    name: str = Query(...),
+    scope: str = Query("all", pattern="^(system|user|all)$"),
+) -> Any:
     """Restart a systemd service."""
-    return _service_action(name, "restart")
+    response, error = service_action(name, "restart", scope=scope)
+    if error and not response.success:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error)
+    return response
 
 
 @router.post("/service/stop", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
-async def stop_service(name: str = Query(...)) -> Any:
+async def stop_service(
+    name: str = Query(...),
+    scope: str = Query("all", pattern="^(system|user|all)$"),
+) -> Any:
     """Stop a systemd service."""
-    return _service_action(name, "stop")
+    response, error = service_action(name, "stop", scope=scope)
+    if error and not response.success:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error)
+    return response
 
 
 @router.post("/service/start", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
-async def start_service(name: str = Query(...)) -> Any:
+async def start_service(
+    name: str = Query(...),
+    scope: str = Query("all", pattern="^(system|user|all)$"),
+) -> Any:
     """Start a systemd service."""
-    return _service_action(name, "start")
+    response, error = service_action(name, "start", scope=scope)
+    if error and not response.success:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error)
+    return response

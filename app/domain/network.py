@@ -95,3 +95,36 @@ class SpeedTestResponse(BaseModel):
     download_mbps: float
     upload_mbps: float
     ping_ms: float
+
+
+class PortProcess(BaseModel):
+    pid: int
+    name: str
+    cmdline: List[str] = Field(default_factory=list)
+    exe: Optional[str] = None
+
+
+class PortCheckResponse(BaseModel):
+    port: int
+    listening: bool
+    processes: List[PortProcess] = Field(default_factory=list)
+
+
+class HealthCheckResponse(BaseModel):
+    url: str
+    reachable: bool
+    status_code: Optional[int] = None
+    elapsed_ms: Optional[float] = None
+    error: Optional[str] = None
+
+
+class FirewallStatusResponse(BaseModel):
+    available: bool
+    active: Optional[bool] = None
+    status: str
+
+
+class VpnStatusResponse(BaseModel):
+    connected: bool
+    interfaces: List[str] = Field(default_factory=list)
+    connections: List[str] = Field(default_factory=list)

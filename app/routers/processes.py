@@ -9,8 +9,9 @@ from pydantic import BaseModel
 
 from app.dependencies import get_current_user
 from app.domain.processes import ProcessInfo
-from app.domain.processes import ProcessList, ActionResponse, LaunchRequest, ApplicationRequest, ApplicationCloseRequest
+from app.domain.processes import ProcessList, ActionResponse, LaunchRequest, ApplicationRequest, ApplicationCloseRequest, ProcessRunningResponse
 from app.services.processes import kill_processes_by_name as kill_processes_by_name_svc
+from app.services.processes import is_process_running as is_process_running_svc
 from app.services.processes import spawn_detached
 from app.utils.run_command import run_command
 
@@ -43,6 +44,13 @@ async def list_processes() -> Any:
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return ProcessList(processes=sorted(processes, key=lambda item: item.cpu_percent, reverse=True))
+
+
+@router.get("/running/{name}", response_model=ProcessRunningResponse, dependencies=[Depends(get_current_user)])
+async def process_running(name: str) -> Any:
+    """Check whether a process is currently running by name."""
+    running, count, pids = is_process_running_svc(name)
+    return ProcessRunningResponse(name=name, running=running, count=count, pids=pids)
 
 
 @router.delete("/{pid}", response_model=ActionResponse, dependencies=[Depends(get_current_user)])

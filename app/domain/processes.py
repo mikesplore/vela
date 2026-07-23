@@ -34,3 +34,10 @@ class ActionResponse(BaseModel):
     message: Optional[str] = None
     pid: Optional[int] = None
     killed_count: Optional[int] = None
+
+
+class ProcessRunningResponse(BaseModel):
+    name: str
+    running: bool
+    count: int
+    pids: List[int] = Field(default_factory=list)

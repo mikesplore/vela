@@ -355,3 +355,95 @@ def _is_vnstat_available() -> bool:
 
 # Import these here to avoid circular imports
 from app.services.monitoring import get_cpu_usage, get_ram_status
+
+
+def check_port(port: int) -> "PortCheckResponse":
+    from app.domain.network import PortCheckResponse, PortProcess
+
+    processes: list[PortProcess] = []
+    for conn in psutil.net_connections(kind="inet"):
+        if not conn.laddr or conn.laddr.port != port:
+            continue
+        if conn.status != psutil.CONN_LISTEN:
+            continue
+        if conn.pid:
+            try:
+                proc = psutil.Process(conn.pid)
+                cmdline = proc.cmdline()
+                exe = proc.exe() if proc.exe() else None
+                processes.append(
+                    PortProcess(pid=conn.pid, name=proc.name(), cmdline=cmdline, exe=exe)
+                )
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                processes.append(PortProcess(pid=conn.pid, name="unknown"))
+    return PortCheckResponse(port=port, listening=bool(processes), processes=processes)
+
+
+def health_check(url: str, timeout: float = 5.0) -> "HealthCheckResponse":
+    import time
+
+    import httpx
+
+    from app.domain.network import HealthCheckResponse
+
+    started = time.perf_counter()
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            response = client.get(url)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        return HealthCheckResponse(
+            url=url,
+            reachable=True,
+            status_code=response.status_code,
+            elapsed_ms=round(elapsed_ms, 2),
+        )
+    except Exception as exc:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        return HealthCheckResponse(
+            url=url,
+            reachable=False,
+            elapsed_ms=round(elapsed_ms, 2),
+            error=str(exc),
+        )
+
+
+def get_firewall_status() -> "FirewallStatusResponse":
+    import shutil
+
+    from app.domain.network import FirewallStatusResponse
+    from app.utils.run_command import run_command
+
+    if not shutil.which("ufw"):
+        return FirewallStatusResponse(available=False, status="ufw not installed")
+    stdout, stderr, rc = run_command(["ufw", "status", "verbose"])
+    if rc != 0:
+        return FirewallStatusResponse(available=True, status=stderr or stdout or "Could not read ufw status")
+    active = "Status: active" in stdout
+    return FirewallStatusResponse(available=True, active=active, status=stdout)
+
+
+def get_vpn_status() -> "VpnStatusResponse":
+    from app.domain.network import VpnStatusResponse
+    from app.utils.run_command import run_command
+
+    interfaces: list[str] = []
+    for pattern in ("tun", "tap", "wg", "ppp"):
+        stdout, _, rc = run_command(["ip", "-o", "link", "show", "type", pattern])
+        if rc != 0 or not stdout.strip():
+            continue
+        for line in stdout.splitlines():
+            parts = line.split(":", 2)
+            if len(parts) >= 2:
+                iface = parts[1].strip().split("@", 1)[0]
+                if iface and iface not in interfaces:
+                    interfaces.append(iface)
+
+    connections: list[str] = []
+    stdout, _, rc = run_command(["nmcli", "-t", "-f", "NAME,TYPE,DEVICE", "connection", "show", "--active"])
+    if rc == 0:
+        for line in stdout.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 2 and "vpn" in parts[1].lower():
+                connections.append(parts[0])
+
+    return VpnStatusResponse(connected=bool(interfaces or connections), interfaces=interfaces, connections=connections)

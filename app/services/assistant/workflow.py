@@ -22,7 +22,9 @@ def _is_observation_tool(tool_name: str) -> bool:
     return (
         tool_name.startswith("get_")
         or tool_name.startswith("list_")
-        or tool_name in {"search_files", "active_window"}
+        or tool_name.startswith("check_")
+        or tool_name.startswith("is_")
+        or tool_name in {"search_files", "active_window", "compose_status", "health_check"}
     )
 
 

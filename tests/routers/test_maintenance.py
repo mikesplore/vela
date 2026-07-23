@@ -25,6 +25,13 @@ async def test_maintenance_logs_updates_services_and_sync(monkeypatch, async_cli
                 "",
                 0,
             )
+        if len(cmd) >= 3 and cmd[0] == "systemctl" and cmd[1] == "show":
+            return (
+                "LoadState=loaded\nActiveState=active\nSubState=running\n"
+                "Description=nginx web server\nUnitFileState=enabled",
+                "",
+                0,
+            )
         if cmd[:2] == ["systemctl", "restart"]:
             return "", "", 0
         if cmd[:2] == ["systemctl", "stop"]:

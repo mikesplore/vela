@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,15 @@ def _format_bytes(num: int) -> str:
             return f"{value:.1f} {unit}"
         value /= 1024
     return f"{num} B"
+
+
+def _substitute_path_params(path: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    remaining = dict(payload)
+    for key in re.findall(r"\{(\w+)\}", path):
+        if key not in remaining:
+            raise ValueError(f"tool_input.{key} is required")
+        path = path.replace(f"{{{key}}}", quote_plus(str(remaining.pop(key))))
+    return path, remaining
 
 
 def _detect_image(path: Path, data: bytes) -> tuple[bool, str]:
@@ -180,21 +190,24 @@ async def _execute_tool(
 
     tool = TOOL_DEFINITIONS[tool_name]
     path = tool["path"]
+    payload = dict(tool_input or {})
 
     if tool_name == "kill_process_by_name":
-        name = tool_input.get("name")
+        name = payload.get("name")
         if not name:
             raise ValueError("tool_input.name is required for kill_process_by_name")
         path = path.format(name=quote_plus(str(name)))
-        tool_input = {}
+        payload = {}
+
+    path, payload = _substitute_path_params(path, payload)
 
     # ── Defensive field normalisations (model hallucinations) ────────────────
     if tool_name == "set_volume":
         # Model sometimes sends "volume", "level", or "amount" instead of "value"
-        if "value" not in tool_input:
+        if "value" not in payload:
             for alias in ("volume", "level", "amount", "percent"):
-                if alias in tool_input:
-                    tool_input = {"value": int(tool_input[alias])}
+                if alias in payload:
+                    payload = {"value": int(payload[alias])}
                     break
 
     headers: dict[str, str] = {}
@@ -206,14 +219,15 @@ async def _execute_tool(
         headers["Authorization"] = auth_header
 
     if tool_name == "download_file":
-        return await _execute_download_file(app, tool_input, headers)
+        return await _execute_download_file(app, payload, headers)
 
+    method = tool["method"].upper()
+    use_query = tool.get("query_input") or method == "GET"
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        method = tool["method"].upper()
         if tool_name == "upload_file":
-            file_base64 = tool_input.get("file_base64")
-            path_value = tool_input.get("path")
+            file_base64 = payload.get("file_base64")
+            path_value = payload.get("path")
             if not path_value or not file_base64:
                 raise ValueError("tool_input.path and tool_input.file_base64 are required for upload_file")
             response = await client.post(
@@ -223,10 +237,10 @@ async def _execute_tool(
                 headers=headers,
                 timeout=20.0,
             )
-        elif method == "GET":
-            response = await client.get(path, params=tool_input or {}, headers=headers, timeout=20.0)
+        elif use_query:
+            response = await client.request(method, path, params=payload or None, headers=headers, timeout=20.0)
         else:
-            response = await client.request(method, path, json=tool_input or {}, headers=headers, timeout=20.0)
+            response = await client.request(method, path, json=payload or {}, headers=headers, timeout=20.0)
 
     try:
         data = response.json()

@@ -2,11 +2,12 @@ import json
 import re
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.domain.network import IPResponse, LocationResponse, GeoLocation, WifiNetwork, WifiStatusResponse, \
     WifiConnectRequest, ToggleRequest, BluetoothDevice, BluetoothDevicesResponse, BluetoothActionResponse, \
-    BluetoothActionRequest, PingResponse, PingRequest, SpeedTestResponse
+    BluetoothActionRequest, PingResponse, PingRequest, SpeedTestResponse, PortCheckResponse, HealthCheckResponse, \
+    FirewallStatusResponse, VpnStatusResponse
 from app.services.network import local_ip, public_ip as p_ip, geolocate_ip, run_command_input
 from app.utils.run_command import run_command
 
@@ -456,3 +457,31 @@ def system_stats(current_user: str = Depends(get_current_user)):
     """
     from app.services.network import get_system_stats_text
     return {"stats": get_system_stats_text()}
+
+
+@router.get("/port/{port}", response_model=PortCheckResponse, dependencies=[Depends(get_current_user)])
+async def port_check(port: int) -> Any:
+    """Check whether a TCP port is listening locally."""
+    from app.services.network import check_port
+    return check_port(port)
+
+
+@router.get("/health-check", response_model=HealthCheckResponse, dependencies=[Depends(get_current_user)])
+async def health_check(url: str = Query(...)) -> Any:
+    """Probe an HTTP(S) endpoint and return reachability."""
+    from app.services.network import health_check as health_check_svc
+    return health_check_svc(url)
+
+
+@router.get("/firewall", response_model=FirewallStatusResponse, dependencies=[Depends(get_current_user)])
+async def firewall_status() -> Any:
+    """Return ufw firewall status when available."""
+    from app.services.network import get_firewall_status
+    return get_firewall_status()
+
+
+@router.get("/vpn", response_model=VpnStatusResponse, dependencies=[Depends(get_current_user)])
+async def vpn_status() -> Any:
+    """Return VPN interface and active NetworkManager VPN connections."""
+    from app.services.network import get_vpn_status
+    return get_vpn_status()

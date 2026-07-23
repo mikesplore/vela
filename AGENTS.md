@@ -36,16 +36,17 @@ Linux remote-PC agent: FastAPI REST API (+ optional WebSocket tunnel to a VPS re
 | `audio` | `/audio` | Volume, mute, devices, beep |
 | `clipboard` | `/clipboard` | Read/write/clear |
 | `display` | `/display` | Screenshot, record, brightness, monitors, night light |
+| `docker` | `/docker` | Docker daemon info, containers, logs, compose status |
 | `filesystem` | `/fs` | List/tree/search/upload/download, disk usage |
 | `input_control` | `/input` | Mouse/keyboard |
-| `maintenance` | `/maintenance` | Cache, logs, updates, systemd services |
+| `maintenance` | `/maintenance` | Cache, logs, updates, systemd services/timers |
 | `media` | `/media` | Play/pause/seek, now playing |
 | `monitoring` | `/monitor` | Live metrics (CPU/RAM/GPU/IO/temps/battery/top procs) |
-| `network` | `/network` | IP, wifi, bluetooth, ping, speed, vnstat |
+| `network` | `/network` | IP, wifi, bluetooth, ping, speed, vnstat, port/health/firewall/VPN |
 | `notifications` | `/notifications` | Desktop notifications |
 | `power` | `/power` | Shutdown/restart/sleep, power profile |
-| `processes` | `/processes` | List/kill/launch apps, window control |
-| `push` | `/push` | Push device registration |
+| `processes` | `/processes` | List/kill/open apps, running check, window control (`POST /processes/launch` is API-only — not an assistant tool) |
+| `push` | `/push` | FCM device registration + send to user's devices |
 | `scheduler` | `/scheduler` | Create/list/cancel/run tasks |
 | `security` | `/security` | Lock, webcam/mic, login/SSH history |
 | `spotify` | `/spotify` | OAuth + playback helpers |
@@ -66,9 +67,54 @@ Also: `GET /`, `GET /health`, `GET /ping` in `app/main.py`.
   - `GET /monitor/snapshot` — bundles the above + CPU/RAM/GPU/temps/etc.
   - `WS /monitor/stream` — periodic snapshots
 
+## Service & container monitoring
+
+**Systemd** (`/maintenance`, logic in `app/services/maintenance.py`):
+
+- `GET /maintenance/services?filter=&scope=system|user|all` — list units (Vela itself is **user** scope: `vela.service`, `vela-agent.service`)
+- `GET /maintenance/service/status?name=` — single-unit status; prefer this over listing all services
+- `GET /maintenance/services/failed`, `GET /maintenance/timers`, `GET /maintenance/package-installed`, `GET /maintenance/boot-errors`
+- `POST /maintenance/service/start|stop|restart` — idempotent start/stop (already running/stopped → message, no-op)
+
+**Docker** (`/docker`, logic in `app/services/docker.py`):
+
+- `GET /docker/info` — CLI installed + daemon running
+- `GET /docker/containers?all=&filter=` — list containers
+- `GET /docker/containers/{id}` — detail, ports, health
+- `GET /docker/containers/{id}/logs`, `POST .../start|stop|restart`
+- `GET /docker/compose?project_directory=&project=` — compose project services
+
+**Process / network probes** (for “is X up?” without starting anything):
+
+- `GET /processes/running/{name}` — process running by name
+- `GET /network/port/{port}` — local TCP listener check
+- `GET /network/health-check?url=` — HTTP(S) probe
+- `GET /network/firewall`, `GET /network/vpn`
+
 ## Assistant tools
 
-LLM tool definitions and execution live under `app/services/assistant/` (`tools.py`, `tool_exec.py`, `prompts.py`, `workflow.py`). Routers only expose `/assistant/chat` and `/assistant/stream`.
+LLM tool definitions and execution live under `app/services/assistant/` (`tools.py`, `tool_exec.py`, `prompts.py`, `workflow.py`, `safety.py`). Routers only expose `/assistant/chat` and `/assistant/stream`.
+
+**Check-before-act (important):** status questions must use read-only tools first — `get_service_status`, `get_container_status`, `list_docker_containers`, `is_process_running`, `check_port`, `health_check`. Do not call `start_service`, `start_container`, or `open_application` to answer “is it running?”. There is no assistant tool for arbitrary binary/script launch (`launch_process` was removed); use `open_application` or `schedule_job`, or tell the user to call `POST /processes/launch` directly.
+
+Key assistant tools for ops:
+
+| Question | Tool(s) |
+|---|---|
+| Is systemd service X running? | `get_service_status` (scope=`all` for Vela user units) |
+| What services failed? | `list_failed_services` |
+| Docker containers up? | `get_docker_info`, `list_docker_containers`, `get_container_status` |
+| Compose stack status? | `compose_status` |
+| Is app/process open? | `is_process_running` |
+| Port / HTTP endpoint up? | `check_port`, `health_check` |
+
+**Tool execution notes** (`tool_exec.py`):
+
+- Path placeholders in tool defs (`{name_or_id}`, `{port}`, `{pid}`) are substituted from `tool_input`
+- Tools with `"query_input": true` send params as query string (maintenance service actions, `run_update`)
+- Read-only ops tools are low-risk; service/container start/stop/restart and `send_push_notification` are medium-risk (confirmation)
+
+Wire new capabilities: add tool in `tools.py` → add to `TOOL_DISPLAY_NAMES` → add read-only tools to `LOW_RISK_TOOLS` in `safety.py` (or medium/high as appropriate) → extend `_is_observation_tool` in `workflow.py` if check-first behavior applies.
 
 ## Agent / tunnel
 
@@ -82,7 +128,7 @@ LLM tool definitions and execution live under `app/services/assistant/` (`tools.
 
 ## Config knobs
 
-Primary: `app/utils/config.py` + `.env`. Common keys: API port, auth users, Fireworks key, relay/agent IDs, filesystem allowlist, alert/email/push settings.
+Primary: `app/utils/config.py` + `.env`. Common keys: API port, auth users, Fireworks key, relay/agent IDs, filesystem allowlist, alert/email/push settings (`VELA_FCM_SERVICE_ACCOUNT_PATH` for push send).
 
 ## How to extend a feature
 
@@ -91,10 +137,11 @@ Primary: `app/utils/config.py` + `.env`. Common keys: API port, auth users, Fire
 3. Route in `app/routers/<feature>.py`
 4. Register router in `app/routers/__init__.py` if new
 5. Test in `tests/routers/test_<feature>.py`
-6. If the assistant should call it, wire a tool in `app/services/assistant/tools.py`
+6. If the assistant should call it, wire a tool in `app/services/assistant/tools.py` (see Assistant tools above)
 
 ## Do not
 
 - Put heavy logic in routers
 - Treat `ProjectTree.md` as source of truth (includes caches)
 - Assume `doc/API_DOCUMENTATION.md` is complete — verify against the router when unsure
+- Use `start_service` / `start_container` / `open_application` to answer status questions in assistant prompts or tool descriptions

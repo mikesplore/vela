@@ -76,9 +76,27 @@ LOW_RISK_TOOLS = {
     "get_disk_usage",
     "search_files",
     "list_processes",
+    "is_process_running",
     "list_jobs",
     "cancel_job",
     "power_sleep",
+    "get_service_status",
+    "list_services",
+    "list_failed_services",
+    "list_timers",
+    "check_package_installed",
+    "get_boot_errors",
+    "get_docker_info",
+    "list_docker_containers",
+    "get_container_status",
+    "get_container_logs",
+    "compose_status",
+    "check_port",
+    "health_check",
+    "get_firewall_status",
+    "get_vpn_status",
+    "check_updates",
+    "get_logs",
 }
 
 MEDIUM_RISK_TOOLS = {
@@ -94,7 +112,6 @@ MEDIUM_RISK_TOOLS = {
     "click_mouse",
     "double_click_mouse",
     "scroll_mouse",
-    "launch_process",
     "open_application",
     "close_application",
     "open_path",
@@ -104,6 +121,13 @@ MEDIUM_RISK_TOOLS = {
     "make_directory",
     "zip_paths",
     "unzip_path",
+    "start_service",
+    "stop_service",
+    "restart_service",
+    "start_container",
+    "stop_container",
+    "restart_container",
+    "send_push_notification",
 }
 
 HIGH_RISK_TOOLS = {
@@ -180,8 +204,6 @@ def _tool_summary(tool_name: str, tool_input: dict[str, Any]) -> str:
         return "double-click the mouse"
     if tool_name == "scroll_mouse":
         return "scroll the mouse wheel"
-    if tool_name == "launch_process":
-        return f'launch {tool_input.get("command", "the requested process")}'
     if tool_name == "open_application":
         return f'open application {tool_input.get("name", "the requested app")}'
     if tool_name == "open_path":
