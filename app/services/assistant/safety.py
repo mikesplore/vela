@@ -367,6 +367,24 @@ def requires_auth(tool_name: str) -> bool:
     return get_tool_policy(tool_name).requires_auth
 
 
+def gated_tool_calls(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Tool calls that need confirmation or PIN before execution."""
+    return [
+        tc for tc in tool_calls
+        if tc.get("tool") and tc["tool"] != "none" and requires_gate(str(tc["tool"]))
+    ]
+
+
+def resolve_pending_requires_auth(tool_calls: list[dict[str, Any]]) -> bool:
+    """True when the pending batch needs PIN auth (high-risk + PIN configured)."""
+    gated = gated_tool_calls(tool_calls)
+    if not gated:
+        return False
+    return bool(config.assistant_action_pin) and any(
+        requires_auth(str(tc["tool"])) for tc in gated
+    )
+
+
 def register_pin_rejection(pending: PendingAction) -> int:
     pending.pin_attempts += 1
     # Save updated pin attempts to database

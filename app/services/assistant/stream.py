@@ -63,14 +63,15 @@ from app.services.assistant.safety import (
     build_confirmation_card,
     cancel_pending_action_by_ai,
     clear_pending_action,
+    gated_tool_calls,
     get_pending_action,
     is_affirmative,
     is_negative,
     matches_assistant_pin,
     register_pending_action,
     register_pin_rejection,
-    requires_auth,
     requires_gate,
+    resolve_pending_requires_auth,
 )
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
@@ -207,13 +208,9 @@ async def _run_tools_and_reply(
             followup_real_calls = [
                 call for call in followup_calls if call.get("tool") and call["tool"] != "none"
             ]
-            followup_gated = [
-                call for call in followup_real_calls if requires_gate(str(call["tool"]))
-            ]
+            followup_gated = gated_tool_calls(followup_real_calls)
             if followup_gated:
-                require_pin = bool(config.assistant_action_pin) and any(
-                    requires_auth(str(call["tool"])) for call in followup_gated
-                )
+                require_pin = resolve_pending_requires_auth(followup_real_calls)
                 session_id = _extract_session_id(request)
                 pending = register_pending_action(
                     current_user,
@@ -231,7 +228,6 @@ async def _run_tools_and_reply(
                     card.model_dump(),
                     _expires_in(pending.expires_at),
                 )
-                yield _sse_content(pending.prompt)
                 yield _sse_done()
                 return
 
@@ -412,6 +408,13 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
                 yield chunk
             return
 
+        if matches_assistant_pin(msg):
+            card = build_confirmation_card(pending.tool_calls, False, pin_attempts=pending.pin_attempts)
+            yield _sse_gate(pending.action_id, False, card.model_dump(), _expires_in(pending.expires_at))
+            yield _sse_content("This action needs confirmation, not your PIN. Reply yes to continue or cancel.")
+            yield _sse_done()
+            return
+
         # New unrelated message — cancel pending and continue
         cancellation_msg = cancel_pending_action_by_ai(current_user, session_id, "New request received")
         if cancellation_msg:
@@ -470,18 +473,12 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
         return
 
     # ── Gate check ────────────────────────────────────────────────────────────
-    gated_calls = [
-        tc for tc in tool_calls
-        if tc.get("tool") and tc["tool"] != "none" and requires_gate(str(tc["tool"]))
-    ]
+    gated_calls = gated_tool_calls(tool_calls)
     if gated_calls:
-        require_pin = bool(config.assistant_action_pin) and any(
-            requires_auth(str(tc["tool"])) for tc in gated_calls
-        )
+        require_pin = resolve_pending_requires_auth(tool_calls)
         pending = register_pending_action(current_user, session_id, message, tool_calls, requires_auth=require_pin)
         card = build_confirmation_card(tool_calls, require_pin, pin_attempts=0)
         yield _sse_gate(pending.action_id, require_pin, card.model_dump(), _expires_in(pending.expires_at))
-        yield _sse_content(pending.prompt)
         yield _sse_done()
         return
 

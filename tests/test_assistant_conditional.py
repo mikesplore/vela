@@ -89,3 +89,71 @@ async def test_conditional_followup_action_still_requires_confirmation(monkeypat
     assert response.status_code == 200
     assert payload["requires_confirmation"] is True
     assert payload["confirmation"]["action_type"] == "close_application"
+
+
+@pytest.mark.anyio
+async def test_stop_container_uses_confirmation_not_pin(monkeypatch, async_client):
+    from app.routers import assistant as assistant_router
+    from app.services.assistant import safety as assistant_safety
+
+    assistant_router.config.assistant_action_pin = "2468"
+    assistant_safety.config.assistant_action_pin = "2468"
+    monkeypatch.setattr(assistant_router, "get_api_key", lambda: "test-key")
+    monkeypatch.setattr(
+        assistant_router,
+        "plan_tool_calls",
+        lambda *_args, **_kwargs: [
+            {"tool": "stop_container", "tool_input": {"name_or_id": "web"}},
+        ],
+    )
+
+    response = await async_client.post(
+        "/assistant/chat",
+        json={"message": "kill the web container"},
+        headers=_headers(),
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["requires_confirmation"] is True
+    assert payload["requires_auth"] is False
+    assert payload["confirmation"]["action_type"] == "stop_container"
+
+
+@pytest.mark.anyio
+async def test_pin_while_confirmation_pending_does_not_cancel(monkeypatch, async_client):
+    from app.routers import assistant as assistant_router
+    from app.services.assistant import safety as assistant_safety
+
+    assistant_router.config.assistant_action_pin = "2468"
+    assistant_safety.config.assistant_action_pin = "2468"
+    assistant_safety.clear_pending_action("admin", "conditional-test-session")
+    monkeypatch.setattr(assistant_router, "get_api_key", lambda: "test-key")
+    monkeypatch.setattr(
+        assistant_router,
+        "plan_tool_calls",
+        lambda *_args, **_kwargs: [
+            {"tool": "stop_container", "tool_input": {"name_or_id": "web"}},
+        ],
+    )
+
+    pending_response = await async_client.post(
+        "/assistant/chat",
+        json={"message": "stop the web container"},
+        headers=_headers(),
+    )
+    assert pending_response.status_code == 200
+    assert pending_response.json()["requires_confirmation"] is True
+
+    pin_response = await async_client.post(
+        "/assistant/chat",
+        json={"message": "2468"},
+        headers=_headers(),
+    )
+
+    payload = pin_response.json()
+    assert pin_response.status_code == 200
+    assert payload["requires_confirmation"] is True
+    assert payload["requires_auth"] is False
+    assert "confirmation" in payload["reply"].lower()
+    assert assistant_safety.get_pending_action("admin", "conditional-test-session") is not None

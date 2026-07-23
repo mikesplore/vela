@@ -16,14 +16,14 @@ from app.services.assistant.safety import (
     build_confirmation_card,
     cancel_pending_action_by_ai,
     clear_pending_action,
+    gated_tool_calls,
     get_pending_action,
     is_affirmative,
     is_negative,
     matches_assistant_pin,
     register_pin_rejection,
     register_pending_action,
-    requires_auth,
-    requires_gate,
+    resolve_pending_requires_auth,
 )
 from app.services.assistant.session import (
     SESSION_STORE,
@@ -118,6 +118,20 @@ async def chat(
             history.append({"role": "assistant", "content": tool_response.reply})
             SESSION_STORE[current_user] = trim_history(history)
             return tool_response
+        if matches_assistant_pin(message):
+            confirmation_card = build_confirmation_card(
+                pending.tool_calls,
+                pending.requires_auth,
+                pin_attempts=pending.pin_attempts,
+            )
+            return AssistantResponse(
+                reply="This action needs confirmation, not your PIN. Reply yes to continue or cancel.",
+                pending_action_id=pending.action_id,
+                requires_confirmation=True,
+                requires_auth=False,
+                expires_in_seconds=expires_in_s(pending.expires_at),
+                confirmation=confirmation_card,
+            )
 
         # AI-initiated cancellation: new request overrides the pending action
         cancellation_msg = cancel_pending_action_by_ai(current_user, session_id, "New request received")
@@ -138,11 +152,9 @@ async def chat(
     if len(tool_calls) == 1 and tool_calls[0].get("tool") == "none":
         reply_text: str = tool_calls[0].get("conversational_reply") or "Hello! How can I help you today?"
     else:
-        gated_calls = [tc for tc in tool_calls if
-                       tc.get("tool") and tc["tool"] != "none" and requires_gate(str(tc["tool"]))]
+        gated_calls = gated_tool_calls(tool_calls)
         if gated_calls:
-            require_pin = bool(config.assistant_action_pin) and any(
-                requires_auth(str(tc["tool"])) for tc in gated_calls)
+            require_pin = resolve_pending_requires_auth(tool_calls)
             pending = register_pending_action(current_user, session_id, body.message, tool_calls,
                                               requires_auth=require_pin)
             reply_text = pending.prompt
@@ -171,11 +183,9 @@ async def chat(
                 followup_real_calls = [
                     tc for tc in followup_calls if tc.get("tool") and tc["tool"] != "none"
                 ]
-                followup_gated = [tc for tc in followup_real_calls if requires_gate(str(tc["tool"]))]
+                followup_gated = gated_tool_calls(followup_real_calls)
                 if followup_gated:
-                    require_pin = bool(config.assistant_action_pin) and any(
-                        requires_auth(str(tc["tool"])) for tc in followup_gated
-                    )
+                    require_pin = resolve_pending_requires_auth(followup_real_calls)
                     pending = register_pending_action(
                         current_user, session_id, body.message, followup_real_calls, requires_auth=require_pin
                     )

@@ -119,6 +119,8 @@ Key assistant tools for ops:
 - Path placeholders in tool defs (`{name_or_id}`, `{port}`, `{pid}`) are substituted from `tool_input`
 - Tools with `"query_input": true` send params as query string (maintenance service actions, `run_update`)
 - Read-only ops tools are low-risk; service/container start/stop/restart and `send_push_notification` are medium-risk (confirmation)
+- High-risk tools (`delete_path`, `upload_file`, `kill_process`, `kill_process_by_name`) require PIN when `assistant_action_pin` is set; otherwise they fall back to yes/no confirmation
+- **Gate flow:** planner emits the tool call → server registers a pending action → client gets `gate` SSE (stream) or `pending_action_id` + `confirmation` (chat). User approves with yes (medium) or PIN (high). The LLM must never ask for PIN/confirmation in chat — only the app gate UI/prompt does. "Kill/stop container" → `stop_container` (confirmation), not `kill_process` (PIN).
 
 Wire new capabilities: add tool in `tools.py` → add to `TOOL_DISPLAY_NAMES` → add read-only tools to `LOW_RISK_TOOLS` in `safety.py` (or medium/high as appropriate) → extend `_is_observation_tool` in `workflow.py` if check-first behavior applies.
 
