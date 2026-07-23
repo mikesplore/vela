@@ -130,7 +130,7 @@ Wire new capabilities: add tool in `tools.py` → add to `TOOL_DISPLAY_NAMES` �
 |---|---|
 | `app/agent/agent.py` | CLI entry (`vela-agent`) |
 | `app/agent/pairing.py` | Pairing QR/code flow |
-| `app/agent/tunnel.py` | WebSocket tunnel to VPS |
+| `app/agent/tunnel.py` | WebSocket tunnel to VPS — reuses one `httpx.AsyncClient` per connection; streams bodies >256 KiB or unknown size instead of buffering whole response in RAM |
 | `app/agent/loop.py` | Agent main loop |
 | `app/agent/credentials.py` | Credential storage |
 

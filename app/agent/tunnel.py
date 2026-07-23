@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import logging
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
@@ -11,6 +12,7 @@ from app.services import relay_status
 from app.utils.config import get_config
 
 config = get_config()
+logger = logging.getLogger(__name__)
 
 _local_token: str | None = None
 _local_token_expires = datetime.min.replace(tzinfo=timezone.utc)
@@ -18,6 +20,8 @@ _local_token_expires = datetime.min.replace(tzinfo=timezone.utc)
 HEARTBEAT_INTERVAL = 30  # seconds
 STREAM_PATH_SUFFIX = "/assistant/stream"
 CHUNK_SIZE = 4096
+# Responses larger than this are relayed in chunks instead of one JSON frame.
+BUFFER_MAX_BYTES = 256 * 1024
 
 
 def _is_streaming_request(path: str, method: str) -> bool:
@@ -28,6 +32,26 @@ def _is_streaming_response(content_type: str | None) -> bool:
     if not content_type:
         return False
     return "text/event-stream" in content_type.lower()
+
+
+def _content_length(response: httpx.Response) -> int | None:
+    raw = response.headers.get("content-length")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _should_relay_streamed(expect_stream: bool, response: httpx.Response) -> bool:
+    """Use chunked relay when the body may be large or size is unknown."""
+    if expect_stream or _is_streaming_response(response.headers.get("content-type")):
+        return True
+    length = _content_length(response)
+    if length is None:
+        return True
+    return length > BUFFER_MAX_BYTES
 
 
 def _encode_ws_chunk(chunk: bytes) -> dict[str, str]:
@@ -92,6 +116,10 @@ def _local_timeout() -> httpx.Timeout:
     return httpx.Timeout(connect=30.0, read=seconds, write=seconds, pool=seconds)
 
 
+def _local_client_limits() -> httpx.Limits:
+    return httpx.Limits(max_connections=20, max_keepalive_connections=10)
+
+
 def _prepare_body(body, headers: dict):
     if body is None:
         return None
@@ -135,9 +163,19 @@ async def _relay_streaming_response(websocket, request_id: str | None, response:
         await _send_stream_end(websocket, request_id=request_id)
 
 
-async def _relay_buffered_response(websocket, request_id: str | None, response: httpx.Response) -> None:
-    body = response.text
-    print(f"Sending response payload for request_id={request_id}, status_code={response.status_code}")
+async def _relay_buffered_response(
+        websocket,
+        request_id: str | None,
+        response: httpx.Response,
+        content: bytes,
+) -> None:
+    body = content.decode("utf-8")
+    logger.debug(
+        "Relaying buffered response request_id=%s status=%s bytes=%d",
+        request_id,
+        response.status_code,
+        len(content),
+    )
     await _send_forward_response(
         websocket,
         request_id=request_id,
@@ -145,6 +183,21 @@ async def _relay_buffered_response(websocket, request_id: str | None, response: 
         headers=dict(response.headers),
         body=body,
     )
+
+
+async def _relay_local_response(
+        websocket,
+        request_id: str | None,
+        response: httpx.Response,
+        *,
+        expect_stream: bool,
+) -> None:
+    if _should_relay_streamed(expect_stream, response):
+        await _relay_streaming_response(websocket, request_id, response)
+        return
+
+    content = await response.aread()
+    await _relay_buffered_response(websocket, request_id, response, content)
 
 
 async def _forward_local_request(
@@ -156,43 +209,45 @@ async def _forward_local_request(
         headers: dict,
         body,
         expect_stream: bool,
+        client: httpx.AsyncClient,
 ) -> None:
-    timeout = _local_timeout()
     request_kwargs = _build_request_kwargs(method, headers, body)
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        async with client.stream(method, local_url, **request_kwargs) as response:
-            if response.status_code == 401:
-                global _local_token
-                _local_token = None
-                config.local_service_auth_token = None
-                config.local_service_auth_token_expires = None
+    async with client.stream(method, local_url, **request_kwargs) as response:
+        if response.status_code == 401:
+            global _local_token
+            _local_token = None
+            config.local_service_auth_token = None
+            config.local_service_auth_token_expires = None
 
-                from app.agent.local_auth import async_get_local_auth_token
+            from app.agent.local_auth import async_get_local_auth_token
 
-                headers["Authorization"] = f"Bearer {await async_get_local_auth_token()}"
-                request_kwargs = _build_request_kwargs(method, headers, body)
-                await response.aclose()
-                async with client.stream(method, local_url, **request_kwargs) as retry_response:
-                    stream_response = (
-                        expect_stream or _is_streaming_response(retry_response.headers.get("content-type"))
-                    )
-                    if stream_response:
-                        await _relay_streaming_response(websocket, request_id, retry_response)
-                    else:
-                        await retry_response.aread()
-                        await _relay_buffered_response(websocket, request_id, retry_response)
-                return
+            headers["Authorization"] = f"Bearer {await async_get_local_auth_token()}"
+            request_kwargs = _build_request_kwargs(method, headers, body)
+            await response.aclose()
+            async with client.stream(method, local_url, **request_kwargs) as retry_response:
+                await _relay_local_response(
+                    websocket,
+                    request_id,
+                    retry_response,
+                    expect_stream=expect_stream,
+                )
+            return
 
-            stream_response = expect_stream or _is_streaming_response(response.headers.get("content-type"))
-            if stream_response:
-                await _relay_streaming_response(websocket, request_id, response)
-            else:
-                await response.aread()
-                await _relay_buffered_response(websocket, request_id, response)
+        await _relay_local_response(
+            websocket,
+            request_id,
+            response,
+            expect_stream=expect_stream,
+        )
 
 
-async def _handle_forward_request(websocket, req_data: dict) -> None:
+async def _handle_forward_request(
+        websocket,
+        req_data: dict,
+        *,
+        client: httpx.AsyncClient,
+) -> None:
     from app.agent.local_auth import async_get_local_auth_token
 
     request_id = req_data.get("request_id") or req_data.get("id")
@@ -223,7 +278,7 @@ async def _handle_forward_request(websocket, req_data: dict) -> None:
     try:
         headers["Authorization"] = f"Bearer {await async_get_local_auth_token()}"
     except Exception as auth_exc:
-        print(f"Local auth failed while processing request: {auth_exc}")
+        logger.warning("Local auth failed while processing request: %s", auth_exc)
         await _send_forward_response(
             websocket,
             request_id=request_id,
@@ -242,9 +297,10 @@ async def _handle_forward_request(websocket, req_data: dict) -> None:
             headers=headers,
             body=body,
             expect_stream=expect_stream,
+            client=client,
         )
     except httpx.TimeoutException:
-        print(f"Local request timed out after {config.local_service_timeout}s: {local_url}")
+        logger.warning("Local request timed out after %ss: %s", config.local_service_timeout, local_url)
         await _send_forward_response(
             websocket,
             request_id=request_id,
@@ -252,7 +308,7 @@ async def _handle_forward_request(websocket, req_data: dict) -> None:
             body=f"Local service did not respond within {config.local_service_timeout}s",
         )
     except httpx.ConnectError as exc:
-        print(f"Connection error to local service: {exc}")
+        logger.warning("Connection error to local service: %s", exc)
         await _send_forward_response(
             websocket,
             request_id=request_id,
@@ -269,7 +325,10 @@ async def tunnel(token):
     uri = websocket_tunnel_url(vps_url, agent_id, token)
     print(f"Connecting to {uri}...")
     try:
-        async with websockets.connect(
+        async with httpx.AsyncClient(
+                timeout=_local_timeout(),
+                limits=_local_client_limits(),
+        ) as local_client, websockets.connect(
                 uri,
                 ping_interval=20,
                 ping_timeout=20,
@@ -299,9 +358,9 @@ async def tunnel(token):
                         print(f"Unexpected message type: {msg_type}")
                         continue
 
-                    await _handle_forward_request(websocket, req_data)
+                    await _handle_forward_request(websocket, req_data, client=local_client)
                 except Exception as exc:
-                    print(f"Error processing request: {exc}")
+                    logger.exception("Error processing relay request")
                     request_id = None
                     try:
                         req_data = json.loads(message)
