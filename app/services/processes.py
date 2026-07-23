@@ -70,31 +70,125 @@ class ApplicationNotFoundError(LookupError):
         super().__init__(f"Application {query!r} not found.{hint}")
 
 
+class ApplicationNotRunningError(LookupError):
+    def __init__(self, query: str, application_name: str | None = None) -> None:
+        self.query = query
+        self.application_name = application_name
+        label = application_name or query
+        super().__init__(f"No running processes found for {label!r}.")
+
+
 def kill_processes_by_name(name: str) -> int:
-    killed_count = 0
-    for proc in psutil.process_iter(["name"]):
-        try:
-            if proc.info.get("name") and proc.info["name"].lower() == name.lower():
-                proc.terminate()
-                proc.wait(timeout=3)
-                killed_count += 1
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
-            continue
+    killed_count, _ = _terminate_processes_matching([name])
     return killed_count
 
 
 def is_process_running(name: str) -> tuple[bool, int, list[int]]:
-    """Return whether any process matches the given name (case-insensitive)."""
+    """Return whether any process matches the given app name or alias."""
+    entry = _try_resolve_application(name)
+    candidates = _collect_process_name_candidates(name, entry)
+    pids = _find_matching_pids(candidates)
+    return bool(pids), len(pids), pids
+
+
+def close_installed_application(name: str) -> tuple[int, str | None, str | None]:
+    """Close a GUI application using .desktop-aware process matching."""
+    entry = _try_resolve_application(name)
+    candidates = _collect_process_name_candidates(name, entry)
+    killed_count, killed_pids = _terminate_processes_matching(candidates)
+    if killed_count == 0:
+        raise ApplicationNotRunningError(name, entry.name if entry else None)
+    return killed_count, entry.id if entry else None, entry.name if entry else name
+
+
+def _try_resolve_application(query: str) -> DesktopEntry | None:
+    try:
+        return resolve_application(query)
+    except ApplicationNotFoundError:
+        return None
+
+
+def _collect_process_name_candidates(query: str, entry: DesktopEntry | None = None) -> list[str]:
+    candidates: list[str] = []
+
+    def add(value: str) -> None:
+        value = value.strip()
+        if not value:
+            return
+        options = {value, Path(value).name, Path(value).stem}
+        for token in options:
+            token = token.strip()
+            if not token:
+                continue
+            if token.lower() not in {existing.lower() for existing in candidates}:
+                candidates.append(token)
+
+    add(query)
+    for alias in _alias_candidates(query):
+        add(alias)
+    if entry:
+        add(_id_stem(entry.id))
+        add(entry.name)
+        for argv_part in entry.exec_argv:
+            add(argv_part)
+        for keyword in entry.keywords:
+            add(keyword)
+    return candidates
+
+
+def _process_matches_candidate(proc_info: dict, candidate: str) -> bool:
+    candidate = candidate.lower().strip()
+    if not candidate:
+        return False
+    proc_name = (proc_info.get("name") or "").lower()
+    if proc_name == candidate:
+        return True
+    cmdline = proc_info.get("cmdline") or []
+    for part in cmdline:
+        if not part:
+            continue
+        part_lower = part.lower()
+        base = Path(part).name.lower()
+        stem = Path(part).stem.lower()
+        if candidate in {base, stem}:
+            return True
+        if part_lower.endswith(f"/{candidate}") or part_lower.endswith(f"/{candidate}.bin"):
+            return True
+    return False
+
+
+def _find_matching_pids(candidates: list[str]) -> list[int]:
     pids: list[int] = []
-    needle = name.lower()
-    for proc in psutil.process_iter(["pid", "name"]):
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
-            proc_name = proc.info.get("name")
-            if proc_name and proc_name.lower() == needle:
+            if any(_process_matches_candidate(proc.info, candidate) for candidate in candidates):
                 pids.append(int(proc.info["pid"]))
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-    return bool(pids), len(pids), pids
+    return pids
+
+
+def _terminate_processes_matching(candidates: list[str]) -> tuple[int, list[int]]:
+    killed_count = 0
+    killed_pids: list[int] = []
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            if not any(_process_matches_candidate(proc.info, candidate) for candidate in candidates):
+                continue
+            proc.terminate()
+            proc.wait(timeout=3)
+            killed_count += 1
+            killed_pids.append(proc.pid)
+        except psutil.NoSuchProcess:
+            continue
+        except psutil.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=3)
+            killed_count += 1
+            killed_pids.append(proc.pid)
+        except psutil.AccessDenied:
+            continue
+    return killed_count, killed_pids
 
 
 def list_installed_applications(filter_text: str | None = None) -> InstalledApplicationList:

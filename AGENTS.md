@@ -44,7 +44,7 @@ Linux remote-PC agent: FastAPI REST API (+ optional WebSocket tunnel to a VPS re
 | `monitoring` | `/monitor` | Live metrics (CPU/RAM/GPU/IO/temps/battery/top procs) |
 | `network` | `/network` | IP, wifi, bluetooth, ping, speed, vnstat, port/health/firewall/VPN |
 | `notifications` | `/notifications` | Desktop notifications |
-| `power` | `/power` | Shutdown/restart/sleep, power profile |
+| `power` | `/power` | Shutdown/restart/sleep (API/UI only — not assistant tools), power profile |
 | `processes` | `/processes` | List/kill/open apps, installed app catalog (`.desktop`), running check, window control (`POST /processes/launch` is API-only — not an assistant tool) |
 | `push` | `/push` | FCM device registration + send to user's devices |
 | `scheduler` | `/scheduler` | Create/list/cancel/run tasks |
@@ -88,6 +88,7 @@ Also: `GET /`, `GET /health`, `GET /ping` in `app/main.py`.
 
 - `GET /processes/apps?filter=` — installed GUI apps from Freedesktop `.desktop` files (name, id, exec binary)
 - `POST /processes/app/open` — opens by friendly name / desktop id / exec; resolved via `.desktop` entries (+ `gtk-launch` when available)
+- `POST /processes/app/close` — closes using the same `.desktop`-aware process matching (exec binary + process name)
 - `GET /processes/running/{name}` — process running by name
 - `GET /network/port/{port}` — local TCP listener check
 - `GET /network/health-check?url=` — HTTP(S) probe
@@ -97,7 +98,7 @@ Also: `GET /`, `GET /health`, `GET /ping` in `app/main.py`.
 
 LLM tool definitions and execution live under `app/services/assistant/` (`tools.py`, `tool_exec.py`, `prompts.py`, `workflow.py`, `safety.py`). Routers only expose `/assistant/chat` and `/assistant/stream`.
 
-**Check-before-act (important):** status questions must use read-only tools first — `get_service_status`, `get_container_status`, `list_docker_containers`, `is_process_running`, `check_port`, `health_check`. Do not call `start_service`, `start_container`, or `open_application` to answer “is it running?”. There is no assistant tool for arbitrary binary/script launch (`launch_process` was removed); use `open_application` or `schedule_job`, or tell the user to call `POST /processes/launch` directly.
+**Check-before-act (important):** status questions must use read-only tools first — `get_service_status`, `get_container_status`, `list_docker_containers`, `is_process_running`, `check_port`, `health_check`. Do not call `start_service`, `start_container`, or `open_application` to answer “is it running?”. There is no assistant tool for arbitrary binary/script launch (`launch_process` was removed); use `open_application` or `schedule_job`, or tell the user to call `POST /processes/launch` directly. **No assistant tools for shutdown/restart/sleep/hibernate/schedule-shutdown** — use the app Power UI or `/power/*` API.
 
 Key assistant tools for ops:
 

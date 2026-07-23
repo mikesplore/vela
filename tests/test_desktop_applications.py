@@ -94,6 +94,55 @@ def test_open_installed_application_uses_gtk_launch_when_available(monkeypatch, 
     assert captured[0] == ["/usr/bin/gtk-launch", "firefox.desktop"]
 
 
+def test_close_installed_application_matches_chrome_alias(monkeypatch, desktop_dir):
+    class FakeProc:
+        def __init__(self, pid: int, name: str, cmdline: list[str]):
+            self.pid = pid
+            self.info = {"pid": pid, "name": name, "cmdline": cmdline}
+            self.terminated = False
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=3):
+            return 0
+
+        def kill(self):
+            self.terminated = True
+
+    processes = [
+        FakeProc(100, "chrome", ["/opt/google/chrome/chrome", "--profile-directory=Default"]),
+        FakeProc(200, "firefox", ["firefox"]),
+    ]
+
+    monkeypatch.setattr(processes_service.psutil, "process_iter", lambda attrs: processes)
+
+    killed_count, app_id, app_name = processes_service.close_installed_application("chrome")
+    assert killed_count == 1
+    assert app_id == "google-chrome.desktop"
+    assert app_name == "Google Chrome"
+    assert processes[0].terminated is True
+    assert processes[1].terminated is False
+
+
+def test_is_process_running_uses_desktop_resolution(monkeypatch, desktop_dir):
+    class FakeProc:
+        def __init__(self, pid: int, name: str, cmdline: list[str]):
+            self.pid = pid
+            self.info = {"pid": pid, "name": name, "cmdline": cmdline}
+
+    monkeypatch.setattr(
+        processes_service.psutil,
+        "process_iter",
+        lambda attrs: [FakeProc(100, "chrome", ["/opt/google/chrome/chrome"])],
+    )
+
+    running, count, pids = processes_service.is_process_running("Google Chrome")
+    assert running is True
+    assert count == 1
+    assert pids == [100]
+
+
 def test_resolve_application_not_found(desktop_dir):
     with pytest.raises(processes_service.ApplicationNotFoundError) as exc:
         processes_service.resolve_application("nonexistent-app")

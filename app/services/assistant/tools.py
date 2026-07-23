@@ -459,27 +459,6 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": "Kill all processes matching a name.",
         "input": {"name": "string"},
     },
-    # ── System power ──────────────────────────────────────────────────────────
-    "power_shutdown": {
-        "method": "POST",
-        "path": "/power/shutdown",
-        "description": "Shut down the machine.",
-    },
-    "power_restart": {
-        "method": "POST",
-        "path": "/power/restart",
-        "description": "Restart the machine.",
-    },
-    "power_sleep": {
-        "method": "POST",
-        "path": "/power/sleep",
-        "description": "Put the machine to sleep.",
-    },
-    "power_hibernate": {
-        "method": "POST",
-        "path": "/power/hibernate",
-        "description": "Hibernate the machine.",
-    },
     # ── Scheduler ─────────────────────────────────────────────────────────────
     "schedule_job": {
         "method": "POST",
@@ -514,7 +493,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "close_application": {
         "method": "POST",
         "path": "/processes/app/close",
-        "description": "Close an application by process name.",
+        "description": "Close a desktop/GUI application. Accepts the same friendly names and .desktop resolution as open_application (e.g. 'Chrome', 'firefox'). Matches running processes by exec binary and process name.",
         "input": {"name": "string"},
     },
     "active_window": {
@@ -535,17 +514,6 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "input": {"window_id": "string"},
     },
     # ── Power (extended) ──────────────────────────────────────────────────────
-    "schedule_shutdown": {
-        "method": "POST",
-        "path": "/power/schedule-shutdown",
-        "description": "Schedule a shutdown at a specific ISO datetime.",
-        "input": {"at": "ISO datetime"},
-    },
-    "cancel_shutdown": {
-        "method": "POST",
-        "path": "/power/cancel-shutdown",
-        "description": "Cancel a pending scheduled shutdown.",
-    },
     "get_power_profile": {
         "method": "GET",
         "path": "/power/profile",
@@ -976,10 +944,6 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "list_installed_applications": "Listing installed applications",
     "kill_process": "Killing process",
     "kill_process_by_name": "Killing processes by name",
-    "power_shutdown": "Shutting down",
-    "power_restart": "Restarting",
-    "power_sleep": "Putting to sleep",
-    "power_hibernate": "Hibernating",
     "schedule_job": "Scheduling task",
     "list_jobs": "Listing scheduled tasks",
     "cancel_job": "Cancelling scheduled task",
@@ -989,8 +953,6 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "active_window": "Reading active window",
     "minimize_window": "Minimizing window",
     "close_window": "Closing window",
-    "schedule_shutdown": "Scheduling shutdown",
-    "cancel_shutdown": "Cancelling shutdown",
     "get_power_profile": "Reading power profile",
     "set_power_profile": "Setting power profile",
     "lock_screen_security": "Locking screen",
@@ -1096,8 +1058,8 @@ CONDITIONAL ("if / otherwise"):
 - Follow-up pass (after results): actions for the branch that matched.
 
 COMMON PATTERNS (hints only — adapt, extend, ignore if wrong):
-- leaving / brb → often lock + mute + monitor off (maybe more)
-- nap / bed → dim/off screen, mute, maybe sleep
+- leaving / brb → often lock + mute + monitor off (never shutdown/restart/sleep — no tools for those)
+- nap / bed → dim/off screen, mute; do NOT shutdown/sleep the machine from chat
 - back / wake up → monitor on, unmute
 - mute / quiet → mute_audio(true); unmute → mute_audio(false)
 - volume nudge → step ~10
@@ -1111,6 +1073,7 @@ COMMON PATTERNS (hints only — adapt, extend, ignore if wrong):
 - are containers running? → list_docker_containers or get_container_status; answer before start/restart
 - is app/process open? → is_process_running; do NOT open_application just to check
 - open app / launch chrome / start firefox → open_application (names resolved via .desktop entries); if ambiguous → list_installed_applications first
+- close app / quit chrome → close_application (same name resolution as open)
 - port listening / what uses port X / what's on 8765? → check_port ONLY
 - HTTP endpoint up? → health_check (e.g. http://127.0.0.1:8765/health for Vela API)
 - docker/compose status → get_docker_info, list_docker_containers, compose_status

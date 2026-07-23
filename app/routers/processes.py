@@ -20,10 +20,12 @@ from app.domain.processes import (
 )
 from app.services.processes import (
     ApplicationNotFoundError,
+    ApplicationNotRunningError,
     kill_processes_by_name as kill_processes_by_name_svc,
     is_process_running as is_process_running_svc,
     list_installed_applications as list_installed_applications_svc,
     open_installed_application,
+    close_installed_application,
     spawn_detached,
 )
 from app.utils.run_command import run_command
@@ -143,11 +145,21 @@ async def open_application(request: ApplicationRequest) -> Any:
 
 @router.post("/app/close", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
 async def close_application(request: ApplicationCloseRequest) -> Any:
-    """Close an application by process name."""
-    killed_count = kill_processes_by_name_svc(request.name)
-    if killed_count == 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No matching application processes found")
-    return ActionResponse(success=True, message=f"Closed {killed_count} process(es).", killed_count=killed_count)
+    """Close an application by friendly name, .desktop id, or process name."""
+    try:
+        killed_count, application_id, application_name = close_installed_application(request.name)
+        label = application_name or request.name
+        return ActionResponse(
+            success=True,
+            message=f"Closed {killed_count} process(es) for {label}.",
+            killed_count=killed_count,
+            application_id=application_id,
+            application_name=application_name,
+        )
+    except ApplicationNotRunningError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
 
 
 class WindowActionRequest(BaseModel):

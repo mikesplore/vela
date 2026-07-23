@@ -80,7 +80,6 @@ LOW_RISK_TOOLS = {
     "list_installed_applications",
     "list_jobs",
     "cancel_job",
-    "power_sleep",
     "get_service_status",
     "list_services",
     "list_failed_services",
@@ -136,9 +135,6 @@ HIGH_RISK_TOOLS = {
     "upload_file",
     "kill_process",
     "kill_process_by_name",
-    "power_shutdown",
-    "power_restart",
-    "power_hibernate",
 }
 
 PIN_MAX_ATTEMPTS = 3
@@ -177,12 +173,6 @@ def _tool_summary(tool_name: str, tool_input: dict[str, Any]) -> str:
         return f'rename {tool_input.get("from", "the source path")} to {tool_input.get("to", "the destination path")} '
     if tool_name == "upload_file":
         return f'upload a file to {tool_input.get("path", "the selected destination")}'
-    if tool_name == "power_shutdown":
-        return "shut down the machine"
-    if tool_name == "power_restart":
-        return "restart the machine"
-    if tool_name == "power_hibernate":
-        return "hibernate the machine"
     if tool_name == "connect_wifi":
         return f'connect to WiFi network {tool_input.get("ssid", "<unknown>")}'
     if tool_name == "toggle_wifi":
