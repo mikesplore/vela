@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from app.services.assistant.tool_exec import execute_tool_plan
-from app.services.assistant.workflow import prepare_tool_calls
+from app.services.assistant.workflow import enrich_tool_calls, prepare_tool_calls
 
 
 def test_spotify_workflow_injects_activation_and_dependencies():
@@ -72,3 +72,27 @@ async def test_failed_prerequisite_skips_dependent_call():
     assert executed == ["open_application"]
     assert all(result["error"] for result in results)
     assert results[-1]["error"] == "Skipped because prerequisite tool failed."
+
+
+def test_enrich_tool_calls_infers_close_application_name():
+    enriched = enrich_tool_calls(
+        [{"tool": "close_application", "tool_input": {}}],
+        "close spotify",
+    )
+    assert enriched[0]["tool_input"] == {"name": "spotify"}
+
+
+def test_enrich_tool_calls_infers_open_application_name():
+    enriched = enrich_tool_calls(
+        [{"tool": "open_application", "tool_input": {}}],
+        "launch google chrome",
+    )
+    assert enriched[0]["tool_input"] == {"name": "google chrome"}
+
+
+def test_prepare_tool_calls_infers_name_for_pending_close():
+    prepared = prepare_tool_calls(
+        [{"tool": "close_application", "tool_input": {}}],
+        "close spotify",
+    )
+    assert prepared[0]["tool_input"] == {"name": "spotify"}

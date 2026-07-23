@@ -161,7 +161,7 @@ async def _run_tools_and_reply(
     if already_running is None:
         already_running = set()
 
-    prepared_calls = prepare_tool_calls(tool_calls)
+    prepared_calls = prepare_tool_calls(tool_calls, user_message)
     completed: dict[str, dict] = {}
     tool_results: list[dict] = []
 

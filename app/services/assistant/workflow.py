@@ -6,6 +6,15 @@ from typing import Any
 
 
 _CONDITIONAL_REQUEST = re.compile(r"\bif\b|\botherwise\b|\bdepending\s+on\b", re.IGNORECASE)
+_APPLICATION_TOOLS = frozenset({"open_application", "close_application"})
+_OPEN_VERBS = re.compile(
+    r"\b(?:open|launch|start|run)\s+(?:the\s+)?(?:app(?:lication)?\s+)?(?P<name>.+?)(?:\s+app(?:lication)?)?\.?\s*$",
+    re.IGNORECASE,
+)
+_CLOSE_VERBS = re.compile(
+    r"\b(?:close|quit|exit|stop|kill)\s+(?:the\s+)?(?:app(?:lication)?\s+)?(?P<name>.+?)(?:\s+app(?:lication)?)?\.?\s*$",
+    re.IGNORECASE,
+)
 
 
 def needs_conditional_followup(user_message: str, tool_calls: list[dict[str, Any]]) -> bool:
@@ -28,12 +37,50 @@ def _is_observation_tool(tool_name: str) -> bool:
     )
 
 
-def prepare_tool_calls(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _infer_application_name(user_message: str, *, for_close: bool) -> str | None:
+    pattern = _CLOSE_VERBS if for_close else _OPEN_VERBS
+    match = pattern.search(user_message.strip())
+    if not match:
+        return None
+    name = match.group("name").strip()
+    return name or None
+
+
+def enrich_tool_calls(tool_calls: list[dict[str, Any]], user_message: str | None = None) -> list[dict[str, Any]]:
+    """Fill missing application names from the user's message and common aliases."""
+    if not user_message:
+        return tool_calls
+
+    enriched: list[dict[str, Any]] = []
+    for raw in tool_calls:
+        call = dict(raw)
+        tool = call.get("tool")
+        if tool not in _APPLICATION_TOOLS:
+            enriched.append(call)
+            continue
+
+        tool_input = dict(call.get("tool_input") or {})
+        if not tool_input.get("name"):
+            for alias in ("application", "app", "application_name"):
+                if alias in tool_input:
+                    tool_input["name"] = tool_input.pop(alias)
+                    break
+        if not tool_input.get("name"):
+            inferred = _infer_application_name(user_message, for_close=(tool == "close_application"))
+            if inferred:
+                tool_input["name"] = inferred
+        call["tool_input"] = tool_input
+        enriched.append(call)
+    return enriched
+
+
+def prepare_tool_calls(tool_calls: list[dict[str, Any]], user_message: str | None = None) -> list[dict[str, Any]]:
     """Normalize planner calls and add safe, deterministic Spotify dependencies.
 
     ``depends_on`` values from the planner refer to positions in its original
-    JSON array. Internally, opaque IDs are used so injected calls are safe.
+    JSON array.     Internally, opaque IDs are used so injected calls are safe.
     """
+    tool_calls = enrich_tool_calls(tool_calls, user_message)
     prepared: list[dict[str, Any]] = []
     source_index_to_id: dict[int, str] = {}
 

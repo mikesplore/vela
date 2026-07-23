@@ -210,6 +210,14 @@ async def _execute_tool(
                     payload = {"value": int(payload[alias])}
                     break
 
+    if tool_name in {"open_application", "close_application"} and not payload.get("name"):
+        for alias in ("application", "app", "application_name"):
+            if alias in payload:
+                payload["name"] = payload.pop(alias)
+                break
+        if not payload.get("name"):
+            raise ValueError(f"tool_input.name is required for {tool_name}")
+
     headers: dict[str, str] = {}
     if tool_name != "upload_file":
         headers["Content-Type"] = "application/json"
@@ -322,8 +330,9 @@ async def execute_tool_results(
         tool_calls: list[dict[str, object]],
         auth_header: str | None,
         confirmed: bool = False,
+        user_message: str | None = None,
 ) -> list[dict[str, Any]]:
-    prepared_calls = prepare_tool_calls(tool_calls)
+    prepared_calls = prepare_tool_calls(tool_calls, user_message)
 
     async def _execute_call(call: dict[str, Any]) -> dict[str, Any]:
         return await execute_tool_audited(
@@ -369,5 +378,7 @@ async def response_from_tool_results(user_message: str, tool_results: list[dict[
 
 async def execute_tool_calls(request: Request, tool_calls: list[dict[str, object]], auth_header: str | None,
                               user_message: str = "", confirmed: bool = False) -> AssistantResponse:
-    tool_results = await execute_tool_results(request, tool_calls, auth_header, confirmed=confirmed)
+    tool_results = await execute_tool_results(
+        request, tool_calls, auth_header, confirmed=confirmed, user_message=user_message,
+    )
     return await response_from_tool_results(user_message, tool_results)

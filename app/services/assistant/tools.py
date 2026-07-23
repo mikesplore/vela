@@ -1074,8 +1074,8 @@ COMMON PATTERNS (hints only — adapt, extend, ignore if wrong):
 - is service running? → get_service_status (scope=all for Vela user units); answer before start/restart
 - are containers running? → list_docker_containers or get_container_status; answer before start/restart
 - is app/process open? → is_process_running; do NOT open_application just to check
-- open app / launch chrome / start firefox → open_application (names resolved via .desktop entries); if ambiguous → list_installed_applications first
-- close app / quit chrome → close_application (same name resolution as open)
+- open app / launch chrome / start firefox → open_application with tool_input.name (e.g. {{"name":"chrome"}})
+- close app / quit chrome → close_application with tool_input.name (e.g. {{"name":"spotify"}})
 - port listening / what uses port X / what's on 8765? → check_port ONLY
 - HTTP endpoint up? → health_check (e.g. http://127.0.0.1:8765/health for Vela API)
 - docker/compose status → get_docker_info, list_docker_containers, compose_status

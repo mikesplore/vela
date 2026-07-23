@@ -197,6 +197,8 @@ def _tool_summary(tool_name: str, tool_input: dict[str, Any]) -> str:
         return "scroll the mouse wheel"
     if tool_name == "open_application":
         return f'open application {tool_input.get("name", "the requested app")}'
+    if tool_name == "close_application":
+        return f'close application {tool_input.get("name", "the requested app")}'
     if tool_name == "open_path":
         return f'open {tool_input.get("path", "the requested path")}'
     if tool_name == "schedule_job":
@@ -289,6 +291,9 @@ def build_pending_prompt(tool_calls: list[dict[str, Any]], requires_an_auth: boo
 
 def register_pending_action(user_id: str, session_id: str, user_message: str, tool_calls: list[dict[str, Any]],
                             requires_auth: bool) -> PendingAction:
+    from app.services.assistant.workflow import enrich_tool_calls
+
+    tool_calls = enrich_tool_calls(tool_calls, user_message)
     now = datetime.now(timezone.utc)
     pending = PendingAction(
         action_id=uuid4().hex,
