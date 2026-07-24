@@ -208,29 +208,31 @@ def _probe_extra_modules(modules: dict[str, ModuleCapability]) -> None:
     # push
     push_enabled = _flag_enabled("push") if "push" in (config.feature_flags or {}) else True
     try:
-        from app.services.push import is_configured as push_configured
+        from app.services.push import get_configuration_error, is_configured as push_configured
 
+        push_err = get_configuration_error()
         push_ok = push_configured()
     except Exception:
+        push_err = "FCM service account not configured"
         push_ok = False
     modules["push"] = ModuleCapability(
         available=push_enabled and push_ok,
         config_enabled=push_enabled,
-        reason=None if push_ok else "FCM service account not configured",
+        reason=push_err if not push_ok else None,
         metadata={"configured": push_ok},
     )
 
     # alerts — email and/or push
     alerts_enabled = _flag_enabled("alerts") if "alerts" in (config.feature_flags or {}) else True
     try:
-        from app.services.alerts import RECIPIENT_EMAIL, RESEND_AVAILABLE
+        from app.services import alert_delivery
         from app.services.push import is_configured as push_configured
 
-        email_ok = RESEND_AVAILABLE and bool(RECIPIENT_EMAIL)
+        email_ok = alert_delivery.email_enabled()
         alerts_ok = email_ok or push_configured()
     except Exception:
-        alerts_ok = False
         email_ok = False
+        alerts_ok = False
     alerts_reason = None
     if not alerts_ok:
         alerts_reason = "Email (Resend) or push notifications not configured"

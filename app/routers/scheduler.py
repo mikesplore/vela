@@ -1,19 +1,12 @@
-from pathlib import Path
 from typing import Any
 
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.dependencies import get_current_user
 from app.domain.scheduler import SchedulerActionResponse, SchedulerCreateRequest, SchedulerListResponse
-from app.services.scheduler import command_runner, serialize_job
+from app.services.scheduler import command_runner, scheduler, serialize_job
 
-scheduler_db = Path.cwd() / "scheduler_jobs.sqlite"
-jobstore = {"default": SQLAlchemyJobStore(url=f"sqlite:///{scheduler_db}")}
-
-scheduler = AsyncIOScheduler(jobstores=jobstore, job_defaults={"coalesce": False, "max_instances": 1})
 router = APIRouter(prefix="/scheduler", tags=["scheduler"])
 
 
@@ -66,9 +59,6 @@ async def run_job_now(task_id: str) -> Any:
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     try:
-        # Directly invoke the job's function instead of spawning a new scheduled job.
-        # This avoids orphaned one-off jobs piling up in the job store and works
-        # regardless of whether the scheduler is running.
         job.func(**job.kwargs)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))

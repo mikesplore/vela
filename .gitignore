@@ -72,4 +72,7 @@ config.yaml
 .spotify_token_cache
 *.sqlite-wal
 *.sqlite-shm
+google-services.json
+firebase-service-account.json
+*-firebase-adminsdk-*.json
 

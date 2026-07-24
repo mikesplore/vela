@@ -6,11 +6,12 @@ from app.routers import scheduler as scheduler_module
 
 
 class FakeJob:
-    def __init__(self, job_id, kwargs, next_run_time, trigger):
+    def __init__(self, job_id, kwargs, next_run_time, trigger, func=None):
         self.id = job_id
         self.kwargs = kwargs
         self.next_run_time = next_run_time
         self.trigger = trigger
+        self.func = func or (lambda **kw: None)
 
 
 @pytest.mark.anyio
@@ -25,7 +26,13 @@ async def test_scheduler_create_list_cancel_and_run(monkeypatch, async_client):
     )
 
     def fake_add_job(func, **kwargs):
-        return fake_job
+        return FakeJob(
+            job_id="job-1",
+            kwargs={"command": "echo", "args": ["hello"], "recurring": None},
+            next_run_time=datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc),
+            trigger="date",
+            func=func,
+        )
 
     def fake_get_jobs():
         return [fake_job]

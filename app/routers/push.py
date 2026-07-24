@@ -33,7 +33,8 @@ async def send_push_notification(
     user: str = Depends(get_current_user),
 ) -> Any:
     """Send a push notification to the current user's registered devices."""
-    if not push.is_configured():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Push notifications are not configured")
+    config_error = push.get_configuration_error()
+    if config_error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=config_error)
     delivered = push.send_push(title=body.title, body=body.body, data=body.data, user_id=user)
     return PushSendResponse(success=delivered > 0, delivered=delivered, configured=True)

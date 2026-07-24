@@ -12,12 +12,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel
 
 from app.dependencies import get_current_user
+from app.services import alert_delivery
 from app.services.alerts import (
     check_and_send_spike_alert,
     send_daily_summary,
     get_system_stats_text,
     get_monitoring_status,
-    RECIPIENT_EMAIL,
     DEFAULT_CPU_THRESHOLD,
     DEFAULT_MEMORY_THRESHOLD,
     handle_alertmanager_webhook,
@@ -65,9 +65,11 @@ def trigger_spike_check(
     Manually check CPU/memory. Sends email alert if thresholds exceeded.
     Email recipient is read from RECIPIENT_EMAIL in .env (no prompt).
     """
-    from app.services.alerts import RESEND_AVAILABLE
-    if not RESEND_AVAILABLE or not RECIPIENT_EMAIL:
-        raise HTTPException(status_code=503, detail="Email not configured. Set RESEND_API_KEY and RECIPIENT_EMAIL in .env")
+    if not alert_delivery.email_enabled() and not alert_delivery.push_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Alerts not configured. Set push (FCM) and/or email (RESEND_API_KEY + RECIPIENT_EMAIL) in .env",
+        )
 
     result = check_and_send_spike_alert(cpu_threshold=cpu_threshold, memory_threshold=memory_threshold)
     if result:
@@ -80,8 +82,7 @@ def trigger_daily_summary(current_user: str = Depends(get_current_user)):
     """
     Send daily summary to RECIPIENT_EMAIL (from .env) right now.
     """
-    from app.services.alerts import RESEND_AVAILABLE
-    if not RESEND_AVAILABLE or not RECIPIENT_EMAIL:
+    if not alert_delivery.email_enabled():
         raise HTTPException(status_code=503, detail="Email not configured. Set RESEND_API_KEY and RECIPIENT_EMAIL in .env")
 
     result = send_daily_summary()
@@ -97,21 +98,21 @@ def send_test_alert(current_user: str = Depends(get_current_user)):
     Always sends regardless of system metrics.
     """
     from app.utils.emails import send_spike_alert
-    from app.services.alerts import RESEND_AVAILABLE
     import platform
 
-    if not RESEND_AVAILABLE or not RECIPIENT_EMAIL:
+    if not alert_delivery.email_enabled():
         raise HTTPException(status_code=503, detail="Email not configured. Set RESEND_API_KEY and RECIPIENT_EMAIL in .env")
 
+    recipient = alert_delivery.recipient_email()
     result = send_spike_alert(
-        to=RECIPIENT_EMAIL,
+        to=recipient,
         device_name=platform.node(),
         cpu_percent=0.0, memory_percent=0.0,
-        cpu_threshold=80.0, memory_threshold=85.0,
+        cpu_threshold=85.0, memory_threshold=85.0,
         top_process="(test)", uptime="N/A", os_info="Test alert",
     )
     if result:
-        return {"success": True, "message": f"Test email sent to {RECIPIENT_EMAIL}"}
+        return {"success": True, "message": f"Test email sent to {recipient}"}
     return {"success": False, "message": "Failed to send test email"}
 
 

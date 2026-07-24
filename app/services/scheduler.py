@@ -1,38 +1,40 @@
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import APIRouter
+
 from app.domain.scheduler import SchedulerJobInfo
 from app.services.system_info import run_command
 
-scheduler_db = Path.cwd() / "scheduler_jobs.sqlite"
-jobstore = {"default": SQLAlchemyJobStore(url=f"sqlite:///{scheduler_db}")}
+# Stable path — do not depend on process cwd (systemd uses /home/mike, dev uses project dir).
+SCHEDULER_DB = Path.home() / ".config" / "vela" / "scheduler_jobs.sqlite"
+SCHEDULER_DB.parent.mkdir(parents=True, exist_ok=True)
+
+jobstore = {"default": SQLAlchemyJobStore(url=f"sqlite:///{SCHEDULER_DB}")}
 
 scheduler = AsyncIOScheduler(jobstores=jobstore, job_defaults={"coalesce": False, "max_instances": 1})
 router = APIRouter(prefix="/scheduler", tags=["scheduler"])
 
 
-def get_scheduler():
-    """Call scheduler.start() inside your app's lifespan, e.g.:
-
-    from contextlib import asynccontextmanager
-    from fastapi import FastAPI
-    from scheduler import scheduler
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        scheduler.start()
-        yield
-        scheduler.shutdown()
-
-    app = FastAPI(lifespan=lifespan)
-    app.include_router(router)
-    """
+def get_scheduler() -> AsyncIOScheduler:
     return scheduler
 
+
+def job_next_run_time(job: Any) -> datetime | None:
+    """Return the next run time across APScheduler versions / partially loaded jobs."""
+    for attr in ("next_run_time", "next_fire_time", "scheduled_fire_time"):
+        value = getattr(job, attr, None)
+        if value is not None:
+            return value
+    return None
+
+
+def format_job_next_run(job: Any) -> str | None:
+    next_run = job_next_run_time(job)
+    return next_run.isoformat() if next_run else None
 
 
 def command_runner(command: str, args: List[str]) -> None:
@@ -40,12 +42,13 @@ def command_runner(command: str, args: List[str]) -> None:
 
 
 def serialize_job(job) -> SchedulerJobInfo:
+    next_run = job_next_run_time(job)
     return SchedulerJobInfo(
         id=job.id,
         command=job.kwargs.get("command", ""),
         args=job.kwargs.get("args", []),
-        next_run_time=job.next_run_time,
+        next_run_time=next_run,
         trigger=str(job.trigger),
         recurring=job.kwargs.get("recurring"),
-        run_at=job.next_run_time or datetime.now(timezone.utc),
+        run_at=next_run or datetime.now(timezone.utc),
     )

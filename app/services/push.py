@@ -1,6 +1,7 @@
 """Firebase Cloud Messaging delivery for registered Vela mobile devices."""
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,9 +15,34 @@ logger = logging.getLogger(__name__)
 _firebase_initialized = False
 
 
-def is_configured() -> bool:
+def _validate_service_account_file(path: Path) -> str | None:
+    """Return an error message when the path is not a Firebase Admin service account key."""
+    if not path.is_file():
+        return f"FCM service account file does not exist: {path}"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return f"FCM service account file is not valid JSON: {path}"
+    if data.get("type") == "service_account":
+        return None
+    if "project_info" in data and "client" in data:
+        return (
+            "VELA_FCM_SERVICE_ACCOUNT_PATH points to google-services.json (Android client config). "
+            "Use a Firebase Admin service account key instead: Firebase Console → Project settings → "
+            "Service accounts → Generate new private key."
+        )
+    return 'FCM service account JSON must contain "type": "service_account".'
+
+
+def get_configuration_error() -> str | None:
     path = get_config().fcm_service_account_path
-    return bool(path and Path(path).expanduser().is_file())
+    if not path:
+        return "FCM service account not configured (set VELA_FCM_SERVICE_ACCOUNT_PATH)"
+    return _validate_service_account_file(Path(path).expanduser())
+
+
+def is_configured() -> bool:
+    return get_configuration_error() is None
 
 
 def register_device(*, user_id: str, token: str, installation_id: str | None = None) -> None:
@@ -122,8 +148,9 @@ def _get_messaging():
         return None
     if not _firebase_initialized:
         credential_path = Path(path).expanduser()
-        if not credential_path.is_file():
-            logger.error("FCM service account file does not exist: %s", credential_path)
+        config_error = _validate_service_account_file(credential_path)
+        if config_error:
+            logger.error(config_error)
             return None
         firebase_admin.initialize_app(credentials.Certificate(str(credential_path)))
         _firebase_initialized = True

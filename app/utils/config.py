@@ -61,6 +61,13 @@ class Config(BaseSettings):
     assistant_action_pin: str | None = None
     assistant_action_timeout_seconds: int = 120
     daily_summary_time: str = "18:00"
+    # IANA timezone for daily_summary_time (e.g. Africa/Nairobi, America/New_York).
+    alert_timezone: str = "UTC"
+    cpu_alert_threshold: float = 85.0
+    memory_alert_threshold: float = 85.0
+    disk_alert_threshold: float = 80.0
+    spike_check_interval_minutes: int = 5
+    alert_cooldown_minutes: int = 15
     fcm_service_account_path: str | None = None
     alertmanager_webhook_secret: str | None = None
     assistant_enable_thinking: bool = False
@@ -207,6 +214,24 @@ class Config(BaseSettings):
     def daily_summary_time_format(cls, v: str) -> str:
         if not _TIME_OF_DAY_RE.fullmatch(v):
             raise ValueError("daily_summary_time must use 24-hour HH:MM format.")
+        return v
+
+    @field_validator("alert_timezone")
+    @classmethod
+    def alert_timezone_valid(cls, v: str) -> str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(v)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"alert_timezone '{v}' is not a valid IANA timezone.") from exc
+        return v
+
+    @field_validator("cpu_alert_threshold", "memory_alert_threshold", "disk_alert_threshold")
+    @classmethod
+    def alert_threshold_range(cls, v: float) -> float:
+        if not 0 < v <= 100:
+            raise ValueError("alert thresholds must be between 0 and 100.")
         return v
 
     @field_validator("route_rate_limits")

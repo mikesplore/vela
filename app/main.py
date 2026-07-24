@@ -18,7 +18,7 @@ from app.utils.errors import ErrorResponse
 from app.middleware import RequestLoggerMiddleware
 from app.rate_limiter import limiter, limit_route
 from app.routers import all_routers
-from app.routers import scheduler as scheduler_module
+from app.services.scheduler import scheduler
 
 API_NAME = "Vela"
 API_VERSION = "1.0.0"
@@ -102,7 +102,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Could not initialize audit database: %s", e)
     try:
-        scheduler_module.scheduler.start()
+        scheduler.start()
     except Exception:
         logger.warning("Scheduler failed to start or was already running")
     try:
@@ -130,18 +130,22 @@ async def lifespan(app: FastAPI):
         logger.warning("Could not refresh capabilities: %s", e)
 
     try:
-        from app.services.alerts import setup_monitoring_schedule, RECIPIENT_EMAIL, RESEND_AVAILABLE
+        from app.services import alert_delivery
+        from app.services.alerts import setup_monitoring_schedule
         from app.services.push import is_configured as fcm_configured
 
-        if (RESEND_AVAILABLE and RECIPIENT_EMAIL) or fcm_configured():
-            setup_monitoring_schedule(daily_summary_time=config.daily_summary_time)
+        if alert_delivery.email_enabled() or fcm_configured():
+            setup_monitoring_schedule()
             logger.info(
-                "Monitoring auto-started — spikes every 5min, daily summary at %s, email: %s",
+                "Monitoring auto-started — spikes every %smin, daily summary at %s %s, email: %s, push: %s",
+                config.spike_check_interval_minutes,
                 config.daily_summary_time,
-                RECIPIENT_EMAIL,
+                config.alert_timezone,
+                alert_delivery.recipient_email() or "(none)",
+                fcm_configured(),
             )
         else:
-            logger.debug("Monitoring not auto-started: set RESEND_API_KEY + RECIPIENT_EMAIL in .env")
+            logger.debug("Monitoring not auto-started: configure email (Resend) and/or push (FCM)")
     except Exception as e:
         logger.warning("Could not auto-start monitoring: %s", e)
 
@@ -154,7 +158,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         try:
-            scheduler_module.scheduler.shutdown(wait=False)
+            scheduler.shutdown(wait=False)
         except Exception:
             logger.warning("Scheduler failed to shut down cleanly")
 
