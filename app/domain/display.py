@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 class ScreenshotResponse(BaseModel):
     image_base64: str
+    content_type: str = "image/png"
 
 
 class RecordRequest(BaseModel):

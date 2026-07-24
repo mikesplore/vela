@@ -1,10 +1,19 @@
+import base64
 import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from app.domain.display import ResolutionInfo
+from app.domain.display import ResolutionInfo, ScreenshotResponse
+from app.services.assistant.images import prepare_client_image_base64
 from app.utils.run_command import run_command
+
+
+def build_screenshot_response(png_bytes: bytes) -> ScreenshotResponse:
+    """Return relay-safe base64 for tunnel clients (compresses large PNGs to JPEG)."""
+    encoded = base64.b64encode(png_bytes).decode("utf-8")
+    prepared, content_type = prepare_client_image_base64(encoded)
+    return ScreenshotResponse(image_base64=prepared, content_type=content_type)
 
 
 

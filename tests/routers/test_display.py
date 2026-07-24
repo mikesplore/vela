@@ -19,6 +19,7 @@ async def test_display_screenshot_returns_base64(monkeypatch, async_client):
     assert response.status_code == 200
     payload = response.json()
     assert "image_base64" in payload
+    assert payload.get("content_type") == "image/png"
     decoded = base64.b64decode(payload["image_base64"])
     assert decoded.startswith(b"\x89PNG")
 

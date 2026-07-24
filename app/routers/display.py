@@ -7,7 +7,7 @@ from app.dependencies import get_current_user
 from app.domain.display import ScreenshotResponse, RecordRequest, MUTTER_POWER_SAVE_MODE_OFF, ValueResponse, \
     MUTTER_POWER_SAVE_MODE_ON, PowerSaveState, BrightnessInfo, BrightnessRequest, ResolutionInfo, ResolutionRequest, \
     RotateRequest, NightLightRequest
-from app.services.display import capture_screenshot_with_flameshot, get_display_info, set_mutter_power_save_mode, \
+from app.services.display import build_screenshot_response, capture_screenshot_with_flameshot, get_display_info, set_mutter_power_save_mode, \
     get_mutter_power_save_mode, get_brightness, set_brightness_with_backlight, first_connected_output, run_lock, \
     run_night_light
 from app.utils.run_command import run_command
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/display", tags=["display"])
 
 @router.get("/screenshot", response_model=ScreenshotResponse, dependencies=[Depends(get_current_user)])
 async def display_screenshot() -> Any:
-    """Capture the current screen and return it as a base64 PNG."""
+    """Capture the current screen and return relay-safe base64 (PNG, or JPEG if large)."""
     try:
         data = capture_screenshot_with_flameshot()
     except Exception as exc:
@@ -29,8 +29,7 @@ async def display_screenshot() -> Any:
                     + str(exc)
             ),
         )
-    encoded = base64.b64encode(data).decode("utf-8")
-    return ScreenshotResponse(image_base64=encoded)
+    return build_screenshot_response(data)
 
 
 @router.post("/record", response_model=ScreenshotResponse, dependencies=[Depends(get_current_user)])
