@@ -14,7 +14,8 @@ from app.services.assistant.safety import (
     PendingAction,
     build_confirmation_card,
 )
-from app.services.assistant.tools import SYSTEM_TOOL_PROMPT
+from app.services.assistant.tools import build_system_tool_prompt
+from app.services import capabilities as capabilities_service
 from app.utils.config import get_config
 
 config = get_config()
@@ -164,7 +165,10 @@ def _build_planner_messages(
     alongside the tool-router prompt so the model knows its domain boundaries."""
     messages = [
         {"role": "system", "content": config.assistant_system_prompt},
-        {"role": "system", "content": SYSTEM_TOOL_PROMPT},
+        {
+            "role": "system",
+            "content": build_system_tool_prompt(capabilities_service.get_available_tool_names()),
+        },
     ]
     if history:
         messages.extend(history)

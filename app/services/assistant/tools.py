@@ -1029,7 +1029,7 @@ _TOOL_LIST = "\n".join(
     for name, t in TOOL_DEFINITIONS.items()
 )
 
-SYSTEM_TOOL_PROMPT = f"""You are Vela's tool picker. Output ONLY a JSON array — no markdown wrapper, no prose outside the array.
+_TOOL_PROMPT_BODY = """You are Vela's tool picker. Output ONLY a JSON array — no markdown wrapper, no prose outside the array.
 
 JSON RULES (non-negotiable):
 1. Response starts with '[' and ends with ']'.
@@ -1086,6 +1086,28 @@ RESPONSE SHAPES:
 - Chat only: [{{"tool":"none","tool_input":{{}},"conversational_reply":"Yeah?"}}]
 
 Available tools:
-{_TOOL_LIST}
+{tool_list}
 
 Output ONLY the JSON array. When unsure between asking and acting on a safe read/action, act."""
+
+
+def build_tool_list(available_tools: set[str] | None = None) -> str:
+    """Build the tool bullet list for the planner prompt, optionally filtered."""
+    if available_tools is None:
+        items = TOOL_DEFINITIONS.items()
+    else:
+        items = ((name, t) for name, t in TOOL_DEFINITIONS.items() if name in available_tools)
+    return "\n".join(
+        "- " + name + ": " + t["description"] + (f" | input: {t['input']}" if "input" in t else "")
+        for name, t in items
+    )
+
+
+def build_system_tool_prompt(available_tools: set[str] | None = None) -> str:
+    """Build the planner system prompt, optionally limited to available tools on this host."""
+    tool_list = build_tool_list(available_tools)
+    return _TOOL_PROMPT_BODY.format(tool_list=tool_list)
+
+
+# Default unfiltered prompt — used in tests and as fallback before capabilities are loaded.
+SYSTEM_TOOL_PROMPT = build_system_tool_prompt()

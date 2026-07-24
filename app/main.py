@@ -121,6 +121,15 @@ async def lifespan(app: FastAPI):
         logger.warning("Could not refresh desktop session env: %s", e)
 
     try:
+        from app.db.capabilities import init_capabilities_db
+        from app.services import capabilities as capabilities_service
+
+        init_capabilities_db()
+        capabilities_service.refresh_capabilities()
+    except Exception as e:
+        logger.warning("Could not refresh capabilities: %s", e)
+
+    try:
         from app.services.alerts import setup_monitoring_schedule, RECIPIENT_EMAIL, RESEND_AVAILABLE
         from app.services.push import is_configured as fcm_configured
 
@@ -241,12 +250,21 @@ async def health() -> dict[str, object]:
 @app.get("/")
 async def root() -> dict[str, object]:
     enabled_modules: List[str] = [name for name, enabled in config.feature_flags.items() if enabled]
+    available_modules: List[str] = []
+    try:
+        from app.services import capabilities as capabilities_service
+
+        caps = capabilities_service.get_capabilities()
+        available_modules = sorted(name for name, mod in caps.modules.items() if mod.available)
+    except Exception:
+        pass
     return {
         "name": API_NAME,
         "tagline": "Control from anywhere",
         "description": "A star that sailors used for navigation. Metaphorically: your guiding point of control.",
         "version": API_VERSION,
         "enabled_modules": enabled_modules,
+        "available_modules": available_modules,
     }
 
 
