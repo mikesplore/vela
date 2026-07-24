@@ -4,7 +4,13 @@ from fastapi import APIRouter, Depends
 from app.dependencies import get_current_user
 from app.domain.display import ValueResponse
 from app.domain.power import ScheduleShutdownRequest, PowerProfileResponse, PowerProfileRequest
-from app.services.power import power_action, power_profile_action, cancel_scheduled_shutdown, get_power_profile as get_p_p
+from app.services.power import (
+    power_action,
+    power_profile_action,
+    cancel_scheduled_shutdown,
+    get_power_profile as get_p_p,
+    schedule_shutdown as schedule_shutdown_action,
+)
 
 router = APIRouter(prefix="/power", tags=["power"])
 
@@ -36,7 +42,7 @@ async def hibernate() -> Any:
 @router.post("/schedule-shutdown", response_model=ValueResponse, dependencies=[Depends(get_current_user)])
 async def schedule_shutdown(request: ScheduleShutdownRequest) -> Any:
     """Schedule a shutdown at the given ISO datetime."""
-    return schedule_shutdown(request.at)
+    return schedule_shutdown_action(request.at)
 
 
 @router.post("/cancel-shutdown", response_model=ValueResponse, dependencies=[Depends(get_current_user)])
