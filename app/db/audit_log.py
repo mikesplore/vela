@@ -85,6 +85,29 @@ class ExternalAlertDeliveryModel(Base):
     received_at: Mapped[datetime] = mapped_column(index=True)
 
 
+class AlertDeliveryEventModel(Base):
+    """Persisted record of an alert the server attempted to deliver."""
+    __tablename__ = "alert_delivery_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(index=True)
+    alert_kind: Mapped[str] = mapped_column(index=True)
+    channel: Mapped[str] = mapped_column(index=True)
+    status: Mapped[str] = mapped_column(index=True)
+    title: Mapped[str | None] = mapped_column(nullable=True)
+    body: Mapped[str | None] = mapped_column(nullable=True)
+    email_to: Mapped[str | None] = mapped_column(nullable=True)
+    email_provider_id: Mapped[str | None] = mapped_column(nullable=True)
+    push_delivered: Mapped[int] = mapped_column(default=0)
+    alert_type: Mapped[str | None] = mapped_column(nullable=True, index=True)
+    value: Mapped[float | None] = mapped_column(nullable=True)
+    threshold: Mapped[float | None] = mapped_column(nullable=True)
+    resource: Mapped[str | None] = mapped_column(nullable=True)
+    fingerprint: Mapped[str | None] = mapped_column(nullable=True, index=True)
+    metadata_json: Mapped[str | None] = mapped_column(nullable=True)
+    error: Mapped[str | None] = mapped_column(nullable=True)
+
+
 db_path = Path.cwd() / "audit_log.sqlite"
 engine = create_engine(
     f"sqlite:///{db_path}",
@@ -194,6 +217,50 @@ def insert_admin_action_event(*, actor: str | None, action: str, detail: str | N
         session.commit()
 
 
+def insert_alert_delivery_event(
+    *,
+    alert_kind: str,
+    channel: str,
+    status: str,
+    title: str | None = None,
+    body: str | None = None,
+    email_to: str | None = None,
+    email_provider_id: str | None = None,
+    push_delivered: int = 0,
+    alert_type: str | None = None,
+    value: float | None = None,
+    threshold: float | None = None,
+    resource: str | None = None,
+    fingerprint: str | None = None,
+    metadata_json: str | None = None,
+    error: str | None = None,
+    created_at: datetime | None = None,
+) -> int:
+    with get_audit_session() as session:
+        row = AlertDeliveryEventModel(
+            created_at=created_at or datetime.now(UTC),
+            alert_kind=alert_kind,
+            channel=channel,
+            status=status,
+            title=title,
+            body=body,
+            email_to=email_to,
+            email_provider_id=email_provider_id,
+            push_delivered=push_delivered,
+            alert_type=alert_type,
+            value=value,
+            threshold=threshold,
+            resource=resource,
+            fingerprint=fingerprint,
+            metadata_json=metadata_json,
+            error=error,
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return int(row.id)
+
+
 def prune_audit_events(
     *,
     older_than: datetime | None = None,
@@ -209,6 +276,10 @@ def prune_audit_events(
             result = session.execute(delete(AuditEventModel).where(AuditEventModel.created_at < older_than))
             deleted += result.rowcount or 0
             result = session.execute(delete(ToolCallEventModel).where(ToolCallEventModel.created_at < older_than))
+            deleted += result.rowcount or 0
+            result = session.execute(
+                delete(AlertDeliveryEventModel).where(AlertDeliveryEventModel.created_at < older_than)
+            )
             deleted += result.rowcount or 0
         if relay_older_than is not None:
             result = session.execute(
@@ -241,6 +312,18 @@ def prune_audit_events(
                     delete(ToolCallEventModel).where(ToolCallEventModel.id.notin_(tool_ids_to_keep))
                 )
                 deleted += result.rowcount or 0
+            alert_ids_to_keep = list(
+                session.scalars(
+                    select(AlertDeliveryEventModel.id)
+                    .order_by(AlertDeliveryEventModel.created_at.desc(), AlertDeliveryEventModel.id.desc())
+                    .limit(keep_max)
+                )
+            )
+            if alert_ids_to_keep:
+                result = session.execute(
+                    delete(AlertDeliveryEventModel).where(AlertDeliveryEventModel.id.notin_(alert_ids_to_keep))
+                )
+                deleted += result.rowcount or 0
         if admin_action_older_than is not None:
             result = session.execute(
                 delete(AdminActionEventModel).where(AdminActionEventModel.created_at < admin_action_older_than)
@@ -269,7 +352,7 @@ def clear_monitoring_history() -> int:
     """Remove monitoring data while retaining administrative-action records."""
     with get_audit_session() as session:
         deleted = 0
-        for model in (AuditEventModel, ToolCallEventModel, RelayConnectionEventModel):
+        for model in (AuditEventModel, ToolCallEventModel, RelayConnectionEventModel, AlertDeliveryEventModel):
             result = session.execute(delete(model))
             deleted += result.rowcount or 0
         session.commit()

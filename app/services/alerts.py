@@ -26,9 +26,8 @@ DEFAULT_MEMORY_THRESHOLD = 85.0
 DEFAULT_DISK_THRESHOLD = 80.0
 DEFAULT_SPIKE_COOLDOWN_MINUTES = 15
 
-# State tracking (in-memory; cooldown prevents notification spam).
+# State tracking (in-memory cooldown prevents notification spam).
 _last_spike_alerts: Dict[str, datetime] = {}
-_alert_history: List[Dict[str, Any]] = []
 _daily_stats: Dict[str, Any] = {}
 
 
@@ -51,14 +50,6 @@ def _is_in_cooldown(alert_type: str, cooldown_minutes: int) -> bool:
 
 def _update_cooldown(alert_type: str) -> None:
     _last_spike_alerts[alert_type] = datetime.now()
-
-
-def _record_alert(alert: dict[str, Any]) -> None:
-    _alert_history.append({
-        **alert,
-        "date": datetime.now().strftime("%Y-%m-%d"),
-        "time": datetime.now().strftime("%H:%M"),
-    })
 
 
 def _get_top_process_info() -> Tuple[str, float]:
@@ -144,6 +135,7 @@ def _dispatch_spike(
         uptime=_get_uptime_string(),
         os_info=_get_os_info_string(),
         detail=detail,
+        alert_type=alert_key,
     )
     _update_cooldown(alert_key)
     alert = {
@@ -152,7 +144,6 @@ def _dispatch_spike(
         "threshold": threshold,
         "resource": resource,
     }
-    _record_alert(alert)
     logger.info("%s alert sent: %.1f%% >= %.1f%%", resource, value, threshold)
     return alert
 
@@ -327,6 +318,7 @@ def scheduled_daily_summary() -> None:
 
 def handle_alertmanager_webhook(payload: dict[str, Any]) -> dict[str, int]:
     """Deliver deduplicated Alertmanager firing/resolved events to FCM devices."""
+    from app.services import alert_history
     from app.services.push import claim_external_alert, send_push
 
     accepted = delivered = 0
@@ -347,18 +339,41 @@ def handle_alertmanager_webhook(payload: dict[str, Any]) -> dict[str, int]:
         severity = str(labels.get("severity") or "warning").lower()
         summary = str(annotations.get("summary") or annotations.get("description") or name)
         title = f"Vela {'resolved' if status == 'resolved' else 'alert'} · {name}"
-        delivered += send_push(
+        push_error: str | None = None
+        push_delivered = 0
+        try:
+            push_delivered = send_push(
+                title=title,
+                body=summary,
+                data={
+                    "source": "alertmanager",
+                    "fingerprint": fingerprint,
+                    "status": status,
+                    "severity": severity,
+                    "alertname": name,
+                },
+            )
+        except Exception as exc:
+            push_error = str(exc)
+            logger.warning("Alertmanager push delivery failed: %s", exc)
+        alert_history.record_delivery(
+            alert_kind="alertmanager",
             title=title,
             body=summary,
-            data={
-                "source": "alertmanager",
-                "fingerprint": fingerprint,
+            push_attempted=True,
+            push_delivered=push_delivered,
+            push_error=push_error,
+            alert_type=name,
+            fingerprint=fingerprint,
+            metadata={
                 "status": status,
                 "severity": severity,
-                "alertname": name,
+                "labels": labels,
+                "annotations": annotations,
             },
         )
         accepted += 1
+        delivered += push_delivered
     return {"accepted": accepted, "delivered": delivered}
 
 
@@ -395,9 +410,10 @@ def send_daily_summary() -> Optional[Dict[str, Any]]:
         except Exception:
             top_processes = []
 
-        today = datetime.now().strftime("%Y-%m-%d")
-        alerts_count = len([a for a in _alert_history if a.get("date") == today])
-        last_alert_time = _alert_history[-1].get("time", "Never") if _alert_history else "Never"
+        from app.services import alert_history
+
+        alerts_count = alert_history.count_today(alert_kind="spike")
+        last_alert_time = alert_history.last_delivery_time_today() or "Never"
 
         result = alert_delivery.deliver_daily_summary_email(
             device_name=platform.node(),
@@ -526,6 +542,7 @@ def setup_monitoring_schedule(
 
 
 def get_monitoring_status() -> Dict[str, Any]:
+    from app.services import alert_history
     from app.services.network import _is_vnstat_available
     from app.services.scheduler import format_job_next_run, get_scheduler
 
@@ -546,7 +563,8 @@ def get_monitoring_status() -> Dict[str, Any]:
         "scheduler_running": getattr(scheduler, "running", False),
         "spike_monitor": spike_job,
         "daily_summary": summary_job,
-        "alerts_today": len([a for a in _alert_history if a.get("date") == datetime.now().strftime("%Y-%m-%d")]),
+        "alerts_today": alert_history.count_today(alert_kind="spike"),
+        "deliveries_stored": alert_history.count_deliveries(),
         "recipient_email": alert_delivery.recipient_email(),
         "email_configured": alert_delivery.email_enabled(),
         "push_configured": alert_delivery.push_enabled(),

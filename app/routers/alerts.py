@@ -8,11 +8,12 @@ import logging
 import hmac
 from typing import Dict, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from app.dependencies import get_current_user
-from app.services import alert_delivery
+from app.domain.alerts import AlertHistoryResponse
+from app.services import alert_delivery, alert_history
 from app.services.alerts import (
     check_and_send_spike_alert,
     send_daily_summary,
@@ -47,6 +48,30 @@ async def alertmanager_webhook(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Alertmanager payload must be a JSON object")
     return handle_alertmanager_webhook(payload)
+
+
+@router.get("/history", response_model=AlertHistoryResponse)
+def alert_history_list(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    since_minutes: int | None = Query(None, ge=1, le=60 * 24 * 90),
+    alert_kind: str | None = Query(None, description="spike, daily_summary, test, or alertmanager"),
+    channel: str | None = Query(None, description="email, push, or both"),
+    current_user: str = Depends(get_current_user),
+):
+    """List alert deliveries the server recorded (for verifying email/push content)."""
+    alerts = alert_history.list_deliveries(
+        limit=limit,
+        offset=offset,
+        since_minutes=since_minutes,
+        alert_kind=alert_kind,
+        channel=channel,
+    )
+    return AlertHistoryResponse(
+        alerts=alerts,
+        total_stored=alert_history.count_deliveries(),
+        today_count=alert_history.count_today(),
+    )
 
 
 @router.get("/status")
@@ -97,20 +122,11 @@ def send_test_alert(current_user: str = Depends(get_current_user)):
     Send a test spike alert email to RECIPIENT_EMAIL (from .env).
     Always sends regardless of system metrics.
     """
-    from app.utils.emails import send_spike_alert
-    import platform
-
     if not alert_delivery.email_enabled():
         raise HTTPException(status_code=503, detail="Email not configured. Set RESEND_API_KEY and RECIPIENT_EMAIL in .env")
 
     recipient = alert_delivery.recipient_email()
-    result = send_spike_alert(
-        to=recipient,
-        device_name=platform.node(),
-        cpu_percent=0.0, memory_percent=0.0,
-        cpu_threshold=85.0, memory_threshold=85.0,
-        top_process="(test)", uptime="N/A", os_info="Test alert",
-    )
+    result = alert_delivery.deliver_test_spike_email()
     if result:
         return {"success": True, "message": f"Test email sent to {recipient}"}
     return {"success": False, "message": "Failed to send test email"}
