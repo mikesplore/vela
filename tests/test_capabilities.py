@@ -73,6 +73,31 @@ def test_docker_unavailable_when_cli_missing(monkeypatch):
     assert "list_docker_containers" in snapshot.assistant_tools.unavailable
 
 
+def test_clipboard_module_available_when_backend_present(monkeypatch):
+    monkeypatch.setattr(
+        capabilities_service.shutil,
+        "which",
+        lambda cmd: "/usr/bin/xclip" if cmd == "xclip" else None,
+    )
+
+    snapshot = capabilities_service.refresh_capabilities()
+
+    assert "clipboard" in snapshot.modules
+    assert snapshot.modules["clipboard"].available is True
+    assert snapshot.modules["clipboard"].metadata["backends"] == ["xclip"]
+    assert "read_clipboard" in snapshot.assistant_tools.available
+
+
+def test_clipboard_unavailable_when_no_backend(monkeypatch):
+    monkeypatch.setattr(capabilities_service.shutil, "which", lambda _cmd: None)
+
+    snapshot = capabilities_service.refresh_capabilities()
+
+    assert snapshot.modules["clipboard"].available is False
+    assert "clipboard backend" in (snapshot.modules["clipboard"].reason or "").lower()
+    assert "read_clipboard" in snapshot.assistant_tools.unavailable
+
+
 def test_assistant_prompt_excludes_unavailable_tools(monkeypatch):
     monkeypatch.setattr(capabilities_service, "_has_desktop_session", lambda: False)
     capabilities_service.refresh_capabilities()

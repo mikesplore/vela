@@ -9,6 +9,8 @@ from pathlib import Path
 import bcrypt
 import yaml
 
+from app.utils.env_template import ENV_TEMPLATE, render_env_file
+
 # Optional integrations collected during setup. Empty means "leave unset".
 OPTIONAL_ENV_FIELDS = (
     ("fireworks_api_key", "FIREWORKS_API_KEY", "Fireworks API key (assistant)"),
@@ -89,35 +91,26 @@ def write_env_file(
             opts[key] = (optional.get(key) or "").strip()
 
     env_path = target_dir / ".env"
-    lines = [
-        f"USERNAME={username}",
-        f"PASSWORD={password}",
-        f"LOCAL_SERVICE_USERNAME={username}",
-        f"LOCAL_SERVICE_PASSWORD={password}",
-        f"LOCAL_SERVICE_URL=http://127.0.0.1:{server_port}",
-        "LOCAL_SERVICE_TOKEN_PATH=/auth/token",
-        "LOCAL_SERVICE_AUTH_TOKEN=",
-        "LOCAL_SERVICE_AUTH_TOKEN_EXPIRES=",
-        f"VPS_URL={vps_url}",
-        f"AGENT_NAME={agent_label}",
-        "AGENT_ID=",
-        "AGENT_SECRET=",
-        "AGENT_CREDENTIAL=",
-        "RELAY_SECRET=",
-        f"ASSISTANT_ACTION_PIN={assistant_pin}",
-        f"FIREWORKS_API_KEY={opts['fireworks_api_key']}",
-        f"IPINFO_TOKEN={opts['ipinfo_token']}",
-        "VELA_ASSISTANT_ENABLE_THINKING=false",
-        "VELA_FIREWORKS_API_URL=https://api.fireworks.ai/inference/v1",
-        "VELA_FIREWORKS_MODEL=accounts/fireworks/models/qwen3p7-plus",
-        f"RECIPIENT_EMAIL={opts['recipient_email']}",
-        f"RESEND_API_KEY={opts['resend_api_key']}",
-        f"RESEND_FROM_EMAIL={opts['resend_from_email']}",
-        f"SPOTIFY_CLIENT_ID={opts['spotify_client_id']}",
-        f"SPOTIFY_CLIENT_SECRET={opts['spotify_client_secret']}",
-        # Filled with the real agent id after pairing completes.
-        "SPOTIFY_REDIRECT_URI=",
-    ]
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    values = {key: default for key, default in ENV_TEMPLATE}
+    values.update(
+        {
+            "USERNAME": username,
+            "PASSWORD": password,
+            "LOCAL_SERVICE_USERNAME": username,
+            "LOCAL_SERVICE_PASSWORD": password,
+            "LOCAL_SERVICE_URL": f"http://127.0.0.1:{server_port}",
+            "VPS_URL": vps_url,
+            "AGENT_NAME": agent_label,
+            "ASSISTANT_ACTION_PIN": assistant_pin,
+            "FIREWORKS_API_KEY": opts["fireworks_api_key"],
+            "IPINFO_TOKEN": opts["ipinfo_token"],
+            "RECIPIENT_EMAIL": opts["recipient_email"],
+            "RESEND_API_KEY": opts["resend_api_key"],
+            "RESEND_FROM_EMAIL": opts["resend_from_email"],
+            "SPOTIFY_CLIENT_ID": opts["spotify_client_id"],
+            "SPOTIFY_CLIENT_SECRET": opts["spotify_client_secret"],
+        }
+    )
+    env_path.write_text(render_env_file(values), encoding="utf-8")
     os.chmod(env_path, 0o600)
     return env_path

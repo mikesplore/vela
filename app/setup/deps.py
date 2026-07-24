@@ -66,6 +66,16 @@ DEPENDENCY_GROUPS = [
         "packages": {"apt": ["libnotify-bin"], "dnf": ["libnotify"], "pacman": ["libnotify"]},
     },
     {
+        "feature": "Clipboard",
+        "description": "Read and write the desktop clipboard.",
+        "commands": ["xclip", "wl-copy"],
+        "packages": {
+            "apt": ["xclip", "wl-clipboard"],
+            "dnf": ["xclip", "wl-clipboard"],
+            "pacman": ["xclip", "wl-clipboard"],
+        },
+    },
+    {
         "feature": "Power",
         "description": "Power actions and profile controls.",
         "commands": ["systemctl", "powerprofilesctl"],

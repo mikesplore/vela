@@ -112,6 +112,18 @@ def _missing_commands(commands: list[str]) -> list[str]:
     return [cmd for cmd in commands if not shutil.which(cmd)]
 
 
+def _clipboard_backends() -> list[str]:
+    """Return installed pyperclip backends (any one is enough)."""
+    backends: list[str] = []
+    if shutil.which("wl-copy") and shutil.which("wl-paste"):
+        backends.append("wl-clipboard")
+    if shutil.which("xclip"):
+        backends.append("xclip")
+    if shutil.which("xsel"):
+        backends.append("xsel")
+    return backends
+
+
 def _has_desktop_session() -> bool:
     wayland = os.environ.get("WAYLAND_DISPLAY", "").strip()
     if wayland:
@@ -265,6 +277,22 @@ def _probe_extra_modules(modules: dict[str, ModuleCapability]) -> None:
         available=assistant_ok,
         config_enabled=assistant_enabled,
         reason=None if assistant_ok else "FIREWORKS_API_KEY not configured in .env",
+    )
+
+    # clipboard — pyperclip backend (X11 or Wayland)
+    clipboard_enabled = _flag_enabled("clipboard")
+    clipboard_backends = _clipboard_backends()
+    clipboard_ok = bool(clipboard_backends)
+    clipboard_reason = None
+    if not clipboard_enabled:
+        clipboard_reason = "Disabled in config"
+    elif not clipboard_ok:
+        clipboard_reason = "Missing clipboard backend (install xclip, xsel, or wl-clipboard)"
+    modules["clipboard"] = ModuleCapability(
+        available=clipboard_enabled and clipboard_ok,
+        config_enabled=clipboard_enabled,
+        reason=clipboard_reason,
+        metadata={"backends": clipboard_backends},
     )
 
     # Apply desktop session constraints to GUI modules
