@@ -8,6 +8,7 @@ Same headers:      X-Session-ID, Authorization, X-Secret
 SSE event types emitted (in order):
   event: thinking   data: {"text": "..."}        # model reasoning, token-by-token
   event: tool       data: {"name":"...","status":"running"|"done"|"error","result":...}
+                    # Gated tools executed after approval append " · Confirmed" or " · PIN confirmed"
   event: gate       data: {pending_action_id, requires_auth, confirmation, expires_in_seconds}
   event: content    data: {"text": "..."}         # final reply, token-by-token
   event: art        data: {"url": "..."}          # album art URL (media queries only)
@@ -94,13 +95,33 @@ def _sse_thinking(text: str) -> str:
 def _sse_content(text: str) -> str:
     return _sse("content", {"text": text})
 
-def _friendly_tool_name(raw: str) -> str:
+def _friendly_tool_name(
+    raw: str,
+    *,
+    gate_confirmed: bool = False,
+    pin_confirmed: bool = False,
+) -> str:
     """Map a raw tool identifier to a human-readable display name."""
-    return TOOL_DISPLAY_NAMES.get(raw, raw.replace("_", " ").title())
+    base = TOOL_DISPLAY_NAMES.get(raw, raw.replace("_", " ").title())
+    if gate_confirmed and requires_gate(raw):
+        suffix = "PIN confirmed" if pin_confirmed else "Confirmed"
+        return f"{base} · {suffix}"
+    return base
 
 
-def _sse_tool(name: str, status: str, result: dict | None = None, error: str | None = None) -> str:
-    payload: dict = {"name": _friendly_tool_name(name), "status": status}
+def _sse_tool(
+    name: str,
+    status: str,
+    result: dict | None = None,
+    error: str | None = None,
+    *,
+    gate_confirmed: bool = False,
+    pin_confirmed: bool = False,
+) -> str:
+    payload: dict = {
+        "name": _friendly_tool_name(name, gate_confirmed=gate_confirmed, pin_confirmed=pin_confirmed),
+        "status": status,
+    }
     if result is not None:
         payload["result"] = result
     if error is not None:
@@ -157,9 +178,14 @@ async def _run_tools_and_reply(
         confirmed: bool,
         enable_thinking: bool = False,
         already_running: set[str] | None = None,
+        gate_pin_confirmed: bool | None = None,
 ) -> AsyncGenerator[str, None]:
     if already_running is None:
         already_running = set()
+
+    show_gate_confirmation = confirmed and gate_pin_confirmed is not None
+    gate_confirmed = show_gate_confirmation
+    pin_confirmed = bool(gate_pin_confirmed)
 
     prepared_calls = prepare_tool_calls(tool_calls, user_message)
     completed: dict[str, dict] = {}
@@ -170,7 +196,13 @@ async def _run_tools_and_reply(
         for call, result in skipped:
             completed[call["id"]] = result
             tool_results.append(result)
-            yield _sse_tool(result["tool"], "error", error=result["error"])
+            yield _sse_tool(
+                result["tool"],
+                "error",
+                error=result["error"],
+                gate_confirmed=gate_confirmed,
+                pin_confirmed=pin_confirmed,
+            )
 
         async def _run_call(call: dict) -> tuple[dict, dict]:
             result = await execute_tool_audited(
@@ -187,7 +219,12 @@ async def _run_tools_and_reply(
         if ready:
             for call in ready:
                 if call["tool"] not in already_running:
-                    yield _sse_tool(call["tool"], "running")
+                    yield _sse_tool(
+                        call["tool"],
+                        "running",
+                        gate_confirmed=gate_confirmed,
+                        pin_confirmed=pin_confirmed,
+                    )
 
             tasks = [_run_call(call) for call in ready]
             for coro in asyncio.as_completed(tasks):
@@ -195,9 +232,21 @@ async def _run_tools_and_reply(
                 completed[call["id"]] = result
                 tool_results.append(result)
                 if result.get("error"):
-                    yield _sse_tool(result["tool"], "error", error=result["error"])
+                    yield _sse_tool(
+                        result["tool"],
+                        "error",
+                        error=result["error"],
+                        gate_confirmed=gate_confirmed,
+                        pin_confirmed=pin_confirmed,
+                    )
                 else:
-                    yield _sse_tool(result["tool"], "done", result=result.get("result"))
+                    yield _sse_tool(
+                        result["tool"],
+                        "done",
+                        result=result.get("result"),
+                        gate_confirmed=gate_confirmed,
+                        pin_confirmed=pin_confirmed,
+                    )
 
     if needs_conditional_followup(user_message, tool_calls):
         try:
@@ -242,6 +291,7 @@ async def _run_tools_and_reply(
                     confirmed=confirmed,
                     enable_thinking=enable_thinking,
                     already_running={result["tool"] for result in tool_results},
+                    gate_pin_confirmed=None,
                 ):
                     yield chunk
                 return
@@ -357,6 +407,7 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
                     pending.user_message, history, current_user, confirmed=True,
                     enable_thinking=config.assistant_enable_thinking,
                     already_running=set(),
+                    gate_pin_confirmed=True,
                 ):
                     yield chunk
                 return
@@ -388,6 +439,7 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
                 pending.user_message, history, current_user, confirmed=True,
                 enable_thinking=config.assistant_enable_thinking,
                 already_running=set(),
+                gate_pin_confirmed=False,
             ):
                 yield chunk
             return
