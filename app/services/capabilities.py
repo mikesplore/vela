@@ -217,34 +217,25 @@ def _probe_extra_modules(modules: dict[str, ModuleCapability]) -> None:
         metadata={"installed": docker_installed, "running": docker_running},
     )
 
-    # push
+    # push — check service-account path without importing firebase/SQLAlchemy
     push_enabled = _flag_enabled("push") if "push" in (config.feature_flags or {}) else True
-    try:
-        from app.services.push import get_configuration_error, is_configured as push_configured
-
-        push_err = get_configuration_error()
-        push_ok = push_configured()
-    except Exception:
-        push_err = "FCM service account not configured"
-        push_ok = False
+    push_path = (config.fcm_service_account_path or "").strip()
+    push_ok = bool(push_path and Path(push_path).is_file())
+    push_err = None if push_ok else "FCM service account not configured (set VELA_FCM_SERVICE_ACCOUNT_PATH)"
     modules["push"] = ModuleCapability(
         available=push_enabled and push_ok,
         config_enabled=push_enabled,
-        reason=push_err if not push_ok else None,
+        reason=push_err,
         metadata={"configured": push_ok},
     )
 
-    # alerts — email and/or push
+    # alerts — email and/or push (lightweight env checks)
     alerts_enabled = _flag_enabled("alerts") if "alerts" in (config.feature_flags or {}) else True
-    try:
-        from app.services import alert_delivery
-        from app.services.push import is_configured as push_configured
-
-        email_ok = alert_delivery.email_enabled()
-        alerts_ok = email_ok or push_configured()
-    except Exception:
-        email_ok = False
-        alerts_ok = False
+    resend_key = os.getenv("RESEND_API_KEY", "").strip()
+    resend_from = os.getenv("RESEND_FROM_EMAIL", "").strip()
+    recipient = os.getenv("RECIPIENT_EMAIL", "").strip()
+    email_ok = bool(resend_key and resend_from and recipient)
+    alerts_ok = email_ok or push_ok
     alerts_reason = None
     if not alerts_ok:
         alerts_reason = "Email (Resend) or push notifications not configured"
@@ -265,16 +256,11 @@ def _probe_extra_modules(modules: dict[str, ModuleCapability]) -> None:
         metadata={"credentials_configured": spotify_env_ok},
     )
 
-    # assistant — Fireworks API key
-    assistant_enabled = True
-    try:
-        from app.services.assistant.helpers import get_api_key
-
-        assistant_ok = bool(get_api_key())
-    except Exception:
-        assistant_ok = False
+    # assistant — Fireworks API key (env/config only; avoid importing assistant stack)
+    assistant_enabled = _flag_enabled("assistant") if "assistant" in (config.feature_flags or {}) else True
+    assistant_ok = bool(config.fireworks_api_key or os.getenv("FIREWORKS_API_KEY", "").strip())
     modules["assistant"] = ModuleCapability(
-        available=assistant_ok,
+        available=assistant_enabled and assistant_ok,
         config_enabled=assistant_enabled,
         reason=None if assistant_ok else "FIREWORKS_API_KEY not configured in .env",
     )
@@ -498,8 +484,34 @@ def get_capabilities(*, refresh: bool = False) -> CapabilitiesResponse:
 
 
 def get_available_tool_names() -> set[str]:
+    """Return tool names that work on this host right now (live probe, not stale DB)."""
+    from app.services.assistant.tools import TOOL_DEFINITIONS
+
+    modules = probe_modules_only()
+    return {
+        name
+        for name, tool_def in TOOL_DEFINITIONS.items()
+        if _tool_availability(name, tool_def, modules)[0]
+    }
+
+
+def get_tool_unavailability_reason(tool_name: str) -> str:
+    """Human-readable reason a tool cannot run on this host."""
     caps = get_capabilities()
-    return set(caps.assistant_tools.available)
+    cached = caps.assistant_tools.unavailable.get(tool_name)
+    if cached:
+        return cached
+
+    from app.services.assistant.tools import TOOL_ALIASES, TOOL_DEFINITIONS
+
+    resolved = TOOL_ALIASES.get(tool_name, tool_name)
+    tool_def = TOOL_DEFINITIONS.get(resolved)
+    if tool_def is None:
+        return f"Unknown tool: {tool_name}"
+
+    modules = probe_modules_only()
+    _ok, reason = _tool_availability(resolved, tool_def, modules)
+    return reason or f"Tool '{tool_name}' is not available on this host"
 
 
 def is_module_available(module: str) -> bool:
@@ -509,4 +521,20 @@ def is_module_available(module: str) -> bool:
 
 
 def is_tool_available(tool_name: str) -> bool:
-    return tool_name in get_available_tool_names()
+    from app.services.assistant.tools import TOOL_ALIASES
+
+    resolved = TOOL_ALIASES.get(tool_name, tool_name)
+    return resolved in get_available_tool_names()
+
+
+def probe_modules_only() -> dict[str, ModuleCapability]:
+    """Probe module availability without loading assistant tool definitions."""
+    modules = _probe_dependency_modules()
+    _probe_extra_modules(modules)
+    return modules
+
+
+def get_startup_enabled_modules() -> frozenset[str]:
+    """Return module keys whose routers should load at process start."""
+    modules = probe_modules_only()
+    return frozenset(key for key, mod in modules.items() if mod.available)

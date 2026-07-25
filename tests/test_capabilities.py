@@ -106,5 +106,33 @@ def test_assistant_prompt_excludes_unavailable_tools(monkeypatch):
     prompt = build_system_tool_prompt(available)
 
     assert "- display_screenshot:" not in prompt
+    assert "screenshot → display_screenshot" not in prompt
     assert "get_snapshot" in prompt
     assert len(available) < len(TOOL_DEFINITIONS)
+
+
+def test_get_available_tool_names_uses_live_probe(monkeypatch):
+    monkeypatch.setattr(capabilities_service, "_has_desktop_session", lambda: False)
+
+    available = capabilities_service.get_available_tool_names()
+
+    assert "display_screenshot" not in available
+    assert "get_snapshot" in available
+
+
+def test_split_unavailable_tool_calls(monkeypatch):
+    monkeypatch.setattr(capabilities_service, "_has_desktop_session", lambda: False)
+
+    allowed, rejected = __import__(
+        "app.services.assistant.workflow", fromlist=["split_unavailable_tool_calls"]
+    ).split_unavailable_tool_calls(
+        [
+            {"tool": "display_screenshot", "tool_input": {}},
+            {"tool": "get_snapshot", "tool_input": {}},
+            {"tool": "none", "tool_input": {}, "conversational_reply": "ok"},
+        ]
+    )
+
+    assert len(rejected) == 1
+    assert rejected[0]["tool"] == "display_screenshot"
+    assert len(allowed) == 2

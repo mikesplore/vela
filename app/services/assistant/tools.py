@@ -1029,6 +1029,30 @@ _TOOL_LIST = "\n".join(
     for name, t in TOOL_DEFINITIONS.items()
 )
 
+# Each hint requires every listed tool to be available on this host.
+_TOOL_HINTS: list[tuple[frozenset[str], str]] = [
+    (frozenset({"lock_screen", "mute_audio", "set_monitor_state"}), "leaving / brb → often lock + mute + monitor off (never shutdown/restart/sleep — no tools for those)"),
+    (frozenset({"set_monitor_state", "mute_audio"}), "nap / bed → dim/off screen, mute; do NOT shutdown/sleep the machine from chat"),
+    (frozenset({"set_monitor_state", "mute_audio"}), "back / wake up → monitor on, unmute"),
+    (frozenset({"mute_audio"}), "mute / quiet → mute_audio(true); unmute → mute_audio(false)"),
+    (frozenset({"set_volume"}), "volume nudge → step ~10"),
+    (frozenset({"display_screenshot"}), "screenshot → display_screenshot"),
+    (frozenset({"get_currently_playing_song"}), "now playing → get_currently_playing_song"),
+    (frozenset({"get_battery"}), "battery → get_battery; battery health → monitor_battery_health"),
+    (frozenset({"get_snapshot"}), "system check → get_snapshot"),
+    (frozenset({"toggle_bluetooth"}), "bluetooth on/off → toggle_bluetooth"),
+    (frozenset({"kill_process"}), "kill process by pid/name → kill_process / kill_process_by_name (app PIN gate when configured)"),
+    (frozenset({"stop_container"}), "stop/kill docker container → stop_container (app confirmation gate — not kill_process)"),
+    (frozenset({"get_service_status"}), "is service running? → get_service_status (scope=all for Vela user units); answer before start/restart"),
+    (frozenset({"list_docker_containers"}), "are containers running? → list_docker_containers or get_container_status; answer before start/restart"),
+    (frozenset({"is_process_running"}), "is app/process open? → is_process_running; do NOT open_application just to check"),
+    (frozenset({"open_application"}), "open app / launch chrome / start firefox → open_application with tool_input.name (e.g. {{\"name\":\"chrome\"}})"),
+    (frozenset({"close_application"}), "close app / quit chrome → close_application with tool_input.name (e.g. {{\"name\":\"spotify\"}})"),
+    (frozenset({"check_port"}), "port listening / what uses port X / what's on 8765? → check_port ONLY"),
+    (frozenset({"health_check"}), "HTTP endpoint up? → health_check (e.g. http://127.0.0.1:8765/health for Vela API)"),
+    (frozenset({"get_docker_info"}), "docker/compose status → get_docker_info, list_docker_containers, compose_status"),
+]
+
 _TOOL_PROMPT_BODY = """You are Vela's tool picker. Output ONLY a JSON array — no markdown wrapper, no prose outside the array.
 
 JSON RULES (non-negotiable):
@@ -1039,6 +1063,7 @@ JSON RULES (non-negotiable):
 5. Safe actions: do them. Don't ask "would you like me to…".
 6. `conversational_reply` should sound like Vela (human, blunt, not corporate) — but only when you're not skipping straight to tool execution.
 7. **Confirmation/PIN is app-handled.** For risky tools (delete, kill, stop/start service or container, etc.), emit the tool call directly. The server pauses execution and shows its own gate UI — never ask for PIN, yes/no, or approval in `conversational_reply`, and never use tool=none to gate an action you could call with a tool.
+8. **Only use tools listed under Available tools below.** Never invent or recall tool names from memory, hints, or examples that are not in that list.
 
 WHEN TO USE TOOLS:
 - Read the user's actual intent and pick the best tool(s) from the list below.
@@ -1059,26 +1084,7 @@ CONDITIONAL ("if / otherwise"):
 - Follow-up pass (after results): actions for the branch that matched.
 
 COMMON PATTERNS (hints only — adapt, extend, ignore if wrong):
-- leaving / brb → often lock + mute + monitor off (never shutdown/restart/sleep — no tools for those)
-- nap / bed → dim/off screen, mute; do NOT shutdown/sleep the machine from chat
-- back / wake up → monitor on, unmute
-- mute / quiet → mute_audio(true); unmute → mute_audio(false)
-- volume nudge → step ~10
-- screenshot → display_screenshot
-- now playing → get_currently_playing_song
-- battery → get_battery; battery health → monitor_battery_health
-- system check → get_snapshot
-- bluetooth on/off → toggle_bluetooth
-- kill process by pid/name → kill_process / kill_process_by_name (app PIN gate when configured)
-- stop/kill docker container → stop_container (app confirmation gate — not kill_process)
-- is service running? → get_service_status (scope=all for Vela user units); answer before start/restart
-- are containers running? → list_docker_containers or get_container_status; answer before start/restart
-- is app/process open? → is_process_running; do NOT open_application just to check
-- open app / launch chrome / start firefox → open_application with tool_input.name (e.g. {{"name":"chrome"}})
-- close app / quit chrome → close_application with tool_input.name (e.g. {{"name":"spotify"}})
-- port listening / what uses port X / what's on 8765? → check_port ONLY
-- HTTP endpoint up? → health_check (e.g. http://127.0.0.1:8765/health for Vela API)
-- docker/compose status → get_docker_info, list_docker_containers, compose_status
+{tool_hints}
 
 RESPONSE SHAPES:
 - Action only: [{{"tool":"mute_audio","tool_input":{{"muted":true}}}}]
@@ -1089,6 +1095,21 @@ Available tools:
 {tool_list}
 
 Output ONLY the JSON array. When unsure between asking and acting on a safe read/action, act."""
+
+
+def build_tool_hints(available_tools: set[str] | None = None) -> str:
+    """Build pattern hints, omitting lines that reference unavailable tools."""
+    if available_tools is None:
+        lines = [line for _, line in _TOOL_HINTS]
+    else:
+        lines = [
+            line
+            for required, line in _TOOL_HINTS
+            if required.issubset(available_tools)
+        ]
+    if not lines:
+        return "- (no pattern hints for this host — use Available tools only)"
+    return "\n".join(f"- {line}" for line in lines)
 
 
 def build_tool_list(available_tools: set[str] | None = None) -> str:
@@ -1106,7 +1127,8 @@ def build_tool_list(available_tools: set[str] | None = None) -> str:
 def build_system_tool_prompt(available_tools: set[str] | None = None) -> str:
     """Build the planner system prompt, optionally limited to available tools on this host."""
     tool_list = build_tool_list(available_tools)
-    return _TOOL_PROMPT_BODY.format(tool_list=tool_list)
+    tool_hints = build_tool_hints(available_tools)
+    return _TOOL_PROMPT_BODY.format(tool_list=tool_list, tool_hints=tool_hints)
 
 
 # Default unfiltered prompt — used in tests and as fallback before capabilities are loaded.

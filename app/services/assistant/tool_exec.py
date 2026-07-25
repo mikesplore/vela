@@ -14,7 +14,8 @@ from httpx import ASGITransport, AsyncClient
 from app.domain.assistant import AssistantResponse
 from app.services.assistant.images import extract_image_payload
 from app.services.assistant.tools import INPUT_CONFIRM_TOOLS, TOOL_ALIASES, TOOL_DEFINITIONS
-from app.services.assistant.workflow import next_execution_stage, prepare_tool_calls
+from app.services import capabilities as capabilities_service
+from app.services.assistant.workflow import next_execution_stage, prepare_tool_calls, split_unavailable_tool_calls
 from app.services.filesystem import validate_path
 from app.utils.config import get_config
 
@@ -176,6 +177,9 @@ async def _execute_tool(
     resolved_tool = TOOL_ALIASES.get(tool_name, tool_name)
     if resolved_tool not in TOOL_DEFINITIONS:
         raise ValueError(f"Unknown tool: {tool_name}")
+    if not capabilities_service.is_tool_available(resolved_tool):
+        reason = capabilities_service.get_tool_unavailability_reason(resolved_tool)
+        raise ValueError(f"Tool '{tool_name}' is not available on this host: {reason}")
     tool_name = resolved_tool
 
     tool = TOOL_DEFINITIONS[tool_name]
@@ -322,6 +326,16 @@ async def execute_tool_results(
         confirmed: bool = False,
         user_message: str | None = None,
 ) -> list[dict[str, Any]]:
+    tool_calls, rejected_calls = split_unavailable_tool_calls(tool_calls)
+    rejected_results = [
+        {
+            "tool": str(call.get("tool")),
+            "result": {},
+            "error": capabilities_service.get_tool_unavailability_reason(str(call.get("tool"))),
+        }
+        for call in rejected_calls
+    ]
+
     prepared_calls = prepare_tool_calls(tool_calls, user_message)
 
     async def _execute_call(call: dict[str, Any]) -> dict[str, Any]:
@@ -335,7 +349,8 @@ async def execute_tool_results(
             confirmed=confirmed,
         )
 
-    return await execute_tool_plan(prepared_calls, _execute_call)
+    executed = await execute_tool_plan(prepared_calls, _execute_call)
+    return rejected_results + executed
 
 
 async def response_from_tool_results(user_message: str, tool_results: list[dict[str, Any]]) -> AssistantResponse:

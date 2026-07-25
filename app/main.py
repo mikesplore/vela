@@ -17,7 +17,8 @@ from app.agent.helpers import start_agent_loop
 from app.utils.errors import ErrorResponse
 from app.middleware import RequestLoggerMiddleware
 from app.rate_limiter import limiter, limit_route
-from app.routers import all_routers
+from app.services.capabilities import get_startup_enabled_modules
+from app.routers.registry import load_routers
 from app.services.scheduler import scheduler
 
 API_NAME = "Vela"
@@ -185,7 +186,7 @@ app.add_middleware(BaseHTTPMiddleware, dispatch=uniform_error_middleware)
 app.state.limiter = limiter
 
 app.include_router(auth_router)
-for router in all_routers:
+for router in load_routers(get_startup_enabled_modules()):
     app.include_router(router)
 
 

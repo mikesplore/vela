@@ -54,10 +54,12 @@ from app.services.assistant.tool_exec import (
     execute_tool_audited,
     sanitize_tool_result_for_llm,
 )
+from app.services import capabilities as capabilities_service
 from app.services.assistant.workflow import (
     needs_conditional_followup,
     next_execution_stage,
     prepare_tool_calls,
+    split_unavailable_tool_calls,
 )
 from app.services.assistant.safety import (
     PIN_MAX_ATTEMPTS,
@@ -187,9 +189,24 @@ async def _run_tools_and_reply(
     gate_confirmed = show_gate_confirmation
     pin_confirmed = bool(gate_pin_confirmed)
 
-    prepared_calls = prepare_tool_calls(tool_calls, user_message)
     completed: dict[str, dict] = {}
     tool_results: list[dict] = []
+
+    tool_calls, rejected_calls = split_unavailable_tool_calls(tool_calls)
+    for call in rejected_calls:
+        tool_name = str(call.get("tool"))
+        reason = capabilities_service.get_tool_unavailability_reason(tool_name)
+        result = {"tool": tool_name, "result": {}, "error": reason}
+        tool_results.append(result)
+        yield _sse_tool(
+            tool_name,
+            "error",
+            error=reason,
+            gate_confirmed=gate_confirmed,
+            pin_confirmed=pin_confirmed,
+        )
+
+    prepared_calls = prepare_tool_calls(tool_calls, user_message)
 
     while len(completed) < len(prepared_calls):
         ready, skipped = next_execution_stage(prepared_calls, completed)

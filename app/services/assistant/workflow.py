@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.services import capabilities as capabilities_service
+
 
 _CONDITIONAL_REQUEST = re.compile(r"\bif\b|\botherwise\b|\bdepending\s+on\b", re.IGNORECASE)
 _APPLICATION_TOOLS = frozenset({"open_application", "close_application"})
@@ -46,6 +48,25 @@ def _infer_application_name(user_message: str, *, for_close: bool) -> str | None
     return name or None
 
 
+def split_unavailable_tool_calls(
+    tool_calls: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Separate planner output into allowed calls vs tools unavailable on this host."""
+    available = capabilities_service.get_available_tool_names()
+    allowed: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for call in tool_calls:
+        tool = call.get("tool")
+        if not tool or tool == "none":
+            allowed.append(call)
+            continue
+        if tool in available:
+            allowed.append(call)
+        else:
+            rejected.append(call)
+    return allowed, rejected
+
+
 def enrich_tool_calls(tool_calls: list[dict[str, Any]], user_message: str | None = None) -> list[dict[str, Any]]:
     """Fill missing application names from the user's message and common aliases."""
     if not user_message:
@@ -80,6 +101,7 @@ def prepare_tool_calls(tool_calls: list[dict[str, Any]], user_message: str | Non
     ``depends_on`` values from the planner refer to positions in its original
     JSON array.     Internally, opaque IDs are used so injected calls are safe.
     """
+    tool_calls, _rejected = split_unavailable_tool_calls(tool_calls)
     tool_calls = enrich_tool_calls(tool_calls, user_message)
     prepared: list[dict[str, Any]] = []
     source_index_to_id: dict[int, str] = {}
