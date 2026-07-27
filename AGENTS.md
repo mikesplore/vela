@@ -46,7 +46,7 @@ Linux remote-PC agent: FastAPI REST API (+ optional WebSocket tunnel to a VPS re
 | `notifications` | `/notifications` | Desktop notifications |
 | `power` | `/power` | Shutdown/restart/sleep (API/UI only — not assistant tools), power profile |
 | `processes` | `/processes` | List/kill/open apps, installed app catalog (`.desktop`), running check, window control (`POST /processes/launch` is API-only — not an assistant tool) |
-| `push` | `/push` | FCM device registration + send to user's devices |
+| `push` | `/push` | FCM device registration + send (delegated to VPS relay) |
 | `scheduler` | `/scheduler` | Create/list/cancel/run tasks |
 | `security` | `/security` | Lock, webcam/mic, login/SSH history |
 | `spotify` | `/spotify` | OAuth + playback helpers |
@@ -136,7 +136,7 @@ Wire new capabilities: add tool in `tools.py` → add to `TOOL_DISPLAY_NAMES` �
 
 ## Config knobs
 
-Primary: `app/utils/config.py` + `.env`. Common keys: API port, auth users, Fireworks key, relay/agent IDs, filesystem allowlist, alert/email/push settings (`VELA_FCM_SERVICE_ACCOUNT_PATH` for push send). Network perf: `network_public_ip_cache_seconds` (default 120), `network_wifi_list_cache_seconds` (default 45), `desktop_env_check_interval_seconds` (default 30).
+Primary: `app/utils/config.py` + `.env`. Common keys: API port, auth users, Fireworks key, relay/agent IDs, filesystem allowlist, alert/email settings (`VPS_URL` + `RELAY_SECRET` for push via velavps). Network perf: `network_public_ip_cache_seconds` (default 120), `network_wifi_list_cache_seconds` (default 45), `desktop_env_check_interval_seconds` (default 30).
 
 ## How to extend a feature
 

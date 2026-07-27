@@ -217,16 +217,18 @@ def _probe_extra_modules(modules: dict[str, ModuleCapability]) -> None:
         metadata={"installed": docker_installed, "running": docker_running},
     )
 
-    # push — check service-account path without importing firebase/SQLAlchemy
+    # push — delegated to VPS relay (FCM credentials live on the VPS)
     push_enabled = _flag_enabled("push") if "push" in (config.feature_flags or {}) else True
-    push_path = (config.fcm_service_account_path or "").strip()
-    push_ok = bool(push_path and Path(push_path).is_file())
-    push_err = None if push_ok else "FCM service account not configured (set VELA_FCM_SERVICE_ACCOUNT_PATH)"
+    vps_url = (config.vps_url or "").strip()
+    agent_id = (config.agent_id or "").strip()
+    relay_secret = (config.relay_secret or config.agent_secret or "").strip()
+    push_ok = bool(vps_url and agent_id and relay_secret)
+    push_err = None if push_ok else "Push relay not configured (set VPS_URL, AGENT_ID, RELAY_SECRET)"
     modules["push"] = ModuleCapability(
         available=push_enabled and push_ok,
         config_enabled=push_enabled,
         reason=push_err,
-        metadata={"configured": push_ok},
+        metadata={"configured": push_ok, "via_vps": True},
     )
 
     # alerts — email and/or push (lightweight env checks)

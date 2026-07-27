@@ -186,18 +186,35 @@ async def test_admin_clear_monitoring_history_requires_confirmation(async_client
 
 
 @pytest.mark.anyio
-async def test_push_device_registration(async_client):
+async def test_push_device_registration(async_client, monkeypatch):
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        class Resp:
+            status_code = 200
+
+            @staticmethod
+            def raise_for_status():
+                return None
+
+        return Resp()
+
+    monkeypatch.setattr("app.services.push.httpx.post", fake_post)
+    monkeypatch.setattr(
+        "app.services.push._relay_credentials",
+        lambda: ("https://vps.example", "agt_test", "secret"),
+    )
+
     response = await async_client.post(
         "/push/devices",
         headers=_auth_headers(),
         json={"token": "a" * 32, "installation_id": "android-main"},
     )
     assert response.status_code == 200
-    with audit_log.get_audit_session() as session:
-        device = session.scalar(select(audit_log.PushDeviceModel))
-    assert device is not None
-    assert device.user_id == "admin"
-    assert device.installation_id == "android-main"
+    assert calls
+    assert calls[0][0].endswith("/relay/agt_test/push/devices")
+    assert calls[0][1]["json"]["token"] == "a" * 32
 
 
 @pytest.mark.anyio

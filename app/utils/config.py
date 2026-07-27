@@ -68,7 +68,6 @@ class Config(BaseSettings):
     disk_alert_threshold: float = 80.0
     spike_check_interval_minutes: int = 5
     alert_cooldown_minutes: int = 15
-    fcm_service_account_path: str | None = None
     alertmanager_webhook_secret: str | None = None
     assistant_enable_thinking: bool = False
     # Max bytes the assistant will transfer via download_file (base64 over chat/SSE).

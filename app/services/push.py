@@ -1,44 +1,32 @@
-"""Firebase Cloud Messaging delivery for registered Vela mobile devices."""
+"""Push notification delivery via the Vela VPS relay (FCM lives on the VPS, not the PC)."""
 from __future__ import annotations
 
-import json
 import logging
 from datetime import UTC, datetime
-from pathlib import Path
 
-from sqlalchemy import delete, select
+import httpx
+from sqlalchemy import select
 
-from app.db.audit_log import ExternalAlertDeliveryModel, PushDeviceModel, get_audit_session
+from app.db.audit_log import ExternalAlertDeliveryModel, get_audit_session
 from app.utils.config import get_config
 
 logger = logging.getLogger(__name__)
-_firebase_initialized = False
 
 
-def _validate_service_account_file(path: Path) -> str | None:
-    """Return an error message when the path is not a Firebase Admin service account key."""
-    if not path.is_file():
-        return f"FCM service account file does not exist: {path}"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return f"FCM service account file is not valid JSON: {path}"
-    if data.get("type") == "service_account":
+def _relay_credentials() -> tuple[str, str, str] | None:
+    config = get_config()
+    vps_url = (config.vps_url or "").strip().rstrip("/")
+    agent_id = (config.agent_id or "").strip()
+    secret = (config.relay_secret or config.agent_secret or "").strip()
+    if not vps_url or not agent_id or not secret:
         return None
-    if "project_info" in data and "client" in data:
-        return (
-            "VELA_FCM_SERVICE_ACCOUNT_PATH points to google-services.json (Android client config). "
-            "Use a Firebase Admin service account key instead: Firebase Console → Project settings → "
-            "Service accounts → Generate new private key."
-        )
-    return 'FCM service account JSON must contain "type": "service_account".'
+    return vps_url, agent_id, secret
 
 
 def get_configuration_error() -> str | None:
-    path = get_config().fcm_service_account_path
-    if not path:
-        return "FCM service account not configured (set VELA_FCM_SERVICE_ACCOUNT_PATH)"
-    return _validate_service_account_file(Path(path).expanduser())
+    if _relay_credentials() is None:
+        return "Push relay not configured (set VPS_URL, AGENT_ID, and RELAY_SECRET)"
+    return None
 
 
 def is_configured() -> bool:
@@ -46,70 +34,64 @@ def is_configured() -> bool:
 
 
 def register_device(*, user_id: str, token: str, installation_id: str | None = None) -> None:
-    now = datetime.now(UTC)
-    with get_audit_session() as session:
-        device = session.scalar(select(PushDeviceModel).where(PushDeviceModel.token == token))
-        if device:
-            device.user_id = user_id
-            device.installation_id = installation_id
-            device.updated_at = now
-        else:
-            session.add(
-                PushDeviceModel(
-                    token=token,
-                    user_id=user_id,
-                    installation_id=installation_id,
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-        session.commit()
+    creds = _relay_credentials()
+    if creds is None:
+        logger.info("Skipping push device registration: VPS relay credentials missing")
+        return
+    vps_url, agent_id, secret = creds
+    try:
+        response = httpx.post(
+            f"{vps_url}/relay/{agent_id}/push/devices",
+            headers={"X-Secret": secret},
+            json={"token": token, "installation_id": installation_id},
+            timeout=20,
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        logger.warning("VPS push device registration failed: %s", exc)
+        raise
 
 
 def unregister_device(*, user_id: str, token: str) -> bool:
-    with get_audit_session() as session:
-        result = session.execute(
-            delete(PushDeviceModel).where(
-                PushDeviceModel.token == token,
-                PushDeviceModel.user_id == user_id,
-            )
+    creds = _relay_credentials()
+    if creds is None:
+        return False
+    vps_url, agent_id, secret = creds
+    try:
+        response = httpx.request(
+            "DELETE",
+            f"{vps_url}/relay/{agent_id}/push/devices",
+            headers={"X-Secret": secret},
+            json={"token": token},
+            timeout=20,
         )
-        session.commit()
-    return bool(result.rowcount)
+        response.raise_for_status()
+        payload = response.json()
+        return bool(payload.get("success"))
+    except Exception as exc:
+        logger.warning("VPS push device unregister failed: %s", exc)
+        return False
 
 
 def send_push(*, title: str, body: str, data: dict[str, str], user_id: str | None = None) -> int:
-    messaging = _get_messaging()
-    if messaging is None:
+    creds = _relay_credentials()
+    if creds is None:
+        logger.info("Push send skipped: VPS relay credentials missing")
         return 0
-    with get_audit_session() as session:
-        stmt = select(PushDeviceModel)
-        if user_id:
-            stmt = stmt.where(PushDeviceModel.user_id == user_id)
-        devices = list(session.scalars(stmt))
-
-    delivered = 0
-    invalid_tokens: list[str] = []
-    for device in devices:
-        try:
-            message = messaging.Message(
-                notification=messaging.Notification(title=title, body=body),
-                data={key: str(value) for key, value in data.items()},
-                token=device.token,
-            )
-            messaging.send(message)
-            delivered += 1
-        except Exception as exc:
-            code = getattr(exc, "code", None)
-            if str(code) in {"NOT_FOUND", "UNREGISTERED"} or "registration-token-not-registered" in str(exc):
-                invalid_tokens.append(device.token)
-            else:
-                logger.warning("FCM delivery failed for device %s: %s", device.id, exc)
-    if invalid_tokens:
-        with get_audit_session() as session:
-            session.execute(delete(PushDeviceModel).where(PushDeviceModel.token.in_(invalid_tokens)))
-            session.commit()
-    return delivered
+    vps_url, agent_id, secret = creds
+    try:
+        response = httpx.post(
+            f"{vps_url}/agents/{agent_id}/push/send",
+            headers={"X-Secret": secret},
+            json={"title": title, "body": body, "data": data},
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return int(payload.get("delivered") or 0)
+    except Exception as exc:
+        logger.warning("VPS push send failed: %s", exc)
+        return 0
 
 
 def claim_external_alert(*, fingerprint: str, status: str) -> bool:
@@ -132,26 +114,3 @@ def claim_external_alert(*, fingerprint: str, status: str) -> bool:
         )
         session.commit()
     return True
-
-
-def _get_messaging():
-    global _firebase_initialized
-    path = get_config().fcm_service_account_path
-    if not path:
-        logger.info("FCM push is not configured: set VELA_FCM_SERVICE_ACCOUNT_PATH.")
-        return None
-    try:
-        import firebase_admin
-        from firebase_admin import credentials, messaging
-    except ImportError:
-        logger.warning("FCM push is unavailable: firebase-admin is not installed.")
-        return None
-    if not _firebase_initialized:
-        credential_path = Path(path).expanduser()
-        config_error = _validate_service_account_file(credential_path)
-        if config_error:
-            logger.error(config_error)
-            return None
-        firebase_admin.initialize_app(credentials.Certificate(str(credential_path)))
-        _firebase_initialized = True
-    return messaging
