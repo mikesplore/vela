@@ -47,10 +47,12 @@ def deliver_spike_alert(
     send_push: bool = True,
 ) -> dict[str, Any]:
     """Send a spike alert via push and/or email. Email respects caller cooldown policy."""
+    from app.services.push import format_push_title, send_push
+
     results: dict[str, Any] = {"email": None, "push_delivered": 0}
     device_name = platform.node()
     body = detail or f"{resource} is {value:.1f}% (threshold {threshold:.1f}%)."
-    push_title = f"Vela alert · {resource} spike"
+    push_title = format_push_title(f"Vela alert · {resource} spike")
     email_subject = f"Vela alert · Spike detected on {device_name}"
 
     push_attempted = send_push and push_enabled()
@@ -60,8 +62,6 @@ def deliver_spike_alert(
 
     if push_attempted:
         try:
-            from app.services.push import send_push
-
             results["push_delivered"] = send_push(
                 title=push_title,
                 body=body,

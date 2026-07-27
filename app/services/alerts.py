@@ -15,6 +15,7 @@ import psutil
 
 from app.services import alert_delivery
 from app.services.monitoring import get_cpu_usage, get_ram_status, get_top_processes, get_uptime
+from app.services.push import format_push_title
 from app.services.system_info import get_os_info
 from app.utils.config import get_config
 
@@ -338,7 +339,7 @@ def handle_alertmanager_webhook(payload: dict[str, Any]) -> dict[str, int]:
         name = str(labels.get("alertname") or "System alert")
         severity = str(labels.get("severity") or "warning").lower()
         summary = str(annotations.get("summary") or annotations.get("description") or name)
-        title = f"Vela {'resolved' if status == 'resolved' else 'alert'} · {name}"
+        title = format_push_title(f"Vela {'resolved' if status == 'resolved' else 'alert'} · {name}")
         push_error: str | None = None
         push_delivered = 0
         try:

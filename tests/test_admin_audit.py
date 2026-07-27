@@ -222,6 +222,7 @@ async def test_alertmanager_webhook_forwards_new_alert(async_client, monkeypatch
     from app.services import push
     from app.utils.config import get_config
 
+    monkeypatch.setenv("AGENT_NAME", "Work PC")
     monkeypatch.setattr(get_config(), "alertmanager_webhook_secret", "webhook-secret")
     monkeypatch.setattr(push, "claim_external_alert", lambda **_kwargs: True)
     sent = []
@@ -242,7 +243,7 @@ async def test_alertmanager_webhook_forwards_new_alert(async_client, monkeypatch
     )
     assert response.status_code == 200
     assert response.json() == {"accepted": 1, "delivered": 1}
-    assert sent[0]["title"] == "Vela alert · HighCPU"
+    assert sent[0]["title"] == "Vela · Work PC · HighCPU"
 
 
 @pytest.mark.anyio

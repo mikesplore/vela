@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import platform
 from datetime import UTC, datetime
 
 import httpx
@@ -11,6 +13,34 @@ from app.db.audit_log import ExternalAlertDeliveryModel, get_audit_session
 from app.utils.config import get_config
 
 logger = logging.getLogger(__name__)
+
+
+def agent_label() -> str:
+    """Human-readable agent name for notification copy."""
+    name = os.environ.get("AGENT_NAME", "").strip()
+    if name:
+        return name
+    return platform.node()
+
+
+def format_push_title(title: str) -> str:
+    """Prefix notification titles with this agent's label for multi-agent phones."""
+    label = agent_label()
+    prefix = f"Vela · {label}"
+    if title.startswith(prefix):
+        return title
+    if title.startswith("Vela alert · "):
+        return f"{prefix} · {title[len('Vela alert · '):]}"
+    if title.startswith("Vela resolved · "):
+        return f"{prefix} · {title[len('Vela resolved · '):]}"
+    if title.startswith("Vela · "):
+        rest = title[len("Vela · "):]
+        if rest.startswith(label):
+            return title
+        return f"{prefix} · {rest}"
+    if title.startswith(f"{label} · "):
+        return title
+    return f"{prefix} · {title}"
 
 
 def _relay_credentials() -> tuple[str, str, str] | None:
@@ -83,7 +113,7 @@ def send_push(*, title: str, body: str, data: dict[str, str], user_id: str | Non
         response = httpx.post(
             f"{vps_url}/agents/{agent_id}/push/send",
             headers={"X-Secret": secret},
-            json={"title": title, "body": body, "data": data},
+            json={"title": format_push_title(title), "body": body, "data": data},
             timeout=30,
         )
         response.raise_for_status()
