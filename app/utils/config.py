@@ -131,6 +131,13 @@ class Config(BaseSettings):
     local_service_timeout: int = Field(default=300, validation_alias="LOCAL_SERVICE_TIMEOUT")
     relay_read_timeout: int = Field(default=300, validation_alias="RELAY_READ_TIMEOUT")
 
+    # Gatekeeperd admin API (assistant tools — external HTTP)
+    gatekeeper_base_url: str = Field(default="", validation_alias="GATEKEEPER_BASE_URL")
+    gatekeeper_email: str = Field(default="", validation_alias="GATEKEEPER_EMAIL")
+    gatekeeper_password: str = Field(default="", validation_alias="GATEKEEPER_PASSWORD")
+    gatekeeper_token: str | None = Field(default=None, validation_alias="GATEKEEPER_TOKEN")
+    gatekeeper_timeout: float = Field(default=30.0, validation_alias="GATEKEEPER_TIMEOUT")
+
     model_config = {
         "env_prefix": "VELA_",  # Applies to all server fields without explicit aliases
         "case_sensitive": False,
@@ -148,6 +155,7 @@ class Config(BaseSettings):
         "vps_url", "agent_id", "agent_secret", "relay_secret", "public_address",
         "metadata_raw", "local_service_url", "local_service_username",
         "local_service_password", "local_service_token_path",
+        "gatekeeper_base_url", "gatekeeper_email", "gatekeeper_password", "gatekeeper_token",
         mode="before"
     )
     @classmethod

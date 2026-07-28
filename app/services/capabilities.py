@@ -36,7 +36,7 @@ DEP_GROUP_TO_FLAG: dict[str, str] = {
 }
 
 # Modules without CLI dependency groups — always probed separately
-EXTRA_MODULES = ("monitoring", "processes", "scheduler", "docker", "alerts", "push", "spotify", "assistant")
+EXTRA_MODULES = ("monitoring", "processes", "scheduler", "docker", "alerts", "push", "spotify", "assistant", "gatekeeper")
 
 # Map API path prefix → module key (for assistant tools)
 PATH_PREFIX_TO_MODULE: list[tuple[str, str]] = [
@@ -267,6 +267,21 @@ def _probe_extra_modules(modules: dict[str, ModuleCapability]) -> None:
         reason=None if assistant_ok else "FIREWORKS_API_KEY not configured in .env",
     )
 
+    # gatekeeper — external Gatekeeperd admin API
+    from app.services.gatekeeper.client import is_configured as gatekeeper_configured
+
+    gatekeeper_enabled = _flag_enabled("gatekeeper") if "gatekeeper" in (config.feature_flags or {}) else True
+    gk_ok = gatekeeper_configured()
+    gk_reason = None if gk_ok else (
+        "Set GATEKEEPER_BASE_URL and GATEKEEPER_TOKEN (or GATEKEEPER_EMAIL + GATEKEEPER_PASSWORD) in .env"
+    )
+    modules["gatekeeper"] = ModuleCapability(
+        available=gatekeeper_enabled and gk_ok,
+        config_enabled=gatekeeper_enabled,
+        reason=gk_reason,
+        metadata={"configured": gk_ok, "base_url": (config.gatekeeper_base_url or "").strip() or None},
+    )
+
     # clipboard — pyperclip backend (X11 or Wayland)
     clipboard_enabled = _flag_enabled("clipboard")
     clipboard_backends = _clipboard_backends()
@@ -332,6 +347,14 @@ def _module_for_tool_path(path: str) -> str | None:
 
 
 def _tool_availability(tool_name: str, tool_def: dict[str, Any], modules: dict[str, ModuleCapability]) -> tuple[bool, str | None]:
+    if tool_def.get("service") == "gatekeeper":
+        module = modules.get("gatekeeper")
+        if module and not module.available:
+            return False, module.reason or "Gatekeeper not configured"
+        if not module:
+            return False, "Gatekeeper module unavailable"
+        return True, None
+
     path = tool_def.get("path", "")
     module_key = _module_for_tool_path(path)
     if not module_key:

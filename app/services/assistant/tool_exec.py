@@ -223,6 +223,15 @@ async def _execute_tool(
     if tool_name == "download_file":
         return await _execute_download_file(app, payload, headers)
 
+    if tool.get("service") == "gatekeeper":
+        from app.services.gatekeeper.client import request as gatekeeper_request
+
+        method = tool["method"].upper()
+        use_query = tool.get("query_input") or method == "GET"
+        if use_query:
+            return await gatekeeper_request(method, path, params=payload or None)
+        return await gatekeeper_request(method, path, json_body=payload or {})
+
     method = tool["method"].upper()
     use_query = tool.get("query_input") or method == "GET"
     transport = ASGITransport(app=app)

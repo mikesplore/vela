@@ -97,6 +97,13 @@ LOW_RISK_TOOLS = {
     "get_vpn_status",
     "check_updates",
     "get_logs",
+    "gatekeeper_list_projects",
+    "gatekeeper_get_project",
+    "gatekeeper_list_overdue",
+    "gatekeeper_list_payments",
+    "gatekeeper_revenue_report",
+    "gatekeeper_list_audit",
+    "gatekeeper_list_containers",
 }
 
 MEDIUM_RISK_TOOLS = {
@@ -128,6 +135,8 @@ MEDIUM_RISK_TOOLS = {
     "stop_container",
     "restart_container",
     "send_push_notification",
+    "gatekeeper_block_project",
+    "gatekeeper_unblock_project",
 }
 
 HIGH_RISK_TOOLS = {
@@ -211,6 +220,10 @@ def _tool_summary(tool_name: str, tool_input: dict[str, Any]) -> str:
         return "create a zip archive"
     if tool_name == "unzip_path":
         return f'unzip {tool_input.get("path", "the selected archive")}'
+    if tool_name == "gatekeeper_block_project":
+        return f'block Gatekeeper project {tool_input.get("slug", "<unknown>")}'
+    if tool_name == "gatekeeper_unblock_project":
+        return f'unblock Gatekeeper project {tool_input.get("slug", "<unknown>")}'
     return tool_name.replace("_", " ")
 
 

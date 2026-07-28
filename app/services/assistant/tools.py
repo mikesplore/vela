@@ -854,6 +854,14 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     },
 }
 
+from app.services.assistant.gatekeeper_tools import (
+    GATEKEEPER_TOOL_DEFINITIONS,
+    GATEKEEPER_TOOL_DISPLAY_NAMES,
+    GATEKEEPER_TOOL_HINTS,
+)
+
+TOOL_DEFINITIONS.update(GATEKEEPER_TOOL_DEFINITIONS)
+
 INPUT_CONFIRM_TOOLS = {
     "move_mouse",
     "click_mouse",
@@ -1015,6 +1023,8 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "spotify_callback": "Finishing Spotify sign-in",
 }
 
+TOOL_DISPLAY_NAMES.update(GATEKEEPER_TOOL_DISPLAY_NAMES)
+
 
 # Map common model hallucinations / alternate names to canonical tool names
 TOOL_ALIASES: dict[str, str] = {
@@ -1052,6 +1062,8 @@ _TOOL_HINTS: list[tuple[frozenset[str], str]] = [
     (frozenset({"health_check"}), "HTTP endpoint up? → health_check (e.g. http://127.0.0.1:8765/health for Vela API)"),
     (frozenset({"get_docker_info"}), "docker/compose status → get_docker_info, list_docker_containers, compose_status"),
 ]
+
+_TOOL_HINTS.extend(GATEKEEPER_TOOL_HINTS)
 
 _TOOL_PROMPT_BODY = """You are Vela's tool picker. Output ONLY a JSON array — no markdown wrapper, no prose outside the array.
 
