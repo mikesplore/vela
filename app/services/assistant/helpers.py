@@ -160,15 +160,25 @@ def extract_media_playback_context(results: list[dict[str, Any]]) -> tuple[str |
 def _build_planner_messages(
     user_message: str,
     history: list[dict[str, str]] | None = None,
+    available_tools: set[str] | None = None,
+    selected_domains: list[str] | None = None,
 ) -> list[dict[str, str]]:
-    """Build the message list for the tool planner, injecting the Vela system prompt
-    alongside the tool-router prompt so the model knows its domain boundaries."""
+    """Build the message list for the tool planner.
+
+    When selected_domains is provided, use the selector stage filtered by those domains.
+    Otherwise, fall back to the legacy unfiltered tool list.
+    """
+    if selected_domains is not None:
+        tool_prompt = build_system_tool_prompt(
+            available_tools=available_tools,
+            stage="selector",
+            selected_domains=selected_domains,
+        )
+    else:
+        tool_prompt = build_system_tool_prompt(available_tools=available_tools)
     messages = [
         {"role": "system", "content": config.assistant_system_prompt},
-        {
-            "role": "system",
-            "content": build_system_tool_prompt(capabilities_service.get_available_tool_names()),
-        },
+        {"role": "system", "content": tool_prompt},
     ]
     if history:
         messages.extend(history)
@@ -176,13 +186,82 @@ def _build_planner_messages(
     return messages
 
 
+async def plan_domain_selection(user_message: str, history: list[dict[str, str]] | None = None) -> list[str]:
+    """Stage 1: Select relevant domains for the user's request.
+
+    Returns a list of domain names, or an empty list for conversational requests.
+    """
+    messages = [
+        {"role": "system", "content": config.assistant_system_prompt},
+        {"role": "system", "content": build_system_tool_prompt(stage="router")},
+    ]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
+
+    api_key = get_api_key()
+    if not api_key:
+        return []
+
+    url = f"{config.fireworks_api_url}/chat/completions"
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    payload = {
+        "model": config.fireworks_model,
+        "max_tokens": 256,
+        "max_completion_tokens": 512,
+        "response_format": {"type": "json_object"},
+        "messages": messages,
+        "top_k": 1,
+        "reasoning_history": "disabled",
+        "safe_tokenization": True,
+    }
+
+    try:
+        async with AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            res_json = response.json()
+            text = res_json["choices"][0]["message"]["content"] or ""
+    except Exception as exc:
+        logger.error("Domain selection failed: %s", exc, exc_info=True)
+        return []
+
+    clean = clean_text(text)
+    try:
+        data = json.loads(clean)
+        domains = data.get("domains", [])
+        if isinstance(domains, list):
+            return [str(d) for d in domains if isinstance(d, str)]
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return []
+
+
 async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
     """
-    Single LLM call → list of tool calls to execute in parallel.
+    Two-stage planner: domain selection → tool selection.
+    Single LLM call for conversational replies, two calls for tool requests.
     For conversational replies returns a single-item list with tool="none".
-    Token cost is the same whether the user asks for 1 or 5 simultaneous actions.
     """
-    messages = _build_planner_messages(user_message, history)
+    available_tools = capabilities_service.get_available_tool_names()
+
+    # Stage 1: Domain selection
+    selected_domains = await plan_domain_selection(user_message, history)
+    if not selected_domains:
+        # No domains selected — treat as conversational
+        return [{"tool": "none", "tool_input": {}, "conversational_reply": "Hello! How can I help you today?"}]
+
+    # Stage 2: Tool selection filtered by domains
+    messages = _build_planner_messages(
+        user_message,
+        history,
+        available_tools=available_tools,
+        selected_domains=selected_domains,
+    )
 
     api_key = get_api_key()
     if not api_key:
@@ -200,15 +279,14 @@ async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | Non
     async with AsyncClient(timeout=30.0) as client:
         for attempt in range(max_retries):
             try:
-                # Optimized payload for token-efficient tool planning
                 payload = {
                     "model": config.fireworks_model,
                     "max_tokens": 1024,
-                    "max_completion_tokens": 1500,  # Safety cap
+                    "max_completion_tokens": 1500,
                     "response_format": {"type": "json_object"},
                     "messages": messages,
-                    "top_k": 1,  # More deterministic, reduces token waste
-                    "reasoning_history": "disabled",  # Keeps inputs from snowballing
+                    "top_k": 1,
+                    "reasoning_history": "disabled",
                     "safe_tokenization": True,
                 }
 
@@ -221,12 +299,10 @@ async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | Non
                 logger.error("Fireworks AI chat.completions.create failed: %s", exc, exc_info=True)
                 raise ValueError(explain_fireworks_issue(exc)) from exc
 
-            # Strip think blocks before any parsing or history injection
             clean = clean_text(text)
             parsed = extract_json_array(clean)
             if parsed:
-                available = capabilities_service.get_available_tool_names()
-                normalized = normalize_planner_tool_calls(parsed, available_tools=available)
+                normalized = normalize_planner_tool_calls(parsed, available_tools=available_tools)
                 if normalized:
                     return normalized
 
@@ -237,7 +313,6 @@ async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | Non
                 clean[:200],
             )
             if attempt < max_retries - 1:
-                # Append the CLEANED text (no <think> blocks) so retries don't get poisoned
                 messages.append({"role": "assistant", "content": clean or text})
                 messages.append({
                     "role": "user",
@@ -518,7 +593,7 @@ async def plan_tool_calls_streaming(
         enable_thinking: bool = False,
 ) -> AsyncGenerator[dict[str, str] | list[dict[str, Any]], None]:
     """
-    Streaming-aware tool planner.
+    Streaming-aware tool planner with two-stage domain routing.
 
     Yields:
         {"type": "thinking", "text": "..."} — live thinking deltas while planning
@@ -529,7 +604,18 @@ async def plan_tool_calls_streaming(
     Note: response_format/json_object is incompatible with stream=True on Fireworks,
     so we stream with thinking enabled and buffer the content for JSON parsing.
     """
-    messages = _build_planner_messages(user_message, history)
+    available_tools = capabilities_service.get_available_tool_names()
+    selected_domains = await plan_domain_selection(user_message, history)
+    if not selected_domains:
+        yield {"type": "planning_done"}
+        yield [{"tool": "none", "tool_input": {}, "conversational_reply": "Hello! How can I help you today?"}]
+        return
+    messages = _build_planner_messages(
+        user_message,
+        history,
+        available_tools=available_tools,
+        selected_domains=selected_domains,
+    )
 
     api_key = get_api_key()
     if not api_key:
@@ -628,13 +714,12 @@ async def plan_tool_calls_streaming(
             await asyncio.sleep(1)
             continue
 
-        available = capabilities_service.get_available_tool_names()
         parsed = extract_json_array(clean_text(content_buf))
         if not parsed and reasoning_buf:
             # Some models/providers send the entire answer into `reasoning_content` while leaving `content` empty.
             parsed = extract_json_array(clean_text(reasoning_buf))
         if parsed:
-            normalized = normalize_planner_tool_calls(parsed, available_tools=available)
+            normalized = normalize_planner_tool_calls(parsed, available_tools=available_tools)
             if not normalized:
                 parsed = None
             else:
