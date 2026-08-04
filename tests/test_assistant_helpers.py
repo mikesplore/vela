@@ -1,4 +1,4 @@
-from app.services.assistant.helpers import extract_json_array, fireworks_stream_delta
+from app.services.assistant.helpers import extract_json_array, fireworks_stream_delta, normalize_planner_tool_calls
 
 
 def test_fireworks_stream_delta_normal_chunk():
@@ -30,6 +30,26 @@ def test_extract_json_array_wraps_single_object_tool_call():
     text = '{"tool":"monitor_cpu","tool_input":{}}'
     parsed = extract_json_array(text)
     assert parsed == [{"tool": "monitor_cpu", "tool_input": {}}]
+
+
+def test_normalize_planner_tool_calls_salvages_embedded_plan():
+    raw = [{
+        "tool": "none",
+        "tool_input": {},
+        "conversational_reply": '[{"tool":"monitor_cpu","tool_input":{}}]',
+    }]
+    normalized = normalize_planner_tool_calls(raw, available_tools={"monitor_cpu"})
+    assert normalized == [{"tool": "monitor_cpu", "tool_input": {}}]
+
+
+def test_normalize_planner_tool_calls_rejects_tool_explanation_as_chat():
+    raw = [{
+        "tool": "none",
+        "tool_input": {},
+        "conversational_reply": "Use gatekeeper_create_container with name=acw and image=mikesplore/acw-api",
+    }]
+    normalized = normalize_planner_tool_calls(raw, available_tools={"gatekeeper_create_container"})
+    assert normalized is None
 
 
 def test_format_media_playback_summary():

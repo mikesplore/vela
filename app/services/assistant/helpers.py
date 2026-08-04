@@ -225,7 +225,10 @@ async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | Non
             clean = clean_text(text)
             parsed = extract_json_array(clean)
             if parsed:
-                return parsed
+                available = capabilities_service.get_available_tool_names()
+                normalized = normalize_planner_tool_calls(parsed, available_tools=available)
+                if normalized:
+                    return normalized
 
             logger.warning(
                 "Model returned non-array JSON on attempt %d/%d. Retrying with correction. Output: %s",
@@ -239,7 +242,7 @@ async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | Non
                 messages.append({
                     "role": "user",
                     "content": (
-                        "ERROR: Your previous response was not a JSON array. "
+                        "ERROR: Your previous response was not a valid tool-call JSON array. "
                         "You MUST respond with ONLY a JSON array starting with '[' and ending with ']'. "
                         "No markdown, no explanations, no natural language. "
                         'Example: [{"tool":"none","tool_input":{},"conversational_reply":"Your reply here"}]'
@@ -625,10 +628,17 @@ async def plan_tool_calls_streaming(
             await asyncio.sleep(1)
             continue
 
+        available = capabilities_service.get_available_tool_names()
         parsed = extract_json_array(clean_text(content_buf))
         if not parsed and reasoning_buf:
             # Some models/providers send the entire answer into `reasoning_content` while leaving `content` empty.
             parsed = extract_json_array(clean_text(reasoning_buf))
+        if parsed:
+            normalized = normalize_planner_tool_calls(parsed, available_tools=available)
+            if not normalized:
+                parsed = None
+            else:
+                parsed = normalized
         if parsed:
             yield {"type": "planning_done"}
             yield parsed  # type: ignore[misc]
@@ -639,11 +649,11 @@ async def plan_tool_calls_streaming(
             attempt + 1, max_retries, content_buf[:200],
         )
         if attempt < max_retries - 1:
-            messages.append({"role": "assistant", "content": content_buf})
+            messages.append({"role": "assistant", "content": content_buf or reasoning_buf})
             messages.append({
                 "role": "user",
                 "content": (
-                    "ERROR: Your previous response was not a JSON array. "
+                    "ERROR: Your previous response was not a valid tool-call JSON array. "
                     "You MUST respond with ONLY a JSON array starting with '[' and ending with ']'. "
                     "No markdown, no explanations, no natural language. "
                     'Example: [{"tool":"none","tool_input":{},"conversational_reply":"Your reply here"}]'
@@ -726,6 +736,83 @@ def extract_json_array(text: str) -> list[dict[str, Any]] | None:
             pass
 
     return None
+
+
+def normalize_planner_tool_calls(
+    tool_calls: list[dict[str, Any]] | None,
+    *,
+    available_tools: set[str] | None = None,
+) -> list[dict[str, Any]] | None:
+    """Normalize the planner output into the canonical tool-call list shape.
+
+    Some models occasionally:
+    - Put a JSON tool plan inside conversational_reply (as a string).
+    - Return a list with missing/invalid tool_input.
+    - "Explain" a tool call in conversational_reply while setting tool="none".
+
+    Returning None signals "treat this as invalid, retry planning".
+    """
+    if not tool_calls:
+        return None
+
+    # Salvage: tool plan accidentally embedded inside conversational_reply.
+    for item in tool_calls:
+        if not isinstance(item, dict):
+            continue
+        if item.get("tool") != "none":
+            continue
+        reply = item.get("conversational_reply")
+        if not isinstance(reply, str) or not reply.strip():
+            continue
+        embedded = extract_json_array(reply)
+        if embedded and any(
+            isinstance(call, dict) and call.get("tool") and call.get("tool") != "none"
+            for call in embedded
+        ):
+            tool_calls = embedded
+            break
+
+    normalized: list[dict[str, Any]] = []
+    for item in tool_calls:
+        if not isinstance(item, dict):
+            continue
+        tool = item.get("tool")
+        if not tool:
+            continue
+        tool_name = str(tool)
+
+        tool_input = item.get("tool_input") or {}
+        if not isinstance(tool_input, dict):
+            tool_input = {}
+
+        normalized_item: dict[str, Any] = {"tool": tool_name, "tool_input": tool_input}
+
+        if "depends_on" in item:
+            normalized_item["depends_on"] = item["depends_on"]
+        if "conversational_reply" in item and item.get("conversational_reply") is not None:
+            normalized_item["conversational_reply"] = str(item.get("conversational_reply"))
+
+        normalized.append(normalized_item)
+
+    if not normalized:
+        return None
+
+    # If the model "described" a tool call but didn't emit it, force a retry.
+    if len(normalized) == 1 and normalized[0].get("tool") == "none":
+        reply = str(normalized[0].get("conversational_reply") or "")
+        if reply:
+            suspicious = bool(
+                re.search(r'"tool"\s*:', reply)
+                or re.search(r"\btool_input\b", reply)
+                or re.search(r"\bgatekeeper_\w+\b", reply)
+            )
+            if suspicious:
+                if available_tools and any(t in reply for t in available_tools):
+                    return None
+                if not available_tools:
+                    return None
+
+    return normalized
 
 
 def expires_in_s(expires_at: datetime) -> int:
