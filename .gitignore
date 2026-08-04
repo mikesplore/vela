@@ -1,15 +1,103 @@
+# === Python ===
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.python-venv/
-.venv/
-venv/
+*.py[cod]
+*$py.class
+*.so
 *.egg-info/
+*.egg
 dist/
 build/
-*.egg
 .eggs/
+*.whl
+pip-log.txt
+pip-delete-this-directory.txt
+
+# === Virtual Environments ===
+.venv/
+venv/
+*.env
+.python-venv/
+ENV/
+env/
+
+# === IDE & Editors ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# === Testing & Coverage ===
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+.ruff_cache/
+
+# === Jupyter ===
+.ipynb_checkpoints/
+*.ipynb
+
+# === Environment & Secrets ===
+.env
+.env.*
+!.env.example
+config.yaml
+!config.example.yaml
+*.pem
+*.key
+*.crt
+*.p12
+
+# === Database ===
 *.sqlite
+*.sqlite3
+*.db
+migrations/versions/*.pyc
+
+# === Logs ===
+logs/
+*.log
+vela.log
+
+# === OS Generated ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Docker ===
+docker-compose.override.yml
+.docker/
+
+# === Build Artifacts ===
 *.xml
 *.iml
+out/
+target/
+
+# === Qwen Coder / AI Tools ===
+.qwen/
+.aider*
+.cursor/
+.clinerules
+
+# === Temporary Files ===
+tmp/
+temp/
+*.tmp
+*.bak
+*.sqlite*
+*.yaml
+*.env
+*config.yaml.env

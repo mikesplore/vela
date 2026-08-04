@@ -1,2 +1,0 @@
-secret_key: this_is_a_test_secret_key_that_is_at_least_32_chars_long
-password_hash: $argon2id$v=19$m=65536,t=3,p=4$testsalt$testhashvalue
