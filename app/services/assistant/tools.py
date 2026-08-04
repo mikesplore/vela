@@ -1130,10 +1130,20 @@ def build_tool_list(available_tools: set[str] | None = None) -> str:
         items = TOOL_DEFINITIONS.items()
     else:
         items = ((name, t) for name, t in TOOL_DEFINITIONS.items() if name in available_tools)
-    return "\n".join(
-        "- " + name + ": " + t["description"] + (f" | input: {t['input']}" if "input" in t else "")
-        for name, t in items
-    )
+    rendered: list[str] = []
+    for name, tool in items:
+        suffix_parts: list[str] = []
+        if "input" in tool:
+            suffix_parts.append(f"input: {tool['input']}")
+        if tool.get("body_input"):
+            suffix_parts.append("body: JSON")
+        if tool.get("query_input"):
+            suffix_parts.append("query: yes")
+        if tool.get("service"):
+            suffix_parts.append(f"service: {tool['service']}")
+        suffix = (" | " + " | ".join(suffix_parts)) if suffix_parts else ""
+        rendered.append(f"- {name}: {tool['description']}{suffix}")
+    return "\n".join(rendered)
 
 
 def build_system_tool_prompt(available_tools: set[str] | None = None) -> str:

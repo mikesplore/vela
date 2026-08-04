@@ -1,0 +1,45 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+pyenv/
+
+# Python byte-code and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Flask instance and local configuration
+instance/
+.webassets-cache/
+
+# Environment variables and secrets
+.env
+.flaskenv
+*.env
+*.secret
+
+# Local databases and migrations
+*.db
+*.sqlite
+*.sqlite3
+migrations/
+
+# Static upload folders (if they contain user media)
+static/uploads/
+static/images/
+
+# Package distributions and build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE and System files
+.vscode/
+.idea/
+.DS_Store

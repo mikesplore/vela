@@ -300,6 +300,12 @@ async def compose_final_reply(user_message: str, results: list[dict[str, Any]]) 
             f"\nNow playing (use these exact facts — title, artist, status, elapsed, length):\n"
             f"{media_summary}\n"
         )
+    def _looks_like_tool_plan(text_value: str) -> bool:
+        if not text_value:
+            return False
+        cleaned_value = clean_text(text_value)
+        return extract_json_array(cleaned_value) is not None
+
     try:
         api_key = get_api_key()
         if not api_key:
@@ -338,6 +344,28 @@ async def compose_final_reply(user_message: str, results: list[dict[str, Any]]) 
 
             res_json = response.json()
             text = res_json["choices"][0]["message"]["content"] or ""
+
+            # Some models occasionally "fall back" into returning a tool plan JSON array
+            # even though this is the post-tool summary stage. Retry once with a hard correction.
+            if _looks_like_tool_plan(text):
+                correction_messages = payload["messages"] + [
+                    {"role": "assistant", "content": text},
+                    {
+                        "role": "user",
+                        "content": (
+                            "ERROR: You responded with JSON/tool calls. That breaks the app. "
+                            "Reply with ONLY the final user-facing Markdown summary. "
+                            "No JSON. No arrays/objects. Do not mention tool names. "
+                            "If something is missing, ask one short question."
+                        ),
+                    },
+                ]
+                retry_payload = dict(payload)
+                retry_payload["messages"] = correction_messages
+                retry_response = await client.post(url, headers=headers, json=retry_payload)
+                retry_response.raise_for_status()
+                retry_json = retry_response.json()
+                text = retry_json["choices"][0]["message"]["content"] or ""
     except Exception as exc:
         logger.error("Fireworks AI chat.completions.create failed: %s", exc, exc_info=True)
         raise ValueError(explain_fireworks_issue(exc)) from exc
@@ -525,12 +553,14 @@ async def plan_tool_calls_streaming(
         payload["thinking"] = {"type": "enabled", "budget_tokens": 1024}
 
     content_buf = ""
+    reasoning_buf = ""
     max_retries = 4
     last_unescaped = ""
     detected_tools: set[str] = set()
 
     for attempt in range(max_retries):
         content_buf = ""
+        reasoning_buf = ""
         # DO NOT clear detected_tools or last_unescaped here!
         # They persist across retries to prevent duplicate events.
         try:
@@ -552,6 +582,8 @@ async def plan_tool_calls_streaming(
                         delta = fireworks_stream_delta(chunk)
                         if enable_thinking and delta.get("reasoning_content"):
                             yield {"type": "thinking", "text": delta["reasoning_content"]}
+                        if delta.get("reasoning_content"):
+                            reasoning_buf += str(delta["reasoning_content"])
                         if delta.get("content"):
                             # Buffer raw content for JSON parsing
                             for evt in split_think_stream(delta["content"]):
@@ -594,6 +626,9 @@ async def plan_tool_calls_streaming(
             continue
 
         parsed = extract_json_array(clean_text(content_buf))
+        if not parsed and reasoning_buf:
+            # Some models/providers send the entire answer into `reasoning_content` while leaving `content` empty.
+            parsed = extract_json_array(clean_text(reasoning_buf))
         if parsed:
             yield {"type": "planning_done"}
             yield parsed  # type: ignore[misc]
@@ -614,6 +649,43 @@ async def plan_tool_calls_streaming(
                     'Example: [{"tool":"none","tool_input":{},"conversational_reply":"Your reply here"}]'
                 ),
             })
+
+    # Final fallback: try a single non-streaming plan (response_format json_object) before giving up.
+    # Use the *mutated* messages list so the model sees the prior failures + correction prompt.
+    try:
+        api_key = get_api_key()
+        if not api_key:
+            raise ValueError("FIREWORKS_API_KEY is not configured in your .env file.")
+
+        url = f"{config.fireworks_api_url}/chat/completions"
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        payload = {
+            "model": config.fireworks_model,
+            "max_tokens": 1024,
+            "max_completion_tokens": 1500,
+            "response_format": {"type": "json_object"},
+            "messages": messages,
+            "top_k": 1,
+            "reasoning_history": "disabled",
+            "safe_tokenization": True,
+        }
+        async with AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            res_json = response.json()
+            text = res_json["choices"][0]["message"]["content"] or ""
+
+        parsed = extract_json_array(clean_text(text))
+        if parsed:
+            yield {"type": "planning_done"}
+            yield parsed  # type: ignore[misc]
+            return
+    except Exception:
+        pass
 
     logger.error("Planner failed after %d retries. Output: %s", max_retries, content_buf[:500])
     yield {"type": "planning_done"}

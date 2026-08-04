@@ -268,9 +268,24 @@ GATEKEEPER_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
             "DEPLOYMENT ORDER: This is step 1 of 4 — do this first. "
             "Requires image. Optional: name, projectSlug, ports, env, network, volumes, restartPolicy. "
             "If the user provides .env variables, pass them in the env field. "
+            "If the user says the env vars are already in a local .env file on the Docker host, prefer passing "
+            "envFilePath (absolute path) so Gatekeeperd can load it server-side. "
             "After creation, verify the container is running before proceeding to project creation."
         ),
-        "input": {"image": "string"},
+        "input": {
+            "image": "string",
+            "name": "string?",
+            "projectSlug": "string?",
+            "ports": (
+                "array? (examples: [9921] for host=container same port, "
+                "or [{\"host\":9921,\"container\":9921,\"protocol\":\"tcp\"}])"
+            ),
+            "env": "object? (key/value map of env vars)",
+            "envFilePath": "string? (absolute path to .env on host)",
+            "network": "string? (docker network name)",
+            "volumes": "array? (binds/volumes; Gatekeeperd-specific shape)",
+            "restartPolicy": "string? (e.g. always|unless-stopped|no)",
+        },
         "body_input": True,
     },
     "gatekeeper_containers_wizard_context": {
@@ -474,6 +489,6 @@ GATEKEEPER_TOOL_HINTS: list[tuple[frozenset[str], str]] = [
         "deploy a new client app → full deployment workflow in order: "
         "1) gatekeeper_check_image_status → 2) gatekeeper_create_container (with .env if provided) → "
         "3) gatekeeper_create_project → 4) gatekeeper_nginx_wizard_context → gatekeeper_nginx_enable → "
-        "5) gatekeeper_install_certificate. Ask user for any missing prerequisites (image, domain, email, .env path).",
+        "5) gatekeeper_install_certificate. Ask user for any missing prerequisites (image, domain, email, envFilePath).",
     ),
 ]
