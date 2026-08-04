@@ -1146,10 +1146,219 @@ def build_tool_list(available_tools: set[str] | None = None) -> str:
     return "\n".join(rendered)
 
 
-def build_system_tool_prompt(available_tools: set[str] | None = None) -> str:
-    """Build the planner system prompt, optionally limited to available tools on this host."""
-    tool_list = build_tool_list(available_tools)
-    tool_hints = build_tool_hints(available_tools)
+# ── Two-Stage Tool Routing ───────────────────────────────────────────────────
+# Stage 1: Domain Router — selects relevant domains from user intent
+# Stage 2: Tool Selector — picks specific tools from filtered domain subset
+
+DOMAIN_TOOLS: dict[str, list[str]] = {
+    # Base tool domains
+    "system_info": [
+        "get_system_info", "get_system_cpu", "get_system_ram", "get_system_gpu",
+        "get_system_disk", "get_system_os", "get_system_usb", "get_system_monitors",
+        "get_system_bios", "get_device_info",
+    ],
+    "network": [
+        "get_network_ip", "get_network_location", "get_wifi_status", "list_wifi_networks",
+        "connect_wifi", "disconnect_wifi", "toggle_wifi", "list_bluetooth_devices",
+        "pair_bluetooth_device", "connect_bluetooth_device", "disconnect_bluetooth_device",
+        "unpair_bluetooth_device", "toggle_bluetooth", "ping_host", "speed_test",
+        "get_firewall_rules", "add_firewall_rule", "remove_firewall_rule",
+        "get_vpn_status", "connect_vpn", "disconnect_vpn",
+    ],
+    "monitoring": [
+        "get_snapshot", "monitor_cpu", "monitor_ram", "monitor_gpu", "monitor_temps",
+        "monitor_fans", "get_battery_status", "list_processes", "get_uptime",
+        "get_battery_health", "get_alert_status", "get_spike_alerts", "get_daily_summary",
+        "send_email_report", "get_vnstat_summary",
+    ],
+    "audio": [
+        "set_volume", "increase_volume", "decrease_volume", "mute_audio", "unmute_audio",
+        "get_audio_devices", "beep",
+    ],
+    "media_playback": [
+        "get_now_playing", "toggle_play_pause", "skip_track", "seek_track",
+    ],
+    "spotify": [
+        "search_and_play", "list_spotify_devices", "authorize_spotify", "spotify_callback",
+    ],
+    "clipboard": [
+        "get_clipboard", "set_clipboard", "clear_clipboard",
+    ],
+    "display": [
+        "take_screenshot", "start_screen_recording", "stop_screen_recording",
+        "turn_monitor_off", "turn_monitor_on", "set_brightness", "get_brightness",
+        "set_resolution", "rotate_screen", "lock_screen", "toggle_night_light",
+    ],
+    "filesystem": [
+        "list_directory", "download_file", "upload_file", "delete_file", "make_directory",
+        "rename_file", "search_files", "get_disk_usage", "create_zip", "extract_zip",
+        "open_file", "get_config", "list_tree",
+    ],
+    "input_control": [
+        "move_mouse", "left_click", "right_click", "scroll_mouse", "type_text", "press_keys",
+    ],
+    "process_control": [
+        "list_processes", "is_process_running", "kill_process", "list_applications",
+        "open_application", "close_application", "minimize_window", "maximize_window",
+        "focus_window", "list_windows",
+    ],
+    "scheduler": [
+        "schedule_job", "list_jobs", "cancel_job", "run_job_now",
+    ],
+    "power": [
+        "get_power_profile", "set_power_profile",
+    ],
+    "security": [
+        "lock_screen", "logout_user", "get_webcam_status", "get_mic_status",
+        "get_login_history", "get_ssh_sessions", "kill_ssh_session",
+    ],
+    "notifications": [
+        "send_notification", "clear_notifications", "read_notifications", "list_notifications",
+        "push_notification",
+    ],
+    "maintenance": [
+        "clear_cache", "clear_logs", "check_updates", "restart_service", "stop_service",
+        "start_service", "get_service_status", "list_timers", "enable_timer", "disable_timer",
+        "list_packages", "remove_package", "get_boot_errors",
+    ],
+    "docker": [
+        "get_docker_info", "list_containers", "get_container_status", "get_container_logs",
+        "start_container", "stop_container", "restart_container", "docker_compose",
+    ],
+    # Gatekeeper domains
+    "gatekeeper_project_management": [
+        "gatekeeper_list_projects", "gatekeeper_get_project", "gatekeeper_create_project",
+        "gatekeeper_update_project", "gatekeeper_delete_project", "gatekeeper_list_payments",
+        "gatekeeper_revenue_report", "gatekeeper_initialize_payment", "gatekeeper_list_audit",
+        "gatekeeper_get_project_audit", "gatekeeper_list_overdue_projects",
+    ],
+    "gatekeeper_block_unblock": [
+        "gatekeeper_block_project", "gatekeeper_unblock_project",
+    ],
+    "gatekeeper_nginx": [
+        "gatekeeper_nginx_wizard_context", "gatekeeper_nginx_validate", "gatekeeper_nginx_status",
+        "gatekeeper_nginx_enable", "gatekeeper_nginx_disable", "gatekeeper_nginx_remove",
+    ],
+    "gatekeeper_ssl": [
+        "gatekeeper_list_certs", "gatekeeper_install_cert", "gatekeeper_remove_cert",
+        "gatekeeper_check_cert",
+    ],
+    "gatekeeper_docker": [
+        "gatekeeper_docker_image_status", "gatekeeper_docker_create_container",
+        "gatekeeper_docker_wizard_port", "gatekeeper_docker_wizard_volume",
+        "gatekeeper_docker_wizard_network", "gatekeeper_docker_wizard_env",
+        "gatekeeper_docker_start_container", "gatekeeper_docker_stop_container",
+        "gatekeeper_docker_restart_container", "gatekeeper_docker_remove_container",
+        "gatekeeper_docker_create_network", "gatekeeper_docker_remove_network",
+        "gatekeeper_docker_pull_image", "gatekeeper_docker_delete_image",
+    ],
+    "gatekeeper_admin": [
+        # All gatekeeper tools for full admin access
+        "gatekeeper_list_projects", "gatekeeper_get_project", "gatekeeper_create_project",
+        "gatekeeper_update_project", "gatekeeper_delete_project", "gatekeeper_list_payments",
+        "gatekeeper_revenue_report", "gatekeeper_initialize_payment", "gatekeeper_list_audit",
+        "gatekeeper_get_project_audit", "gatekeeper_list_overdue_projects",
+        "gatekeeper_block_project", "gatekeeper_unblock_project",
+        "gatekeeper_nginx_wizard_context", "gatekeeper_nginx_validate", "gatekeeper_nginx_status",
+        "gatekeeper_nginx_enable", "gatekeeper_nginx_disable", "gatekeeper_nginx_remove",
+        "gatekeeper_list_certs", "gatekeeper_install_cert", "gatekeeper_remove_cert",
+        "gatekeeper_check_cert",
+        "gatekeeper_docker_image_status", "gatekeeper_docker_create_container",
+        "gatekeeper_docker_wizard_port", "gatekeeper_docker_wizard_volume",
+        "gatekeeper_docker_wizard_network", "gatekeeper_docker_wizard_env",
+        "gatekeeper_docker_start_container", "gatekeeper_docker_stop_container",
+        "gatekeeper_docker_restart_container", "gatekeeper_docker_remove_container",
+        "gatekeeper_docker_create_network", "gatekeeper_docker_remove_network",
+        "gatekeeper_docker_pull_image", "gatekeeper_docker_delete_image",
+    ],
+}
+
+_DOMAIN_ROUTER_PROMPT = """You are Vela's domain router. Analyze the user's request and select the most relevant domain(s) from the list below. Output ONLY a JSON object — no markdown wrapper, no prose.
+
+JSON RULES:
+1. Response must be a valid JSON object with keys: "domains" (array of strings), "confidence" (float 0.0-1.0).
+2. "domains" contains 1-3 domain names from the Available domains list that best match the user's intent.
+3. "confidence" reflects how certain you are about the domain selection.
+4. If confidence < 0.7, include "fallback": true to trigger broad tool search.
+
+AVAILABLE DOMAINS:
+- system_info: Hardware specs, device identity, what the machine is made of
+- network: IP addresses, WiFi, Bluetooth, firewall, VPN, speed tests
+- monitoring: Live CPU/RAM/GPU usage, temperatures, fans, battery, processes, alerts, vnstat
+- audio: Volume control, mute/unmute, audio devices, beep
+- media_playback: Now-playing info, play/pause, skip, seek (generic media)
+- spotify: Spotify-specific playback, devices, authorization
+- clipboard: Read, write, clear clipboard content
+- display: Screenshots, screen recording, monitor on/off, brightness, resolution, rotation, lock screen, night light
+- filesystem: File operations, disk usage, archives, directory tree
+- input_control: Mouse movement/clicks/scroll, keyboard typing/key presses
+- process_control: List/kill processes, open/close apps, window management
+- scheduler: Schedule, list, cancel, or run jobs immediately
+- power: Get or set power profiles
+- security: Lock screen, logout, webcam/mic status, login history, SSH sessions
+- notifications: Send, read, clear, list notifications, push notifications
+- maintenance: Clear cache/logs, check updates, restart/stop/start services, timers, packages, boot errors
+- docker: Docker container info, list, status, logs, start/stop/restart, compose
+- gatekeeper_project_management: List/get/create/update/delete projects, payments, revenue, audit, overdue
+- gatekeeper_block_unblock: Block or unblock projects
+- gatekeeper_nginx: Nginx wizard context, validate config, status, enable/disable/remove
+- gatekeeper_ssl: List, install, remove, check SSL certificates
+- gatekeeper_docker: Docker image status, create container, wizard helpers (port/volume/network/env), container management, networks, pull/delete images
+- gatekeeper_admin: All gatekeeper tools for full administrative access
+
+ROUTING STRATEGY:
+- For gatekeeper-related requests, prefer specialized domains (gatekeeper_project_management, gatekeeper_nginx, etc.) over gatekeeper_admin unless the request is broadly administrative.
+- For ambiguous requests like "my laptop feels weird" or "check my system", select multiple relevant domains (e.g., ["monitoring", "system_info"]).
+- For compound requests spanning multiple areas, include all relevant domains.
+- If the request is purely conversational (greetings, thanks, jokes), set confidence low and include fallback.
+
+RESPONSE EXAMPLES:
+- User: "What's my CPU model?" → {{"domains": ["system_info"], "confidence": 0.95}}
+- User: "Turn off the monitor and lock the screen" → {{"domains": ["display", "security"], "confidence": 0.9}}
+- User: "Is my backend healthy?" → {{"domains": ["monitoring", "docker"], "confidence": 0.75}}
+- User: "Heading out" → {{"domains": ["display", "security", "audio"], "confidence": 0.8}}
+- User: "Hi" → {{"domains": [], "confidence": 0.3, "fallback": true}}
+
+Output ONLY the JSON object."""
+
+
+def build_system_tool_prompt(
+    available_tools: set[str] | None = None,
+    stage: str = "selector",
+    selected_domains: list[str] | None = None,
+) -> str:
+    """Build the planner system prompt with two-stage routing support.
+    
+    Args:
+        available_tools: Optional set of tool names to filter by (legacy behavior).
+        stage: "router" for domain selection prompt, "selector" for tool selection prompt.
+        selected_domains: When stage="selector", filter tools to these domains only.
+    
+    Returns:
+        - When stage="router": Returns _DOMAIN_ROUTER_PROMPT for domain selection.
+        - When stage="selector": Returns tool selection prompt filtered by selected_domains
+          (or available_tools if provided for legacy compatibility).
+    """
+    if stage == "router":
+        return _DOMAIN_ROUTER_PROMPT
+    
+    # Stage 2: Tool selector — filter tools by selected domains
+    if selected_domains is not None:
+        # Collect tools from selected domains
+        filtered_tools: set[str] = set()
+        for domain in selected_domains:
+            if domain in DOMAIN_TOOLS:
+                filtered_tools.update(DOMAIN_TOOLS[domain])
+        # Intersect with available_tools if both are provided
+        if available_tools is not None:
+            filtered_tools &= available_tools
+        tool_list = build_tool_list(filtered_tools if filtered_tools else None)
+        tool_hints = build_tool_hints(filtered_tools if filtered_tools else None)
+    else:
+        # Legacy behavior: filter by available_tools only
+        tool_list = build_tool_list(available_tools)
+        tool_hints = build_tool_hints(available_tools)
+    
     return _TOOL_PROMPT_BODY.format(tool_list=tool_list, tool_hints=tool_hints)
 
 
