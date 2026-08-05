@@ -1,6 +1,18 @@
 from typing import Any
 
 TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
+    # ── Meta / tool introspection ─────────────────────────────────────────────
+    "count_tools": {
+        "method": "GET",
+        "path": "/meta/tools/count",
+        "description": "Count how many assistant tools are available on this host. Use when the user asks how many tools/capabilities/commands you have, or how many things you can do.",
+    },
+    "list_tools": {
+        "method": "GET",
+        "path": "/meta/tools",
+        "description": "List all assistant tool names available on this host, optionally filtered by a search term. Use when the user asks what tools/capabilities/commands you have, what you can do, or whether a specific capability exists.",
+        "input": {"filter": "string?"},
+    },
     # ── System info ──────────────────────────────────────────────────────────
     "get_system_info": {
         "method": "GET",
@@ -873,6 +885,8 @@ INPUT_CONFIRM_TOOLS = {
 
 # Human-readable display names sent to the client instead of raw tool identifiers
 TOOL_DISPLAY_NAMES: dict[str, str] = {
+    "count_tools": "Counting available tools",
+    "list_tools": "Listing available tools",
     "get_system_info": "Gathering full system snapshot",
     "get_system_cpu": "Reading CPU details",
     "get_system_ram": "Reading memory usage",

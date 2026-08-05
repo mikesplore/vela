@@ -61,6 +61,7 @@ class ToolCallEvent(BaseModel):
     succeeded: bool
     user_id: Optional[str] = None
     error: Optional[str] = None
+    selection_rejected: bool = False
 
 
 class ToolStats(BaseModel):
@@ -77,8 +78,11 @@ class AssistantAuditSummary(BaseModel):
     total_tool_calls: int
     tool_error_count: int
     tool_error_rate: float
+    selection_rejected_count: int = 0
+    selection_accuracy: float = 0.0
     by_tool: list[ToolStats]
     recent_failures: list[ToolCallEvent]
+    recent_rejected: list[ToolCallEvent] = []
 
 
 class ToolEventsResponse(BaseModel):

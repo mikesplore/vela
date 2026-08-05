@@ -21,6 +21,8 @@ class ToolPolicy:
 
 
 LOW_RISK_TOOLS = {
+    "count_tools",
+    "list_tools",
     "get_system_info",
     "get_system_cpu",
     "get_system_ram",

@@ -39,6 +39,7 @@ class ToolCallEventModel(Base):
     succeeded: Mapped[bool] = mapped_column(index=True)
     user_id: Mapped[str | None] = mapped_column(nullable=True)
     error: Mapped[str | None] = mapped_column(nullable=True)
+    selection_rejected: Mapped[bool] = mapped_column(default=False, index=True)
 
 
 class RelayConnectionEventModel(Base):
@@ -127,6 +128,25 @@ def _configure_sqlite_connection(dbapi_connection, _connection_record) -> None:
 
 def init_audit_db() -> None:
     Base.metadata.create_all(engine)
+    _migrate_audit_schema()
+
+
+def _migrate_audit_schema() -> None:
+    """Add columns introduced after the initial schema (idempotent)."""
+    from sqlalchemy import inspect, text
+
+    with get_audit_session() as session:
+        inspector = inspect(engine)
+        if "assistant_tool_events" in inspector.get_table_names():
+            columns = {col["name"] for col in inspector.get_columns("assistant_tool_events")}
+            if "selection_rejected" not in columns:
+                session.execute(
+                    text(
+                        "ALTER TABLE assistant_tool_events "
+                        "ADD COLUMN selection_rejected BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
+                session.commit()
 
 
 def get_audit_session() -> Session:
@@ -171,6 +191,7 @@ def insert_tool_call_event(
     user_id: str | None = None,
     error: str | None = None,
     created_at: datetime | None = None,
+    selection_rejected: bool = False,
 ) -> None:
     with get_audit_session() as session:
         session.add(
@@ -182,6 +203,7 @@ def insert_tool_call_event(
                 succeeded=succeeded,
                 user_id=user_id,
                 error=error,
+                selection_rejected=selection_rejected,
             )
         )
         session.commit()

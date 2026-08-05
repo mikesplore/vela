@@ -100,4 +100,6 @@ temp/
 *.sqlite*
 *.yaml
 *.env
+*.sqlite
 *config.yaml.env
+pending_actions.sqlite
