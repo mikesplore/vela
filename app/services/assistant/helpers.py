@@ -252,16 +252,22 @@ async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | Non
     # Stage 1: Domain selection
     selected_domains = await plan_domain_selection(user_message, history)
     if not selected_domains:
-        # No domains selected — treat as conversational
-        return [{"tool": "none", "tool_input": {}, "conversational_reply": "Hello! How can I help you today?"}]
-
-    # Stage 2: Tool selection filtered by domains
-    messages = _build_planner_messages(
-        user_message,
-        history,
-        available_tools=available_tools,
-        selected_domains=selected_domains,
-    )
+        # No domains selected — fall back to unfiltered tool selection.
+        # The tool selector will return tool="none" with a proper conversational
+        # reply for genuinely conversational messages, or pick tools for real requests.
+        messages = _build_planner_messages(
+            user_message,
+            history,
+            available_tools=available_tools,
+        )
+    else:
+        # Stage 2: Tool selection filtered by domains
+        messages = _build_planner_messages(
+            user_message,
+            history,
+            available_tools=available_tools,
+            selected_domains=selected_domains,
+        )
 
     api_key = get_api_key()
     if not api_key:
@@ -607,15 +613,21 @@ async def plan_tool_calls_streaming(
     available_tools = capabilities_service.get_available_tool_names()
     selected_domains = await plan_domain_selection(user_message, history)
     if not selected_domains:
-        yield {"type": "planning_done"}
-        yield [{"tool": "none", "tool_input": {}, "conversational_reply": "Hello! How can I help you today?"}]
-        return
-    messages = _build_planner_messages(
-        user_message,
-        history,
-        available_tools=available_tools,
-        selected_domains=selected_domains,
-    )
+        # No domains selected — fall back to unfiltered tool selection.
+        # The tool selector will return tool="none" with a proper conversational
+        # reply for genuinely conversational messages, or pick tools for real requests.
+        messages = _build_planner_messages(
+            user_message,
+            history,
+            available_tools=available_tools,
+        )
+    else:
+        messages = _build_planner_messages(
+            user_message,
+            history,
+            available_tools=available_tools,
+            selected_domains=selected_domains,
+        )
 
     api_key = get_api_key()
     if not api_key:
