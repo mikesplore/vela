@@ -182,6 +182,21 @@ async def _execute_tool(
         raise ValueError(f"Tool '{tool_name}' is not available on this host: {reason}")
     tool_name = resolved_tool
 
+    # ── Meta tools: answer from the tool registry directly ──────────────────
+    if tool_name == "count_tools":
+        available = capabilities_service.get_available_tool_names()
+        return {"count": len(available), "tools": sorted(available)}
+
+    if tool_name == "list_tools":
+        available = capabilities_service.get_available_tool_names()
+        filter_term = str((tool_input or {}).get("filter", "")).strip().lower()
+        if filter_term:
+            matched = sorted(
+                name for name in available if filter_term in name.lower()
+            )
+            return {"count": len(matched), "tools": matched, "filter": filter_term}
+        return {"count": len(available), "tools": sorted(available)}
+
     tool = TOOL_DEFINITIONS[tool_name]
     path = tool["path"]
     payload = dict(tool_input or {})
@@ -288,6 +303,7 @@ async def execute_tool_audited(
         request_id: str | None = None,
         user_id: str | None = None,
         confirmed: bool = False,
+        selection_rejected: bool = False,
 ) -> dict[str, Any]:
     """Execute a tool and persist only safe operational metadata."""
     started = time.monotonic()
@@ -303,6 +319,7 @@ async def execute_tool_audited(
             succeeded=not bool(result.get("error")),
             user_id=user_id,
             error=str(result["error"])[:1_000] if result.get("error") else None,
+            selection_rejected=selection_rejected,
         )
     except Exception as exc:
         logger.debug("Tool audit write skipped: %s", exc)
@@ -344,6 +361,23 @@ async def execute_tool_results(
         }
         for call in rejected_calls
     ]
+
+    # Persist rejected tool selections so the dashboard can measure LLM selection accuracy.
+    for call in rejected_calls:
+        try:
+            from app.db.audit_log import insert_tool_call_event
+
+            insert_tool_call_event(
+                request_id=getattr(request.state, "request_id", None) or "unknown",
+                tool_name=str(call.get("tool")),
+                duration_ms=0.0,
+                succeeded=False,
+                user_id=getattr(request.state, "audit_user_id", None),
+                error=capabilities_service.get_tool_unavailability_reason(str(call.get("tool"))),
+                selection_rejected=True,
+            )
+        except Exception as exc:
+            logger.debug("Rejected tool audit write skipped: %s", exc)
 
     prepared_calls = prepare_tool_calls(tool_calls, user_message)
 

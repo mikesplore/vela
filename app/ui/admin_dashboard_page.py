@@ -237,6 +237,8 @@ def render_admin_dashboard_page() -> str:
         <div class="tool-stat"><span class="tool-stat-label">Tool calls</span><strong id="toolCallCount">0</strong></div>
         <div class="tool-stat"><span class="tool-stat-label">Failed</span><strong id="toolFailureCount">0</strong></div>
         <div class="tool-stat"><span class="tool-stat-label">Success rate</span><strong id="toolSuccessRate">—</strong></div>
+        <div class="tool-stat"><span class="tool-stat-label">Selection accuracy</span><strong id="toolSelectionAccuracy">—</strong></div>
+        <div class="tool-stat"><span class="tool-stat-label">Rejected picks</span><strong id="toolRejectedCount">0</strong></div>
       </div>
       <div class="operations-table">
         <table>
@@ -529,6 +531,11 @@ def render_admin_dashboard_page() -> str:
     document.getElementById('toolFailureCount').textContent = fmtNum(summary.tool_error_count);
     document.getElementById('toolSuccessRate').textContent =
       summary.total_tool_calls ? fmtPct(1 - summary.tool_error_rate) : '—';
+
+    // LLM tool selection accuracy
+    document.getElementById('toolSelectionAccuracy').textContent =
+      summary.total_tool_calls ? fmtPct(summary.selection_accuracy) : '—';
+    document.getElementById('toolRejectedCount').textContent = fmtNum(summary.selection_rejected_count);
 
     const toolRows = (summary.by_tool||[]).map(row => `
       <tr>

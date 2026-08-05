@@ -151,6 +151,7 @@ def assistant_summary(*, since_minutes: int = 60) -> dict[str, Any]:
 
     total = len(rows)
     failures = [row for row in rows if not row.succeeded]
+    rejected = [row for row in rows if row.selection_rejected]
     by_tool: dict[str, list[ToolCallEventModel]] = {}
     for row in rows:
         by_tool.setdefault(row.tool_name, []).append(row)
@@ -169,15 +170,26 @@ def assistant_summary(*, since_minutes: int = 60) -> dict[str, Any]:
         })
     tools.sort(key=lambda item: (item["errors"], item["count"]), reverse=True)
 
+    # LLM tool selection accuracy: how often the planner picked a tool that
+    # actually exists and is available on this host.
+    selection_accurate = total - len(rejected)
+    selection_accuracy = (selection_accurate / total) if total else 0.0
+
     return {
         "window_minutes": since_minutes,
         "total_tool_calls": total,
         "tool_error_count": len(failures),
         "tool_error_rate": (len(failures) / total) if total else 0.0,
+        "selection_rejected_count": len(rejected),
+        "selection_accuracy": selection_accuracy,
         "by_tool": tools[:40],
         "recent_failures": [
             _tool_row_to_dict(row)
             for row in sorted(failures, key=lambda row: row.created_at, reverse=True)[:25]
+        ],
+        "recent_rejected": [
+            _tool_row_to_dict(row)
+            for row in sorted(rejected, key=lambda row: row.created_at, reverse=True)[:25]
         ],
     }
 
@@ -251,6 +263,7 @@ def _tool_row_to_dict(row: ToolCallEventModel) -> dict[str, Any]:
         "succeeded": row.succeeded,
         "user_id": row.user_id,
         "error": row.error,
+        "selection_rejected": bool(row.selection_rejected),
     }
 
 

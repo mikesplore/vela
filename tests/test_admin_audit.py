@@ -266,6 +266,44 @@ async def test_admin_assistant_audit_endpoints(async_client):
     assert events.json()["events"][0]["tool_name"] == "get_network_location"
 
 
+def test_assistant_summary_tracks_selection_accuracy():
+    now = datetime.now(UTC)
+    # 3 valid tool calls + 1 rejected selection
+    audit_log.insert_tool_call_event(
+        request_id="r1", tool_name="get_system_info", duration_ms=10.0,
+        succeeded=True, created_at=now,
+    )
+    audit_log.insert_tool_call_event(
+        request_id="r2", tool_name="get_network_location", duration_ms=20.0,
+        succeeded=True, created_at=now,
+    )
+    audit_log.insert_tool_call_event(
+        request_id="r3", tool_name="get_battery", duration_ms=15.0,
+        succeeded=False, error="sensor unavailable", created_at=now,
+    )
+    audit_log.insert_tool_call_event(
+        request_id="r4", tool_name="nonexistent_tool", duration_ms=0.0,
+        succeeded=False, error="Tool not available on this host",
+        selection_rejected=True, created_at=now,
+    )
+
+    summary = audit_service.assistant_summary(since_minutes=60)
+    assert summary["total_tool_calls"] == 4
+    assert summary["selection_rejected_count"] == 1
+    assert summary["selection_accuracy"] == 0.75
+    assert len(summary["recent_rejected"]) == 1
+    assert summary["recent_rejected"][0]["tool_name"] == "nonexistent_tool"
+    assert summary["recent_rejected"][0]["selection_rejected"] is True
+
+
+def test_assistant_summary_selection_accuracy_empty():
+    summary = audit_service.assistant_summary(since_minutes=60)
+    assert summary["total_tool_calls"] == 0
+    assert summary["selection_rejected_count"] == 0
+    assert summary["selection_accuracy"] == 0.0
+    assert summary["recent_rejected"] == []
+
+
 @pytest.mark.anyio
 async def test_admin_dashboard_html(async_client):
     response = await async_client.get("/admin/dashboard")
