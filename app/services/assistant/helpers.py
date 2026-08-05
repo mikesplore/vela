@@ -231,13 +231,18 @@ async def plan_domain_selection(user_message: str, history: list[dict[str, str]]
         return []
 
     clean = clean_text(text)
+    logger.debug("Domain selection raw output for %r: %s", user_message[:80], clean[:500])
     try:
         data = json.loads(clean)
         domains = data.get("domains", [])
         if isinstance(domains, list):
-            return [str(d) for d in domains if isinstance(d, str)]
+            selected = [str(d) for d in domains if isinstance(d, str)]
+            logger.debug("Domain selection for %r: %s", user_message[:80], selected)
+            return selected
+        # data parsed but domains key is missing or not a list
+        logger.warning("Domain selection returned invalid shape (no 'domains' list). Output: %s", clean[:200])
     except (json.JSONDecodeError, ValueError):
-        pass
+        logger.warning("Domain selection returned non-JSON. Output: %s", clean[:200])
     return []
 
 
@@ -252,16 +257,24 @@ async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | Non
     # Stage 1: Domain selection
     selected_domains = await plan_domain_selection(user_message, history)
     if not selected_domains:
-        # No domains selected — treat as conversational
-        return [{"tool": "none", "tool_input": {}, "conversational_reply": "Hello! How can I help you today?"}]
-
-    # Stage 2: Tool selection filtered by domains
-    messages = _build_planner_messages(
-        user_message,
-        history,
-        available_tools=available_tools,
-        selected_domains=selected_domains,
-    )
+        # No domains selected — fall back to unfiltered tool selection.
+        # The tool selector will return tool="none" with a proper conversational
+        # reply for genuinely conversational messages, or pick tools for real requests.
+        logger.debug("plan_tool_calls: no domains selected — using unfiltered tool selection")
+        messages = _build_planner_messages(
+            user_message,
+            history,
+            available_tools=available_tools,
+        )
+    else:
+        # Stage 2: Tool selection filtered by domains
+        logger.debug("plan_tool_calls: domains selected %s — using domain-filtered selection", selected_domains)
+        messages = _build_planner_messages(
+            user_message,
+            history,
+            available_tools=available_tools,
+            selected_domains=selected_domains,
+        )
 
     api_key = get_api_key()
     if not api_key:
@@ -607,15 +620,23 @@ async def plan_tool_calls_streaming(
     available_tools = capabilities_service.get_available_tool_names()
     selected_domains = await plan_domain_selection(user_message, history)
     if not selected_domains:
-        yield {"type": "planning_done"}
-        yield [{"tool": "none", "tool_input": {}, "conversational_reply": "Hello! How can I help you today?"}]
-        return
-    messages = _build_planner_messages(
-        user_message,
-        history,
-        available_tools=available_tools,
-        selected_domains=selected_domains,
-    )
+        # No domains selected — fall back to unfiltered tool selection.
+        # The tool selector will return tool="none" with a proper conversational
+        # reply for genuinely conversational messages, or pick tools for real requests.
+        logger.debug("plan_tool_calls_streaming: no domains selected — using unfiltered tool selection")
+        messages = _build_planner_messages(
+            user_message,
+            history,
+            available_tools=available_tools,
+        )
+    else:
+        logger.debug("plan_tool_calls_streaming: domains selected %s — using domain-filtered selection", selected_domains)
+        messages = _build_planner_messages(
+            user_message,
+            history,
+            available_tools=available_tools,
+            selected_domains=selected_domains,
+        )
 
     api_key = get_api_key()
     if not api_key:
