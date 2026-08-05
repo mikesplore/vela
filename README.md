@@ -1,6 +1,6 @@
 # Vela RemotePC Agent
 
-**Control your Linux desktop from anywhere — via chat, API, or WebSocket tunnel.**
+**Control your Linux desktop from anywhere: via chat, API, or WebSocket tunnel.**
 
 Vela is a FastAPI-based remote PC agent for Linux. It exposes your desktop's capabilities (filesystem, audio, display, processes, notifications, power management, etc.) through a secure REST API, optionally tunneled through a WebSocket relay for remote access.
 
@@ -8,14 +8,14 @@ Vela is a FastAPI-based remote PC agent for Linux. It exposes your desktop's cap
 
 ## Features
 
-- **Full system control API** — filesystem, audio, display, power, notifications, network, input control, system info, monitoring, processes, security, scheduler, maintenance, media, clipboard, Spotify, alerts
-- **LLM-powered assistant** — natural language chat interface via Fireworks AI with tool-calling
-- **WebSocket tunnel** — connect to a remote VPS relay to access your PC from anywhere
-- **Agent onboarding** — browser-based QR pairing with code/PIN fallback
-- **JWT authentication** — bcrypt-hashed passwords, bearer token auth, rate-limited
-- **Filesystem access control** — whitelist-based directory permissions
-- **Rate limiting** — per-endpoint rate limits (default 150/min, auth endpoints 10/min)
-- **systemd integration** — runs as user services with auto-restart
+- **Full system control API**: filesystem, audio, display, power, notifications, network, input control, system info, monitoring, processes, security, scheduler, maintenance, media, clipboard, Spotify, alerts, docker, push
+- **LLM-powered assistant**: natural language chat interface via Fireworks AI with tool-calling
+- **WebSocket tunnel**: connect to a remote VPS relay to access your PC from anywhere
+- **Agent onboarding**: browser-based QR pairing with code/PIN fallback
+- **JWT authentication**: bcrypt-hashed passwords, bearer token auth, rate-limited
+- **Filesystem access control**: whitelist-based directory permissions
+- **Rate limiting**: per-endpoint rate limits (default 150/min, auth endpoints 10/min)
+- **systemd integration**: runs as user services with auto-restart
 
 ## How it works (summary)
 
@@ -26,7 +26,7 @@ Vela runs as **two processes**:
 | **Vela API** (`vela.service`) | Local FastAPI server that executes desktop operations |
 | **Vela Agent** (`vela-agent.service`) | Outbound WebSocket tunnel to your VPS; forwards phone requests to the API |
 
-Your phone → VPS relay → agent tunnel → `127.0.0.1:8765` → Linux.
+Your phone -> VPS relay -> agent tunnel -> `127.0.0.1:8765` -> Linux.
 
 The optional assistant uses the same API: an LLM picks tools, Vela runs them, the LLM summarizes.
 
@@ -61,13 +61,13 @@ Most of these are typically pre-installed on a modern Linux desktop. Missing too
 | **Maintenance** | `journalctl`, `systemctl`, `timedatectl`, `apt-get`/`dnf`/`pacman` | `systemd` | `systemd` | `systemd` |
 | **Monitoring** | `nvidia-smi` | `nvidia-smi` (NVIDIA GPU only) | `nvidia-smi` (NVIDIA GPU only) | `nvidia-smi` (NVIDIA GPU only) |
 
-> 💡 **Tip:** Run `which <command>` to check if a particular tool is already installed.
-> Missing tools won't crash the app — the corresponding endpoint will return an appropriate error.
+> **Tip:** Run `which <command>` to check if a particular tool is already installed.
+> Missing tools won't crash the app; the corresponding endpoint will return an appropriate error.
 
 #### Optional Dependencies
 
 - Fireworks AI API key (for the LLM-powered assistant at `/assistant/chat`)
-- Resend API key (for email alerts — CPU/memory spike alerts and daily summaries)
+- Resend API key (for email alerts: CPU/memory spike alerts and daily summaries)
 - Spotify Developer credentials (for Spotify playback control)
 
 ### Setup
@@ -78,7 +78,7 @@ From source:
 git clone https://github.com/mikesplore/vela.git
 cd vela
 
-# Run the setup script — it will ask you a few questions
+# Run the setup script: it will ask you a few questions
 # and generate everything automatically
 ./setup.sh
 ```
@@ -97,7 +97,7 @@ This will:
 - Verify the VPS relay is reachable
 - Force pairing, then restart `vela.service` and `vela-agent.service` so only the new credentials are used
 
-> 💡 **VPS relay:** You can use the free relay at `vela.mikesplore.tech` or specify your own.
+> **VPS relay:** You can use the free relay at `vela.mikesplore.tech` or specify your own.
 >
 > `./setup.sh` also creates a virtual environment and installs Vela from the current source tree. A globally installed `vela --setup` only runs setup.
 >
@@ -134,7 +134,7 @@ vela --enable
 OpenAPI docs available at `http://127.0.0.1:8765/docs`.
 
 Operations dashboard (request audit, latency median/p95, recent errors) is at
-`http://127.0.0.1:8765/admin/dashboard` — sign in with the same username/password as the API.
+`http://127.0.0.1:8765/admin/dashboard`: sign in with the same username/password as the API.
 
 > **p95** means the 95th percentile latency: 95% of requests finished at or under that time. It is better than average for spotting slow outliers without being dominated by a single worst request.
 
@@ -216,8 +216,8 @@ Then agent connects `ws(s)://<vps>/tunnel?agent_id=<id>&token=<ws_token>`.
 
 Vela uses two configuration sources:
 
-- **`config.yaml`** — server settings (host, port, secret key, feature flags, etc.)
-- **`.env`** — agent credentials/secrets (`RELAY_SECRET`, `AGENT_CREDENTIAL`, API keys, etc.)
+- **`config.yaml`**: server settings (host, port, secret key, feature flags, etc.)
+- **`.env`**: agent credentials/secrets (`RELAY_SECRET`, `AGENT_CREDENTIAL`, API keys, etc.)
 
 ### config.yaml
 
@@ -261,7 +261,7 @@ feature_flags:
 # Fireworks AI assistant
 fireworks_api_url: https://api.fireworks.ai/inference/v1
 fireworks_api_key: <your-api-key>
-fireworks_model: accounts/fireworks/models/qwen3p7-plus
+fireworks_model: accounts/fireworks/models/deepseek-v4-flash
 assistant_system_prompt: "You are Vela..."
 assistant_action_pin: null
 assistant_action_timeout_seconds: 120
@@ -291,45 +291,49 @@ See [.env.example](.env.example) for the full list. Key variables:
 
 ### Authentication
 
-- `POST /auth/token` — Login, returns JWT bearer token
-- `GET /auth/me` — Get current user
+- `POST /auth/token`: Login, returns JWT bearer token
+- `GET /auth/me`: Get current user
 
 ### System Routers
 
 | Prefix | Description |
 |--------|-------------|
-| `/filesystem` | Read/write files, list directories |
+| `/fs` | Read/write files, list directories, disk usage |
 | `/audio` | Volume control, audio output switching |
-| `/display` | Screen lock, display info |
-| `/power` | Shutdown, reboot, suspend |
+| `/display` | Screen lock, display info, brightness, screenshots |
+| `/power` | Shutdown, reboot, suspend, power profile |
 | `/notifications` | Send desktop notifications |
-| `/network` | Network info, WiFi management |
-| `/input_control` | Mouse/keyboard control |
-| `/system_info` | OS, hardware, resource info |
-| `/monitoring` | CPU, memory, disk monitoring |
-| `/processes` | List/kill processes |
+| `/network` | Network info, WiFi management, bluetooth, ping |
+| `/input` | Mouse/keyboard control |
+| `/system` | OS, hardware, resource info |
+| `/monitor` | CPU, memory, disk monitoring |
+| `/processes` | List/kill processes, open/close apps |
 | `/security` | Screen lock, webcam control, login history |
 | `/scheduler` | Task scheduling |
-| `/maintenance` | System maintenance tasks |
+| `/maintenance` | System maintenance tasks, services, timers |
 | `/media` | Media playback control |
 | `/clipboard` | Clipboard read/write |
 | `/alerts` | Spike monitoring and email alerts |
 | `/spotify` | Spotify playback and search |
+| `/docker` | Docker daemon info, containers, logs, compose |
+| `/push` | FCM device registration + send (via VPS relay) |
+| `/capabilities` | Runtime capability probes and tool availability |
+| `/admin` | Audit dashboard/events |
 
 ### Assistant
 
-- `POST /assistant/chat` — Natural language chat with LLM-powered tool calling
-- `POST /assistant/stream` — Streaming (SSE) version of the chat endpoint
+- `POST /assistant/chat`: Natural language chat with LLM-powered tool calling
+- `POST /assistant/stream`: Streaming (SSE) version of the chat endpoint
 
 ### Health
 
-- `GET /` — Root info (name, version, enabled modules)
-- `GET /health` — Service health check
-- `GET /ping` — Connectivity check
+- `GET /`: Root info (name, version, enabled modules)
+- `GET /health`: Service health check
+- `GET /ping`: Connectivity check
 
 ## Assistant (LLM Integration)
 
-Vela includes a Fireworks AI-powered chat assistant at `/assistant/chat`. It uses Qwen models with tool-calling to map natural language to system operations.
+Vela includes a Fireworks AI-powered chat assistant at `/assistant/chat`. It uses a Fireworks-hosted model (default `deepseek-v4-flash`) with tool-calling to map natural language to system operations.
 
 ```bash
 curl -X POST http://127.0.0.1:8765/assistant/chat \
@@ -347,11 +351,11 @@ The assistant:
 
 ## Security
 
-- **JWT authentication** — all routes require a valid bearer token (except `/auth/token`)
-- **Rate limiting** — auth endpoints limited to 10 req/min, default 150/min
-- **Filesystem whitelist** — restrict directory access
-- **Destructive action confirmation** — file deletion, power operations require explicit action confirmation
-- **Optional PIN gate** — high-risk AI actions can require a PIN
+- **JWT authentication**: all routes require a valid bearer token (except `/auth/token`)
+- **Rate limiting**: auth endpoints limited to 10 req/min, default 150/min
+- **Filesystem whitelist**: restrict directory access
+- **Destructive action confirmation**: file deletion, power operations require explicit action confirmation
+- **Optional PIN gate**: high-risk AI actions can require a PIN
 
 ## Development
 
@@ -383,6 +387,8 @@ vela/
 │   ├── db/
 │   │   ├── __init__.py
 │   │   ├── models.py         # Database models
+│   │   ├── audit_log.py      # Audit log storage
+│   │   ├── capabilities.py   # Capability probe persistence
 │   │   └── pending_actions.py # Pending action storage
 │   ├── domain/               # Domain models (schemas)
 │   │   ├── __init__.py
@@ -392,6 +398,9 @@ vela/
 │   │   └── system_info.py
 │   ├── routers/              # System operation routers
 │   │   ├── __init__.py
+│   │   ├── registry.py       # Capability-gated router loading
+│   │   ├── capabilities.py
+│   │   ├── admin.py
 │   │   ├── filesystem.py
 │   │   ├── audio.py
 │   │   ├── ...
@@ -408,6 +417,9 @@ vela/
 │   │       ├── session.py    # Chat session store
 │   │       ├── tool_exec.py  # Tool call execution against local API
 │   │       ├── tools.py      # Tool registry definitions
+│   │       ├── gatekeeper_tools.py # Gatekeeper tool definitions
+│   │       ├── workflow.py   # Tool execution stages
+│   │       ├── images.py     # Image payload handling
 │   │       ├── safety.py
 │   │       ├── stream.py
 │   │       └── prompts.py

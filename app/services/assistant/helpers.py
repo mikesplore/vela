@@ -231,13 +231,18 @@ async def plan_domain_selection(user_message: str, history: list[dict[str, str]]
         return []
 
     clean = clean_text(text)
+    logger.debug("Domain selection raw output for %r: %s", user_message[:80], clean[:500])
     try:
         data = json.loads(clean)
         domains = data.get("domains", [])
         if isinstance(domains, list):
-            return [str(d) for d in domains if isinstance(d, str)]
+            selected = [str(d) for d in domains if isinstance(d, str)]
+            logger.debug("Domain selection for %r: %s", user_message[:80], selected)
+            return selected
+        # data parsed but domains key is missing or not a list
+        logger.warning("Domain selection returned invalid shape (no 'domains' list). Output: %s", clean[:200])
     except (json.JSONDecodeError, ValueError):
-        pass
+        logger.warning("Domain selection returned non-JSON. Output: %s", clean[:200])
     return []
 
 
@@ -255,6 +260,7 @@ async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | Non
         # No domains selected — fall back to unfiltered tool selection.
         # The tool selector will return tool="none" with a proper conversational
         # reply for genuinely conversational messages, or pick tools for real requests.
+        logger.debug("plan_tool_calls: no domains selected — using unfiltered tool selection")
         messages = _build_planner_messages(
             user_message,
             history,
@@ -262,6 +268,7 @@ async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | Non
         )
     else:
         # Stage 2: Tool selection filtered by domains
+        logger.debug("plan_tool_calls: domains selected %s — using domain-filtered selection", selected_domains)
         messages = _build_planner_messages(
             user_message,
             history,
@@ -616,12 +623,14 @@ async def plan_tool_calls_streaming(
         # No domains selected — fall back to unfiltered tool selection.
         # The tool selector will return tool="none" with a proper conversational
         # reply for genuinely conversational messages, or pick tools for real requests.
+        logger.debug("plan_tool_calls_streaming: no domains selected — using unfiltered tool selection")
         messages = _build_planner_messages(
             user_message,
             history,
             available_tools=available_tools,
         )
     else:
+        logger.debug("plan_tool_calls_streaming: domains selected %s — using domain-filtered selection", selected_domains)
         messages = _build_planner_messages(
             user_message,
             history,
