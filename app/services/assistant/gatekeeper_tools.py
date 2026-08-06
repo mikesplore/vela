@@ -59,10 +59,27 @@ GATEKEEPER_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "method": "PATCH",
         "path": "/api/admin/projects/{slug}",
         "description": (
-            "Update Gatekeeper project fields. "
-            "Use to modify client info, amounts, due dates, or container references."
+            "Update Gatekeeper project fields for an existing client project. "
+            "PATCH semantics: provide slug to target the project plus ONLY the fields the user "
+            "asked to change — every body field is optional but at least one is required. "
+            "Editable fields: name, domain, containerName, type (frontend|backend), "
+            "clientName, clientEmail, amountDue (number), currency (e.g. KES/USD), "
+            "dueDate (YYYY-MM-DD, or null to clear), gracePeriodDays (integer). "
+            "Do NOT send fields the user did not ask to change."
         ),
-        "input": {"slug": "string"},
+        "input": {
+            "slug": "string (required — path parameter)",
+            "name": "string?",
+            "domain": "string?",
+            "containerName": "string?",
+            "type": "string? (frontend|backend)",
+            "clientName": "string?",
+            "clientEmail": "string?",
+            "amountDue": "number?",
+            "currency": "string? (e.g. KES, USD)",
+            "dueDate": "string? (YYYY-MM-DD, or null to clear)",
+            "gracePeriodDays": "integer?",
+        },
         "body_input": True,
     },
     "gatekeeper_delete_project": {
