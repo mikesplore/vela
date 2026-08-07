@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 ALWAYS_ROUTERS: tuple[tuple[str, str], ...] = (
     ("app.routers.capabilities", "router"),
     ("app.routers.admin", "router"),
+    ("app.routers.meta", "router"),
 )
 
 # Module key → (import path, router attribute). Spotify exposes two routers.

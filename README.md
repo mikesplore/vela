@@ -149,12 +149,14 @@ vela --status
 vela --logs
 vela --dashboard
 vela --env
+vela --mcp
 vela-agent --start
 vela-agent --stop
 ```
 
 > `vela --setup` is the only onboarding path. It always starts fresh (no credential reuse).
 > `vela --env` opens the `.env` file your services actually load (may differ from the repo copy).
+> `vela --mcp` prints the MCP connection link and relay secret for use with Claude/Cline.
 > After editing credentials, run `vela --restart` so both services reload the new values.
 
 ## Agent Registration

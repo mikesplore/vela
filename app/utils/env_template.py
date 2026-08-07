@@ -19,6 +19,9 @@ ENV_TEMPLATE: list[tuple[str, str]] = [
     ("LOCAL_SERVICE_TIMEOUT", "300"),
     ("RELAY_READ_TIMEOUT", "300"),
     ("VPS_URL", ""),
+    # Public URL of the vela-mcp server (e.g. https://mcp.mikesplore.tech).
+    # Used by `vela --mcp` to build the ready-to-paste MCP link.
+    ("MCP_SERVER_URL", ""),
     ("AGENT_NAME", ""),
     ("AGENT_ID", ""),
     ("AGENT_SECRET", ""),
