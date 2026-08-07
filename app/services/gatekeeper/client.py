@@ -62,7 +62,7 @@ async def request(
     method: str,
     path: str,
     *,
-    params: dict[str, Any] | None = None,
+    params: dict[str, Any] | list[tuple[str, str]] | None = None,
     json_body: dict[str, Any] | None = None,
 ) -> Any:
     if not is_configured():
