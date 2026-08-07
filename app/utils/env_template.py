@@ -52,6 +52,12 @@ ENV_TEMPLATE: list[tuple[str, str]] = [
     ("VELA_NETWORK_PUBLIC_IP_CACHE_SECONDS", "120"),
     ("VELA_NETWORK_WIFI_LIST_CACHE_SECONDS", "45"),
     ("VELA_DESKTOP_ENV_CHECK_INTERVAL_SECONDS", "30"),
+    # Gatekeeperd admin API (assistant tools — external HTTP).
+    # Leave empty unless Gatekeeper access is enabled on this agent.
+    ("GATEKEEPER_EMAIL", ""),
+    ("GATEKEEPER_PASSWORD", ""),
+    ("GATEKEEPER_BASE_URL", ""),
+    ("VELA_LOG_LEVEL", "INFO"),
 ]
 
 _ENV_LINE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
