@@ -14,6 +14,7 @@ ALWAYS_ROUTERS: tuple[tuple[str, str], ...] = (
     ("app.routers.capabilities", "router"),
     ("app.routers.admin", "router"),
     ("app.routers.meta", "router"),
+    ("app.routers.gatekeeper_proxy", "router"),
 )
 
 # Module key → (import path, router attribute). Spotify exposes two routers.

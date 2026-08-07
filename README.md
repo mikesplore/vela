@@ -288,6 +288,7 @@ See [.env.example](.env.example) for the full list. Key variables:
 | `RECIPIENT_EMAIL` | Email address for alert notifications |
 | `SPOTIFY_CLIENT_ID` | Spotify Developer client ID |
 | `SPOTIFY_CLIENT_SECRET` | Spotify Developer client secret |
+| `MCP_SERVER_URL` | Public URL of the vela-mcp server (e.g. `https://mcp.mikesplore.tech`). Used by `vela --mcp` to build the ready-to-paste MCP link |
 
 ## API Endpoints
 
