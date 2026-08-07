@@ -22,6 +22,11 @@ def main() -> None:
         action="store_true",
         help="Open the active credentials .env (same file vela-agent loads)",
     )
+    parser.add_argument(
+        "--mcp",
+        action="store_true",
+        help="Print the MCP connection link for this agent (agent_id + relay_secret)",
+    )
     args = parser.parse_args()
 
     services = ["vela.service", "vela-agent.service"]
@@ -89,6 +94,46 @@ def main() -> None:
         env_path = open_dotenv_in_editor()
         print(f"Active Vela .env: {env_path}")
         print("After saving changes, run: vela --restart")
+        return
+
+    if args.mcp:
+        from app.utils.env_paths import resolve_active_dotenv_path
+        from dotenv import dotenv_values
+
+        env_path = resolve_active_dotenv_path()
+        values = dotenv_values(env_path) if env_path.exists() else {}
+        agent_id = (values.get("AGENT_ID") or "").strip()
+        relay_secret = (
+            values.get("RELAY_SECRET") or values.get("AGENT_SECRET") or ""
+        ).strip()
+        mcp_server_url = (values.get("MCP_SERVER_URL") or "").strip()
+
+        if not agent_id or not relay_secret:
+            print("No paired agent found. Run `vela --setup` to pair this machine first.")
+            return
+
+        print(f"agent_id:     {agent_id}")
+        print(f"relay_secret: {relay_secret}")
+        if mcp_server_url:
+            # Normalize: accept either "https://mcp.example.com" or
+            # "https://mcp.example.com/mcp" as the server base.
+            base = mcp_server_url.rstrip("/")
+            if base.endswith("/mcp"):
+                base = base[:-len("/mcp")].rstrip("/")
+            # Claude.ai only accepts a URL (no headers), so the secret goes in
+            # the path: /mcp/{agent_id}:{relay_secret}
+            claude_url = f"{base}/mcp/{agent_id}:{relay_secret}"
+            print(f"mcp_link:     {claude_url}")
+            print()
+            print("Paste this into Claude.ai → Connectors → Remote MCP server URL:")
+            print(f"  {claude_url}")
+            print()
+            print("For local clients (Cline/Claude Desktop) that accept headers:")
+            print(f"  url:     {base}/mcp/{agent_id}")
+            print(f"  headers: {{ \"Authorization\": \"Bearer {relay_secret}\" }}")
+        else:
+            print()
+            print("Set MCP_SERVER_URL in the active .env to also print a ready-to-paste link.")
         return
 
     # Default: run the local API server (imports app stack only now).

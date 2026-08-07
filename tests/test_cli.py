@@ -47,6 +47,102 @@ def test_env_opens_active_dotenv(monkeypatch, capsys, tmp_path):
     assert "vela --restart" in out
 
 
+def test_mcp_prints_agent_link(monkeypatch, capsys, tmp_path):
+    systemd_dir = tmp_path / "systemd"
+    systemd_dir.mkdir()
+    env_file = tmp_path / "runtime" / ".env"
+    env_file.parent.mkdir()
+    env_file.write_text(
+        "AGENT_ID=agt_123\nRELAY_SECRET=secret_abc\nMCP_SERVER_URL=https://mcp.example.com\n",
+        encoding="utf-8",
+    )
+
+    (systemd_dir / "vela-agent.service").write_text(
+        f"[Service]\nEnvironmentFile={env_file}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "argv", ["vela", "--mcp"])
+    monkeypatch.setattr(env_paths, "SYSTEMD_USER_DIR", systemd_dir)
+
+    cli.main()
+
+    out = capsys.readouterr().out
+    assert "agent_id:     agt_123" in out
+    assert "relay_secret: secret_abc" in out
+    assert "https://mcp.example.com/mcp/agt_123:secret_abc" in out
+    assert 'Authorization: Bearer secret_abc' in out
+
+
+def test_mcp_normalizes_server_url_with_mcp_suffix(monkeypatch, capsys, tmp_path):
+    """MCP_SERVER_URL may already include /mcp — must not double it."""
+    systemd_dir = tmp_path / "systemd"
+    systemd_dir.mkdir()
+    env_file = tmp_path / "runtime" / ".env"
+    env_file.parent.mkdir()
+    env_file.write_text(
+        "AGENT_ID=agt_789\nRELAY_SECRET=secret_def\nMCP_SERVER_URL=https://mcp.example.com/mcp\n",
+        encoding="utf-8",
+    )
+    (systemd_dir / "vela-agent.service").write_text(
+        f"[Service]\nEnvironmentFile={env_file}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "argv", ["vela", "--mcp"])
+    monkeypatch.setattr(env_paths, "SYSTEMD_USER_DIR", systemd_dir)
+
+    cli.main()
+
+    out = capsys.readouterr().out
+    assert "https://mcp.example.com/mcp/agt_789" in out
+    assert "/mcp/mcp" not in out
+
+
+def test_mcp_prints_agent_link_without_server_url(monkeypatch, capsys, tmp_path):
+    systemd_dir = tmp_path / "systemd"
+    systemd_dir.mkdir()
+    env_file = tmp_path / "runtime" / ".env"
+    env_file.parent.mkdir()
+    env_file.write_text(
+        "AGENT_ID=agt_456\nRELAY_SECRET=secret_xyz\n",
+        encoding="utf-8",
+    )
+
+    (systemd_dir / "vela-agent.service").write_text(
+        f"[Service]\nEnvironmentFile={env_file}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "argv", ["vela", "--mcp"])
+    monkeypatch.setattr(env_paths, "SYSTEMD_USER_DIR", systemd_dir)
+
+    cli.main()
+
+    out = capsys.readouterr().out
+    assert "agent_id:     agt_456" in out
+    assert "relay_secret: secret_xyz" in out
+    assert "Set MCP_SERVER_URL" in out
+
+
+def test_mcp_prints_prompt_when_not_paired(monkeypatch, capsys, tmp_path):
+    systemd_dir = tmp_path / "systemd"
+    systemd_dir.mkdir()
+    env_file = tmp_path / "runtime" / ".env"
+    env_file.parent.mkdir()
+    env_file.write_text("AGENT_ID=\nRELAY_SECRET=\n", encoding="utf-8")
+
+    (systemd_dir / "vela-agent.service").write_text(
+        f"[Service]\nEnvironmentFile={env_file}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "argv", ["vela", "--mcp"])
+    monkeypatch.setattr(env_paths, "SYSTEMD_USER_DIR", systemd_dir)
+
+    cli.main()
+
+    out = capsys.readouterr().out
+    assert "No paired agent found" in out
+    assert "vela --setup" in out
+
+
 def test_resolve_active_dotenv_from_agent_unit(monkeypatch, tmp_path):
     systemd_dir = tmp_path / "systemd"
     systemd_dir.mkdir()
