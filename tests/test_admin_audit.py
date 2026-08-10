@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, UTC
 
 import pytest
@@ -111,6 +112,28 @@ async def test_audited_tool_execution_persists_failure(monkeypatch):
     assert summary["tool_error_count"] == 1
     assert summary["by_tool"][0]["tool_name"] == "get_network_location"
     assert summary["recent_failures"][0]["error"] == "lookup timed out"
+
+
+@pytest.mark.anyio
+async def test_execute_tool_safe_times_out_hung_tool(monkeypatch):
+    """A tool that never returns must be declared failed, not left hanging."""
+    async def hung_tool(*_args, **_kwargs):
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(tool_exec, "_execute_tool", hung_tool)
+    monkeypatch.setattr(tool_exec, "TOOL_EXECUTION_TIMEOUT_SECONDS", 0.05)
+
+    result = await tool_exec.execute_tool_safe(
+        app=None,
+        tool_name="gatekeeper_list_projects",
+        tool_input={},
+        auth_header=None,
+    )
+
+    assert result["tool"] == "gatekeeper_list_projects"
+    assert result["error"] is not None
+    assert "timed out" in result["error"]
+    assert result["result"] == {}
 
 
 @pytest.mark.anyio

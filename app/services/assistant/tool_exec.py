@@ -24,6 +24,12 @@ logger = logging.getLogger("vela.assistant")
 _BINARY_RESULT_KEYS = ("content_base64", "image_base64")
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"}
 
+# Max seconds a single tool may run before it is declared failed. This is a
+# safety net for external HTTP tools (e.g. gatekeeper) that can otherwise block
+# the stream with no terminal "done"/"error" event, leaving the UI stuck
+# "in progress". Must stay above real per-tool timeouts (GATEKEEPER_TIMEOUT).
+TOOL_EXECUTION_TIMEOUT_SECONDS = 60.0
+
 
 def _format_bytes(num: int) -> str:
     value = float(num)
@@ -287,8 +293,18 @@ async def execute_tool_safe(
 ) -> dict[str, Any]:
     """Wrapper that catches errors so one failing tool doesn't abort the others."""
     try:
-        result = await _execute_tool(app, tool_name, tool_input, auth_header, confirmed=confirmed)
+        result = await asyncio.wait_for(
+            _execute_tool(app, tool_name, tool_input, auth_header, confirmed=confirmed),
+            timeout=TOOL_EXECUTION_TIMEOUT_SECONDS,
+        )
         return {"tool": tool_name, "result": result, "error": None}
+    except asyncio.TimeoutError:
+        logger.error("Tool %s timed out after %s seconds", tool_name, TOOL_EXECUTION_TIMEOUT_SECONDS)
+        return {
+            "tool": tool_name,
+            "result": {},
+            "error": f"Tool {tool_name} timed out after {TOOL_EXECUTION_TIMEOUT_SECONDS:g}s.",
+        }
     except Exception as exc:
         logger.error("Tool %s failed: %s", tool_name, exc, exc_info=True)
         return {"tool": tool_name, "result": {}, "error": str(exc)}

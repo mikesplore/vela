@@ -136,7 +136,7 @@ class Config(BaseSettings):
     gatekeeper_email: str = Field(default="", validation_alias="GATEKEEPER_EMAIL")
     gatekeeper_password: str = Field(default="", validation_alias="GATEKEEPER_PASSWORD")
     gatekeeper_token: str | None = Field(default=None, validation_alias="GATEKEEPER_TOKEN")
-    gatekeeper_timeout: float = Field(default=30.0, validation_alias="GATEKEEPER_TIMEOUT")
+    gatekeeper_timeout: float = Field(default=10.0, validation_alias="GATEKEEPER_TIMEOUT")
 
     model_config = {
         "env_prefix": "VELA_",  # Applies to all server fields without explicit aliases
