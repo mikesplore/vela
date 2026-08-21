@@ -181,6 +181,7 @@ async def _run_tools_and_reply(
         enable_thinking: bool = False,
         already_running: set[str] | None = None,
         gate_pin_confirmed: bool | None = None,
+        capability_snapshot: capabilities_service.ToolCapabilitySnapshot | None = None,
 ) -> AsyncGenerator[str, None]:
     if already_running is None:
         already_running = set()
@@ -192,10 +193,11 @@ async def _run_tools_and_reply(
     completed: dict[str, dict] = {}
     tool_results: list[dict] = []
 
-    tool_calls, rejected_calls = split_unavailable_tool_calls(tool_calls)
+    snapshot = capability_snapshot or capabilities_service.capture_tool_snapshot()
+    tool_calls, rejected_calls = split_unavailable_tool_calls(tool_calls, snapshot)
     for call in rejected_calls:
         tool_name = str(call.get("tool"))
-        reason = capabilities_service.get_tool_unavailability_reason(tool_name)
+        reason = capabilities_service.get_tool_unavailability_reason(tool_name, snapshot)
         result = {"tool": tool_name, "result": {}, "error": reason}
         tool_results.append(result)
         yield _sse_tool(
@@ -206,7 +208,7 @@ async def _run_tools_and_reply(
             pin_confirmed=pin_confirmed,
         )
 
-    prepared_calls = prepare_tool_calls(tool_calls, user_message)
+    prepared_calls = prepare_tool_calls(tool_calls, user_message, snapshot)
 
     while len(completed) < len(prepared_calls):
         ready, skipped = next_execution_stage(prepared_calls, completed)
@@ -230,6 +232,7 @@ async def _run_tools_and_reply(
                 request_id=getattr(request.state, "request_id", None),
                 user_id=current_user,
                 confirmed=confirmed,
+                capability_snapshot=snapshot,
             )
             return call, result
 
@@ -267,7 +270,9 @@ async def _run_tools_and_reply(
 
     if needs_conditional_followup(user_message, tool_calls):
         try:
-            followup_calls = await plan_conditional_followup(user_message, tool_results)
+            followup_calls = await plan_conditional_followup(
+                user_message, tool_results, capability_snapshot=snapshot,
+            )
         except Exception as exc:
             logger.error("Conditional follow-up planning failed: %s", exc, exc_info=True)
         else:
@@ -309,6 +314,7 @@ async def _run_tools_and_reply(
                     enable_thinking=enable_thinking,
                     already_running={result["tool"] for result in tool_results},
                     gate_pin_confirmed=None,
+                    capability_snapshot=snapshot,
                 ):
                     yield chunk
                 return
@@ -324,7 +330,7 @@ async def _run_tools_and_reply(
             reply = f"Here's {label}."
         yield _sse_content(reply)
         history.append({"role": "assistant", "content": reply})
-        SESSION_STORE[current_user] = trim_history(history)
+        SESSION_STORE[(current_user, _extract_session_id(request))] = trim_history(history)
         yield _sse_done()
         return
 
@@ -338,7 +344,7 @@ async def _run_tools_and_reply(
             yield _sse("art", {"url": art_url})
         yield _sse_content(reply_text)
         history.append({"role": "assistant", "content": reply_text.strip()})
-        SESSION_STORE[current_user] = trim_history(history)
+        SESSION_STORE[(current_user, _extract_session_id(request))] = trim_history(history)
         yield _sse_done()
         return
 
@@ -379,7 +385,7 @@ async def _run_tools_and_reply(
             yield _sse_error(delta["text"])
             yield _sse_done()
             history.append({"role": "assistant", "content": ""})
-            SESSION_STORE[current_user] = trim_history(history)
+            SESSION_STORE[(current_user, _extract_session_id(request))] = trim_history(history)
             return
 
     # Ensure we always produce at least an empty content event so the client isn't left hanging
@@ -387,7 +393,7 @@ async def _run_tools_and_reply(
         yield _sse_content("")
 
     history.append({"role": "assistant", "content": full_reply.strip()})
-    SESSION_STORE[current_user] = trim_history(history)
+    SESSION_STORE[(current_user, _extract_session_id(request))] = trim_history(history)
     yield _sse_done()
 
 
@@ -399,9 +405,10 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
         yield _sse_done()
         return
 
-    session_id = _extract_session_id(request)
     auth_header = request.headers.get("authorization")
-    history = get_or_init_session(current_user)
+    session_id = _extract_session_id(request)
+    capability_snapshot = capabilities_service.capture_tool_snapshot()
+    history = get_or_init_session(current_user, session_id)
     pending = get_pending_action(current_user, session_id)
 
     # ── Pending-action state machine ─────────────────────────────────────────
@@ -411,7 +418,7 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
         if is_negative(msg):
             clear_pending_action(current_user, session_id)
             history = [h for h in history if h.get("content") != pending.user_message]
-            SESSION_STORE[current_user] = history
+            SESSION_STORE[(current_user, session_id)] = history
             yield _sse_content("Cancelled the pending action.")
             yield _sse_done()
             return
@@ -425,6 +432,7 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
                     enable_thinking=config.assistant_enable_thinking,
                     already_running=set(),
                     gate_pin_confirmed=True,
+                    capability_snapshot=capability_snapshot,
                 ):
                     yield chunk
                 return
@@ -457,6 +465,7 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
                 enable_thinking=config.assistant_enable_thinking,
                 already_running=set(),
                 gate_pin_confirmed=False,
+                capability_snapshot=capability_snapshot,
             ):
                 yield chunk
             return
@@ -473,7 +482,7 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
         if cancellation_msg:
             history.append({"role": "assistant", "content": cancellation_msg})
         history = [h for h in history if h.get("content") != pending.user_message]
-        SESSION_STORE[current_user] = history
+        SESSION_STORE[(current_user, session_id)] = history
 
     # ── Planning phase: stream thinking, buffer tool calls ───────────────────
     history.append({"role": "user", "content": message})
@@ -486,7 +495,11 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
     real_tool_detected = False
     detected_tools: set[str] = set()
     try:
-        async for item in plan_tool_calls_streaming(message, history[:-1], enable_thinking=thinking_on):
+        async for item in plan_tool_calls_streaming(
+            message, history[:-1], enable_thinking=thinking_on,
+            capability_snapshot=capability_snapshot,
+            request_id=getattr(request.state, "request_id", None),
+        ):
             if isinstance(item, dict):
                 if thinking_on and item["type"] == "thinking":
                     yield _sse_thinking(item["text"])
@@ -521,7 +534,7 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
         if not streamed_during_planning:
             yield _sse_content(reply_text)
         history.append({"role": "assistant", "content": reply_text})
-        SESSION_STORE[current_user] = trim_history(history)
+        SESSION_STORE[(current_user, session_id)] = trim_history(history)
         yield _sse_done()
         return
 
@@ -540,8 +553,6 @@ async def stream_chat(request: Request, message: str, current_user: str) -> Asyn
         request, tool_calls, auth_header, message, history, current_user, confirmed=False,
         enable_thinking=config.assistant_enable_thinking,
         already_running=detected_tools,
+        capability_snapshot=capability_snapshot,
     ):
         yield chunk
-
-
-

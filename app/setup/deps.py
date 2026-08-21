@@ -16,7 +16,9 @@ DEPENDENCY_GROUPS = [
     {
         "feature": "Audio",
         "description": "Adjust volume/output and play sounds.",
-        "commands": ["amixer", "pactl"],
+        # Volume and mute use ALSA's amixer. pactl is checked per-tool for
+        # device enumeration/output switching; it must not hide volume tools.
+        "commands": ["amixer"],
         "packages": {
             "apt": ["alsa-utils", "pulseaudio-utils"],
             "dnf": ["alsa-utils", "pulseaudio-utils"],

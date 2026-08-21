@@ -179,22 +179,23 @@ async def _execute_tool(
         tool_input: dict[str, Any],
         auth_header: str | None,
         confirmed: bool = False,
+        capability_snapshot: capabilities_service.ToolCapabilitySnapshot | None = None,
 ) -> dict[str, Any]:
     resolved_tool = TOOL_ALIASES.get(tool_name, tool_name)
     if resolved_tool not in TOOL_DEFINITIONS:
         raise ValueError(f"Unknown tool: {tool_name}")
-    if not capabilities_service.is_tool_available(resolved_tool):
+    if resolved_tool not in capabilities_service.get_available_tool_names(capability_snapshot):
         reason = capabilities_service.get_tool_unavailability_reason(resolved_tool)
         raise ValueError(f"Tool '{tool_name}' is not available on this host: {reason}")
     tool_name = resolved_tool
 
     # ── Meta tools: answer from the tool registry directly ──────────────────
     if tool_name == "count_tools":
-        available = capabilities_service.get_available_tool_names()
+        available = capabilities_service.get_available_tool_names(capability_snapshot)
         return {"count": len(available), "tools": sorted(available)}
 
     if tool_name == "list_tools":
-        available = capabilities_service.get_available_tool_names()
+        available = capabilities_service.get_available_tool_names(capability_snapshot)
         filter_term = str((tool_input or {}).get("filter", "")).strip().lower()
         if filter_term:
             matched = sorted(
@@ -295,11 +296,15 @@ async def execute_tool_safe(
         tool_input: dict[str, Any],
         auth_header: str | None,
         confirmed: bool = False,
+        capability_snapshot: capabilities_service.ToolCapabilitySnapshot | None = None,
 ) -> dict[str, Any]:
     """Wrapper that catches errors so one failing tool doesn't abort the others."""
     try:
         result = await asyncio.wait_for(
-            _execute_tool(app, tool_name, tool_input, auth_header, confirmed=confirmed),
+            _execute_tool(
+                app, tool_name, tool_input, auth_header,
+                confirmed=confirmed, capability_snapshot=capability_snapshot,
+            ),
             timeout=TOOL_EXECUTION_TIMEOUT_SECONDS,
         )
         return {"tool": tool_name, "result": result, "error": None}
@@ -325,10 +330,14 @@ async def execute_tool_audited(
         user_id: str | None = None,
         confirmed: bool = False,
         selection_rejected: bool = False,
+        capability_snapshot: capabilities_service.ToolCapabilitySnapshot | None = None,
 ) -> dict[str, Any]:
     """Execute a tool and persist only safe operational metadata."""
     started = time.monotonic()
-    result = await execute_tool_safe(app, tool_name, tool_input, auth_header, confirmed=confirmed)
+    result = await execute_tool_safe(
+        app, tool_name, tool_input, auth_header,
+        confirmed=confirmed, capability_snapshot=capability_snapshot,
+    )
     duration_ms = (time.monotonic() - started) * 1000
     try:
         from app.db.audit_log import insert_tool_call_event
@@ -372,13 +381,15 @@ async def execute_tool_results(
         auth_header: str | None,
         confirmed: bool = False,
         user_message: str | None = None,
+        capability_snapshot: capabilities_service.ToolCapabilitySnapshot | None = None,
 ) -> list[dict[str, Any]]:
-    tool_calls, rejected_calls = split_unavailable_tool_calls(tool_calls)
+    snapshot = capability_snapshot or capabilities_service.capture_tool_snapshot()
+    tool_calls, rejected_calls = split_unavailable_tool_calls(tool_calls, snapshot)
     rejected_results = [
         {
             "tool": str(call.get("tool")),
             "result": {},
-            "error": capabilities_service.get_tool_unavailability_reason(str(call.get("tool"))),
+            "error": capabilities_service.get_tool_unavailability_reason(str(call.get("tool")), snapshot),
         }
         for call in rejected_calls
     ]
@@ -394,13 +405,13 @@ async def execute_tool_results(
                 duration_ms=0.0,
                 succeeded=False,
                 user_id=getattr(request.state, "audit_user_id", None),
-                error=capabilities_service.get_tool_unavailability_reason(str(call.get("tool"))),
+                error=capabilities_service.get_tool_unavailability_reason(str(call.get("tool")), snapshot),
                 selection_rejected=True,
             )
         except Exception as exc:
             logger.debug("Rejected tool audit write skipped: %s", exc)
 
-    prepared_calls = prepare_tool_calls(tool_calls, user_message)
+    prepared_calls = prepare_tool_calls(tool_calls, user_message, snapshot)
 
     async def _execute_call(call: dict[str, Any]) -> dict[str, Any]:
         return await execute_tool_audited(
@@ -411,6 +422,7 @@ async def execute_tool_results(
             request_id=getattr(request.state, "request_id", None),
             user_id=getattr(request.state, "audit_user_id", None),
             confirmed=confirmed,
+            capability_snapshot=snapshot,
         )
 
     executed = await execute_tool_plan(prepared_calls, _execute_call)
@@ -446,8 +458,10 @@ async def response_from_tool_results(user_message: str, tool_results: list[dict[
 
 
 async def execute_tool_calls(request: Request, tool_calls: list[dict[str, object]], auth_header: str | None,
-                              user_message: str = "", confirmed: bool = False) -> AssistantResponse:
+                              user_message: str = "", confirmed: bool = False,
+                              capability_snapshot: capabilities_service.ToolCapabilitySnapshot | None = None) -> AssistantResponse:
     tool_results = await execute_tool_results(
         request, tool_calls, auth_header, confirmed=confirmed, user_message=user_message,
+        capability_snapshot=capability_snapshot,
     )
     return await response_from_tool_results(user_message, tool_results)

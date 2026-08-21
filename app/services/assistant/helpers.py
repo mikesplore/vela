@@ -14,7 +14,7 @@ from app.services.assistant.safety import (
     PendingAction,
     build_confirmation_card,
 )
-from app.services.assistant.tools import build_system_tool_prompt
+from app.services.assistant.tools import DOMAIN_TOOLS, build_system_tool_prompt, tools_for_domains
 from app.services import capabilities as capabilities_service
 from app.utils.config import get_config
 
@@ -235,8 +235,23 @@ async def plan_domain_selection(user_message: str, history: list[dict[str, str]]
     try:
         data = json.loads(clean)
         domains = data.get("domains", [])
+        confidence = data.get("confidence", 0.0)
+        fallback = data.get("fallback", False) is True
         if isinstance(domains, list):
-            selected = [str(d) for d in domains if isinstance(d, str)]
+            selected = [
+                str(d) for d in domains
+                if isinstance(d, str) and str(d) in DOMAIN_TOOLS
+            ]
+            try:
+                confidence_value = float(confidence)
+            except (TypeError, ValueError):
+                confidence_value = 0.0
+            if fallback or confidence_value < 0.7 or not selected:
+                logger.info(
+                    "assistant.domain_router_fallback confidence=%s fallback=%s domains=%s",
+                    confidence_value, fallback, selected,
+                )
+                return []
             logger.debug("Domain selection for %r: %s", user_message[:80], selected)
             return selected
         # data parsed but domains key is missing or not a list
@@ -246,21 +261,37 @@ async def plan_domain_selection(user_message: str, history: list[dict[str, str]]
     return []
 
 
-async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
+async def plan_tool_calls(
+    user_message: str,
+    history: list[dict[str, str]] | None = None,
+    *,
+    capability_snapshot: capabilities_service.ToolCapabilitySnapshot | None = None,
+    request_id: str | None = None,
+) -> list[dict[str, Any]]:
     """
     Two-stage planner: domain selection → tool selection.
     Single LLM call for conversational replies, two calls for tool requests.
     For conversational replies returns a single-item list with tool="none".
     """
-    available_tools = capabilities_service.get_available_tool_names()
+    snapshot = capability_snapshot or capabilities_service.capture_tool_snapshot()
+    available_tools = set(snapshot.available_tools)
 
     # Stage 1: Domain selection
-    selected_domains = await plan_domain_selection(user_message, history)
+    direct_imperative = bool(re.search(
+        r"\b(?:set|increase|decrease|raise|lower|turn|mute|unmute)\s+(?:the\s+)?(?:audio\s+|master\s+)?volume\b",
+        user_message,
+        re.IGNORECASE,
+    ))
+    selected_domains = [] if direct_imperative else await plan_domain_selection(user_message, history)
     if not selected_domains:
         # No domains selected — fall back to unfiltered tool selection.
         # The tool selector will return tool="none" with a proper conversational
         # reply for genuinely conversational messages, or pick tools for real requests.
-        logger.debug("plan_tool_calls: no domains selected — using unfiltered tool selection")
+        logger.info(
+            "assistant.planner request_id=%s snapshot_id=%s available_tools=%d route=full selector_tools=%s",
+            request_id or "unknown", snapshot.snapshot_id, len(available_tools),
+            sorted(available_tools),
+        )
         messages = _build_planner_messages(
             user_message,
             history,
@@ -268,7 +299,11 @@ async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | Non
         )
     else:
         # Stage 2: Tool selection filtered by domains
-        logger.debug("plan_tool_calls: domains selected %s — using domain-filtered selection", selected_domains)
+        logger.info(
+            "assistant.planner request_id=%s snapshot_id=%s available_tools=%d domains=%s selector_tools=%s",
+            request_id or "unknown", snapshot.snapshot_id, len(available_tools), selected_domains,
+            sorted(tools_for_domains(selected_domains, available_tools)),
+        )
         messages = _build_planner_messages(
             user_message,
             history,
@@ -348,6 +383,7 @@ async def plan_tool_calls(user_message: str, history: list[dict[str, str]] | Non
 async def plan_conditional_followup(
         original_request: str,
         inspection_results: list[dict[str, Any]],
+        capability_snapshot: capabilities_service.ToolCapabilitySnapshot | None = None,
 ) -> list[dict[str, Any]]:
     """Plan one action-only follow-up after a conditional inspection stage."""
     from app.services.assistant.tool_exec import sanitize_tool_results_for_llm
@@ -366,7 +402,7 @@ async def plan_conditional_followup(
         f"Original request:\n{original_request}\n\n"
         f"Inspection results:\n{results_text}"
     )
-    return await plan_tool_calls(followup_prompt)
+    return await plan_tool_calls(followup_prompt, capability_snapshot=capability_snapshot)
 
 
 async def compose_final_reply(user_message: str, results: list[dict[str, Any]]) -> tuple[str, str | None]:
@@ -604,6 +640,8 @@ async def plan_tool_calls_streaming(
         user_message: str,
         history: list[dict[str, str]] | None = None,
         enable_thinking: bool = False,
+        capability_snapshot: capabilities_service.ToolCapabilitySnapshot | None = None,
+        request_id: str | None = None,
 ) -> AsyncGenerator[dict[str, str] | list[dict[str, Any]], None]:
     """
     Streaming-aware tool planner with two-stage domain routing.
@@ -617,8 +655,20 @@ async def plan_tool_calls_streaming(
     Note: response_format/json_object is incompatible with stream=True on Fireworks,
     so we stream with thinking enabled and buffer the content for JSON parsing.
     """
-    available_tools = capabilities_service.get_available_tool_names()
-    selected_domains = await plan_domain_selection(user_message, history)
+    snapshot = capability_snapshot or capabilities_service.capture_tool_snapshot()
+    available_tools = set(snapshot.available_tools)
+    direct_imperative = bool(re.search(
+        r"\b(?:set|increase|decrease|raise|lower|turn|mute|unmute)\s+(?:the\s+)?(?:audio\s+|master\s+)?volume\b",
+        user_message,
+        re.IGNORECASE,
+    ))
+    selected_domains = [] if direct_imperative else await plan_domain_selection(user_message, history)
+    logger.info(
+        "assistant.streaming_planner request_id=%s snapshot_id=%s available_tools=%d route=%s domains=%s selector_tools=%s",
+        request_id or "unknown", snapshot.snapshot_id, len(available_tools),
+        "full" if not selected_domains else "domain", selected_domains,
+        sorted(available_tools if not selected_domains else tools_for_domains(selected_domains, available_tools)),
+    )
     if not selected_domains:
         # No domains selected — fall back to unfiltered tool selection.
         # The tool selector will return tool="none" with a proper conversational

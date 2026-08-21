@@ -5,9 +5,11 @@ import json
 import logging
 import os
 import shutil
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from app.db import capabilities as capabilities_db
 from app.domain.capabilities import (
@@ -94,11 +96,32 @@ NETWORK_BLUETOOTH_TOOLS = frozenset(
 NETWORK_VNSTAT_TOOLS = frozenset({"check_vnstat_status", "get_vnstat_data"})
 NETWORK_SPEEDTEST_TOOLS = frozenset({"speed_test"})
 
+AUDIO_PACTL_TOOLS = frozenset({"audio_devices", "set_output_device"})
+
 # Filesystem tool that opens files in a GUI app
 FILESYSTEM_DESKTOP_TOOLS = frozenset({"open_path"})
 
 # In-memory cache populated by refresh_capabilities()
 _cached_response: CapabilitiesResponse | None = None
+
+
+@dataclass(frozen=True)
+class ToolCapabilitySnapshot:
+    """Immutable tool availability captured for one assistant request."""
+
+    available_tools: frozenset[str]
+    checked_at: datetime
+    snapshot_id: str
+
+
+def capture_tool_snapshot() -> ToolCapabilitySnapshot:
+    """Capture capabilities once; callers should pass this through the request."""
+    available = frozenset(get_available_tool_names())
+    return ToolCapabilitySnapshot(
+        available_tools=available,
+        checked_at=datetime.now(UTC),
+        snapshot_id=uuid4().hex[:12],
+    )
 
 
 def _flag_enabled(flag: str) -> bool:
@@ -371,6 +394,9 @@ def _tool_availability(tool_name: str, tool_def: dict[str, Any], modules: dict[s
     if tool_name in FILESYSTEM_DESKTOP_TOOLS and not _has_desktop_session():
         return False, "No desktop session (headless server)"
 
+    if module_key == "audio" and tool_name in AUDIO_PACTL_TOOLS and not shutil.which("pactl"):
+        return False, "pactl not available (PulseAudio/PipeWire device control unavailable)"
+
     if tool_name in NETWORK_WIFI_TOOLS:
         ok, reason = _network_subfeature_available("wifi")
         if not ok:
@@ -487,6 +513,7 @@ def get_capabilities(*, refresh: bool = False) -> CapabilitiesResponse:
                     missing_commands=metadata.get("missing_commands", []),
                     metadata={k: v for k, v in metadata.items() if k not in ("config_enabled", "missing_commands")},
                 )
+
             elif row.category == "tool":
                 tool_name = row.key.removeprefix("tool:")
                 if row.available:
@@ -506,8 +533,10 @@ def get_capabilities(*, refresh: bool = False) -> CapabilitiesResponse:
     return refresh_capabilities()
 
 
-def get_available_tool_names() -> set[str]:
-    """Return tool names that work on this host right now (live probe, not stale DB)."""
+def get_available_tool_names(snapshot: ToolCapabilitySnapshot | None = None) -> set[str]:
+    """Return available tools, reusing a request snapshot when supplied."""
+    if snapshot is not None:
+        return set(snapshot.available_tools)
     from app.services.assistant.tools import TOOL_DEFINITIONS
 
     modules = probe_modules_only()
@@ -518,8 +547,13 @@ def get_available_tool_names() -> set[str]:
     }
 
 
-def get_tool_unavailability_reason(tool_name: str) -> str:
+def get_tool_unavailability_reason(
+    tool_name: str,
+    snapshot: ToolCapabilitySnapshot | None = None,
+) -> str:
     """Human-readable reason a tool cannot run on this host."""
+    if snapshot is not None and tool_name not in snapshot.available_tools:
+        return f"Tool '{tool_name}' is unavailable in capability snapshot {snapshot.snapshot_id}"
     caps = get_capabilities()
     cached = caps.assistant_tools.unavailable.get(tool_name)
     if cached:

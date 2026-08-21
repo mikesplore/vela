@@ -1,14 +1,15 @@
 from fastapi import HTTPException, Request
 
-# In-memory session store: {user_id: [{"role": "user|assistant", "content": "..."}, ...]}
-SESSION_STORE: dict[str, list[dict[str, str]]] = {}
+# In-memory session store: {(user_id, session_id): history}
+SESSION_STORE: dict[tuple[str, str], list[dict[str, str]]] = {}
 MAX_HISTORY_CHARS = 4000  # Token-budget-aware trimming instead of message count
 
 
-def get_or_init_session(user_id: str) -> list[dict[str, str]]:
-    if user_id not in SESSION_STORE:
-        SESSION_STORE[user_id] = []
-    return SESSION_STORE[user_id]
+def get_or_init_session(user_id: str, session_id: str) -> list[dict[str, str]]:
+    key = (user_id, session_id)
+    if key not in SESSION_STORE:
+        SESSION_STORE[key] = []
+    return SESSION_STORE[key]
 
 
 def trim_history(history: list[dict[str, str]], max_chars: int = MAX_HISTORY_CHARS) -> list[dict[str, str]]:

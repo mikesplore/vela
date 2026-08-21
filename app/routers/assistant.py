@@ -39,6 +39,7 @@ from app.services.assistant.tool_exec import (
 from app.services.assistant.workflow import needs_conditional_followup
 from app.services.assistant.stream import StreamRequest
 from app.services.assistant.stream import stream_chat as s_c
+from app.services import capabilities as capabilities_service
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -54,7 +55,8 @@ async def chat(
 
     session_id = extract_session_id(request)
     auth_header = request.headers.get("authorization")
-    history = get_or_init_session(current_user)
+    capability_snapshot = capabilities_service.capture_tool_snapshot()
+    history = get_or_init_session(current_user, session_id)
 
     pending = get_pending_action(current_user, session_id)
 
@@ -64,17 +66,18 @@ async def chat(
             clear_pending_action(current_user, session_id)
             # Remove the original message that triggered this pending action from history
             # so it doesn't get re-planned on the next request
-            history = get_or_init_session(current_user)
+            history = get_or_init_session(current_user, session_id)
             history = [h for h in history if h.get("content") != pending.user_message]
-            SESSION_STORE[current_user] = history
+            SESSION_STORE[(current_user, session_id)] = history
             return AssistantResponse(reply="Cancelled the pending action.")
         if pending.requires_auth:
             if matches_assistant_pin(message):
                 clear_pending_action(current_user, session_id)
                 tool_response = await execute_tool_calls(request, pending.tool_calls, auth_header,
-                                                         user_message=pending.user_message, confirmed=True)
+                                                         user_message=pending.user_message, confirmed=True,
+                                                         capability_snapshot=capability_snapshot)
                 history.append({"role": "assistant", "content": tool_response.reply})
-                SESSION_STORE[current_user] = trim_history(history)
+                SESSION_STORE[(current_user, session_id)] = trim_history(history)
                 return tool_response
             if is_affirmative(message):
                 confirmation_card = build_confirmation_card(
@@ -114,9 +117,10 @@ async def chat(
         if is_affirmative(message):
             clear_pending_action(current_user, session_id)
             tool_response = await execute_tool_calls(request, pending.tool_calls, auth_header,
-                                                     user_message=pending.user_message, confirmed=True)
+                                                     user_message=pending.user_message, confirmed=True,
+                                                     capability_snapshot=capability_snapshot)
             history.append({"role": "assistant", "content": tool_response.reply})
-            SESSION_STORE[current_user] = trim_history(history)
+            SESSION_STORE[(current_user, session_id)] = trim_history(history)
             return tool_response
         if matches_assistant_pin(message):
             confirmation_card = build_confirmation_card(
@@ -138,13 +142,16 @@ async def chat(
         if cancellation_msg:
             history.append({"role": "assistant", "content": cancellation_msg})
         history = [h for h in history if h.get("content") != pending.user_message]
-        SESSION_STORE[current_user] = history
+        SESSION_STORE[(current_user, session_id)] = history
 
     history.append({"role": "user", "content": body.message})
     history = trim_history(history)
 
     try:
-        tool_calls = await plan_tool_calls(body.message, history[:-1])
+        tool_calls = await plan_tool_calls(
+            body.message, history[:-1], capability_snapshot=capability_snapshot,
+            request_id=getattr(request.state, "request_id", None),
+        )
     except Exception as exc:
         logger.error("Tool planning failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=str(exc))
@@ -173,9 +180,14 @@ async def chat(
             )
 
         if needs_conditional_followup(body.message, tool_calls):
-            inspection_results = await execute_tool_results(request, tool_calls, auth_header, confirmed=False)
+            inspection_results = await execute_tool_results(
+                request, tool_calls, auth_header, confirmed=False,
+                capability_snapshot=capability_snapshot,
+            )
             try:
-                followup_calls = await plan_conditional_followup(body.message, inspection_results)
+                followup_calls = await plan_conditional_followup(
+                    body.message, inspection_results, capability_snapshot=capability_snapshot,
+                )
             except Exception as exc:
                 logger.error("Conditional follow-up planning failed: %s", exc, exc_info=True)
                 tool_response = await response_from_tool_results(body.message, inspection_results)
@@ -203,7 +215,8 @@ async def chat(
 
                 if followup_real_calls:
                     followup_results = await execute_tool_results(
-                        request, followup_real_calls, auth_header, confirmed=False
+                        request, followup_real_calls, auth_header, confirmed=False,
+                        capability_snapshot=capability_snapshot,
                     )
                     tool_response = await response_from_tool_results(
                         body.message, inspection_results + followup_results
@@ -211,16 +224,18 @@ async def chat(
                 else:
                     tool_response = await response_from_tool_results(body.message, inspection_results)
         else:
-            tool_response = await execute_tool_calls(request, tool_calls, auth_header, user_message=body.message,
-                                                     confirmed=False)
+            tool_response = await execute_tool_calls(
+                request, tool_calls, auth_header, user_message=body.message,
+                confirmed=False, capability_snapshot=capability_snapshot,
+            )
         tool_response.reply = tool_response.reply.strip()
         history.append({"role": "assistant", "content": tool_response.reply})
-        SESSION_STORE[current_user] = trim_history(history)
+        SESSION_STORE[(current_user, session_id)] = trim_history(history)
         return tool_response
 
     reply_text = reply_text.strip()
     history.append({"role": "assistant", "content": reply_text})
-    SESSION_STORE[current_user] = trim_history(history)
+    SESSION_STORE[(current_user, session_id)] = trim_history(history)
 
     return AssistantResponse(reply=reply_text)
 

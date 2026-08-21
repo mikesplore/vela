@@ -50,9 +50,14 @@ def _infer_application_name(user_message: str, *, for_close: bool) -> str | None
 
 def split_unavailable_tool_calls(
     tool_calls: list[dict[str, Any]],
+    capability_snapshot: capabilities_service.ToolCapabilitySnapshot | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Separate planner output into allowed calls vs tools unavailable on this host."""
-    available = capabilities_service.get_available_tool_names()
+    available = (
+        set(capability_snapshot.available_tools)
+        if capability_snapshot is not None
+        else capabilities_service.get_available_tool_names()
+    )
     allowed: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     for call in tool_calls:
@@ -95,13 +100,17 @@ def enrich_tool_calls(tool_calls: list[dict[str, Any]], user_message: str | None
     return enriched
 
 
-def prepare_tool_calls(tool_calls: list[dict[str, Any]], user_message: str | None = None) -> list[dict[str, Any]]:
+def prepare_tool_calls(
+    tool_calls: list[dict[str, Any]],
+    user_message: str | None = None,
+    capability_snapshot: capabilities_service.ToolCapabilitySnapshot | None = None,
+) -> list[dict[str, Any]]:
     """Normalize planner calls and add safe, deterministic Spotify dependencies.
 
     ``depends_on`` values from the planner refer to positions in its original
     JSON array.     Internally, opaque IDs are used so injected calls are safe.
     """
-    tool_calls, _rejected = split_unavailable_tool_calls(tool_calls)
+    tool_calls, _rejected = split_unavailable_tool_calls(tool_calls, capability_snapshot)
     tool_calls = enrich_tool_calls(tool_calls, user_message)
     prepared: list[dict[str, Any]] = []
     source_index_to_id: dict[int, str] = {}

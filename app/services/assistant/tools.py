@@ -1105,6 +1105,47 @@ def build_tool_list(available_tools: set[str] | None = None) -> str:
 # Stage 1: Domain Router — selects relevant domains from user intent
 # Stage 2: Tool Selector — picks specific tools from filtered domain subset
 
+_PATH_DOMAIN_PREFIXES = {
+    "/meta/": "assistant_meta", "/system/": "system_info", "/network/": "network",
+    "/monitor/": "monitoring", "/audio/": "audio", "/media/": "media_playback",
+    "/spotify/": "spotify", "/clipboard/": "clipboard", "/display/": "display",
+    "/fs/": "filesystem", "/input/": "input_control", "/processes/": "process_control",
+    "/scheduler/": "scheduler", "/power/": "power", "/security/": "security",
+    "/notifications/": "notifications", "/maintenance/": "maintenance", "/docker/": "docker",
+    "/alerts/": "monitoring", "/push/": "notifications",
+}
+
+
+def _generated_tool_domain(tool_name: str, tool_def: dict[str, Any]) -> str:
+    if tool_def.get("service") == "gatekeeper":
+        if tool_name.startswith(("gatekeeper_block_", "gatekeeper_unblock_")):
+            return "gatekeeper_block_unblock"
+        if tool_name.startswith("gatekeeper_nginx_"):
+            return "gatekeeper_nginx"
+        if tool_name.startswith("gatekeeper_docker_"):
+            return "gatekeeper_docker"
+        if "cert" in tool_name:
+            return "gatekeeper_ssl"
+        return "gatekeeper_project_management"
+    path = str(tool_def.get("path", ""))
+    for prefix, domain in _PATH_DOMAIN_PREFIXES.items():
+        if path.startswith(prefix):
+            return domain
+    return "assistant_meta"
+
+
+def _generate_domain_tools() -> dict[str, list[str]]:
+    domains: dict[str, list[str]] = {}
+    for name, definition in TOOL_DEFINITIONS.items():
+        domains.setdefault(_generated_tool_domain(name, definition), []).append(name)
+    gatekeeper_tools = sorted(
+        name for name, definition in TOOL_DEFINITIONS.items()
+        if definition.get("service") == "gatekeeper"
+    )
+    domains["gatekeeper_admin"] = gatekeeper_tools
+    return {domain: sorted(names) for domain, names in domains.items()}
+
+
 DOMAIN_TOOLS: dict[str, list[str]] = {
     # Base tool domains
     "system_info": [
@@ -1228,6 +1269,22 @@ DOMAIN_TOOLS: dict[str, list[str]] = {
     ],
 }
 
+# The historical literal above is retained only as source documentation for
+# the router domains. Runtime membership is generated from the authoritative
+# TOOL_DEFINITIONS registry so stale tool names cannot hide valid tools.
+DOMAIN_TOOLS = _generate_domain_tools()
+
+
+def validate_domain_tools() -> None:
+    defined = set(TOOL_DEFINITIONS)
+    routed = {name for names in DOMAIN_TOOLS.values() for name in names}
+    missing = defined - routed
+    unknown = routed - defined
+    if missing or unknown:
+        raise RuntimeError(
+            f"Invalid assistant domain registry: missing={sorted(missing)}, unknown={sorted(unknown)}"
+        )
+
 _DOMAIN_ROUTER_PROMPT = """You are Vela's domain router. Analyze the user's request and select the most relevant domain(s) from the list below. Output ONLY a JSON object — no markdown wrapper, no prose.
 
 JSON RULES:
@@ -1307,8 +1364,10 @@ def build_system_tool_prompt(
         # Intersect with available_tools if both are provided
         if available_tools is not None:
             filtered_tools &= available_tools
-        tool_list = build_tool_list(filtered_tools if filtered_tools else None)
-        tool_hints = build_tool_hints(filtered_tools if filtered_tools else None)
+        # An empty intersection is meaningful: the selected domain has no
+        # usable tools on this host. Never turn it into ``None`` (unfiltered).
+        tool_list = build_tool_list(filtered_tools)
+        tool_hints = build_tool_hints(filtered_tools)
     else:
         # Legacy behavior: filter by available_tools only
         tool_list = build_tool_list(available_tools)
@@ -1317,5 +1376,17 @@ def build_system_tool_prompt(
     return _TOOL_PROMPT_BODY.format(tool_list=tool_list, tool_hints=tool_hints)
 
 
+def tools_for_domains(
+    selected_domains: list[str], available_tools: set[str] | None = None
+) -> set[str]:
+    """Return the exact selector tool set for diagnostics and tests."""
+    selected = {
+        tool for domain in selected_domains for tool in DOMAIN_TOOLS.get(domain, [])
+    }
+    return selected if available_tools is None else selected & available_tools
+
+
 # Default unfiltered prompt — used in tests and as fallback before capabilities are loaded.
 SYSTEM_TOOL_PROMPT = build_system_tool_prompt()
+
+validate_domain_tools()
