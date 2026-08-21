@@ -46,7 +46,16 @@ class Config(BaseSettings):
     # ==================================================================
     # SERVER SCOPE FIELDS (Naturally prefixed with VELA_)
     # ==================================================================
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
+    allow_remote_bind: bool = False
+    trusted_proxy_ips: List[str] = Field(default_factory=list)
+    max_upload_bytes: int = 50 * 1024 * 1024
+    max_request_body_bytes: int = 64 * 1024 * 1024
+    max_archive_entries: int = 10_000
+    max_archive_expanded_bytes: int = 512 * 1024 * 1024
+    max_search_results: int = 2_000
+    max_health_response_bytes: int = 64 * 1024
+    max_websocket_connections: int = 10
     port: int = 8765
     secret_key: str
     token_expire_minutes: int = 1440
@@ -200,6 +209,16 @@ class Config(BaseSettings):
     def port_in_range(cls, v: int) -> int:
         if not (1 <= v <= 65535):
             raise ValueError("port must be between 1 and 65535.")
+        return v
+
+    @field_validator(
+        "max_upload_bytes", "max_request_body_bytes", "max_archive_entries", "max_archive_expanded_bytes",
+        "max_search_results", "max_health_response_bytes", "max_websocket_connections",
+    )
+    @classmethod
+    def security_limits_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("security limits must be positive")
         return v
 
     @field_validator("token_expire_minutes", "assistant_action_timeout_seconds")

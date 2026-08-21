@@ -1,3 +1,4 @@
+import logging
 import re
 import subprocess
 from pathlib import Path
@@ -30,6 +31,10 @@ from app.services.processes import (
     spawn_detached,
 )
 from app.utils.run_command import run_command
+from app.utils.security import require_confirmed_action
+from app.utils.security import opaque_error_id
+
+logger = logging.getLogger("vela.processes")
 
 router = APIRouter(prefix="/processes", tags=["processes"])
 
@@ -90,7 +95,9 @@ async def kill_process(pid: int) -> Any:
         process.wait(timeout=3)
         return ActionResponse(success=True, message=f"Process {pid} killed after timeout.")
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        error_id = opaque_error_id()
+        logger.exception("Process termination failed error_id=%s", error_id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Process action failed (error_id={error_id})")
 
 
 @router.delete("/name/{name}", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
@@ -112,7 +119,11 @@ async def kill_processes_by_name(name: str) -> Any:
     )
 
 
-@router.post("/launch", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
+@router.post(
+    "/launch",
+    response_model=ActionResponse,
+    dependencies=[Depends(get_current_user), Depends(require_confirmed_action)],
+)
 async def launch_process(request: LaunchRequest) -> Any:
     """Launch a process detached from the Vela service cgroup when possible."""
     try:
@@ -121,7 +132,9 @@ async def launch_process(request: LaunchRequest) -> Any:
     except FileNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Command not found")
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        error_id = opaque_error_id()
+        logger.exception("Process launch failed error_id=%s", error_id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Process launch failed (error_id={error_id})")
 
 
 @router.post("/app/open", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
@@ -139,11 +152,15 @@ async def open_application(request: ApplicationRequest) -> Any:
     except ApplicationNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except ApplicationLaunchError as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        error_id = opaque_error_id()
+        logger.warning("Application launch rejected error_id=%s detail=%s", error_id, str(exc)[:200])
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Application launch failed (error_id={error_id})")
     except FileNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        error_id = opaque_error_id()
+        logger.exception("Application launch failed error_id=%s", error_id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Application launch failed (error_id={error_id})")
 
 
 @router.post("/app/close", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
@@ -160,9 +177,11 @@ async def close_application(request: ApplicationCloseRequest) -> Any:
             application_name=application_name,
         )
     except ApplicationNotRunningError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application is not running")
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        error_id = opaque_error_id()
+        logger.exception("Application close failed error_id=%s", error_id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Application close failed (error_id={error_id})")
 
 
 class WindowActionRequest(BaseModel):
@@ -253,35 +272,6 @@ def _get_window_app_path() -> str:
 
     return ""
 
-
-
-@router.get("/active-window", response_model=ActiveWindowResponse, dependencies=[Depends(get_current_user)])
-async def active_window() -> Any:
-    """Return the currently focused window title and app executable path."""
-    # stdout, stderr, returncode = run_command(["xdotool", "getwindowfocus"])
-    # if returncode != 0 or not stdout:
-    #     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-    #                         detail=stderr or "Could not determine active window")
-    # window_id = stdout.strip()
-    # title = _get_window_title(window_id)
-    # app_path = _get_window_app_path()
-    # return ActiveWindowResponse(window_id=window_id, title=title, app_name=app_path or title)
-
-    return ActiveWindowResponse(
-        window_id="0x0",
-        title="Desktop",
-        app_name="Desktop"
-    )
-
-
-@router.post("/window/minimize", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
-async def minimize_window(request: WindowActionRequest) -> Any:
-    """Minimize a window by window ID."""
-    _, stderr, returncode = run_command(["xdotool", "windowminimize", request.window_id])
-    if returncode != 0:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=stderr or "Could not minimize window")
-    return ActionResponse(success=True, message="Window minimized.")
 
 
 @router.post("/window/close", response_model=ActionResponse, dependencies=[Depends(get_current_user)])

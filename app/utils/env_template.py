@@ -33,6 +33,8 @@ ENV_TEMPLATE: list[tuple[str, str]] = [
     ("FIREWORKS_API_KEY", ""),
     ("IPINFO_TOKEN", ""),
     ("VELA_ASSISTANT_ENABLE_THINKING", "false"),
+    ("VELA_ALLOW_REMOTE_BIND", "0"),
+    ("VELA_TRUSTED_PROXY_IPS", "[]"),
     ("VELA_FIREWORKS_API_URL", "https://api.fireworks.ai/inference/v1"),
     ("VELA_FIREWORKS_MODEL", "accounts/fireworks/models/qwen3p7-plus"),
     ("RECIPIENT_EMAIL", ""),

@@ -56,7 +56,7 @@ async def test_list_processes_returns_sorted_processes(monkeypatch, async_client
 
     response = await async_client.get(
         "/processes",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {token}", "X-Confirm-Action": "true", "X-Action-PIN": "9921"},
     )
 
     assert response.status_code == 200
@@ -113,12 +113,13 @@ async def testkill_processes_by_name(monkeypatch, async_client):
 @pytest.mark.anyio
 async def test_launch_process(monkeypatch, async_client):
     token = create_access_token({"sub": "admin"})
-    monkeypatch.setattr(subprocess, "Popen", lambda args: FakePopen(pid=999))
+    monkeypatch.setattr(processes_service.shutil, "which", lambda _: None)
+    monkeypatch.setattr(subprocess, "Popen", lambda args, **kwargs: FakePopen(pid=999))
 
     response = await async_client.post(
         "/processes/launch",
         json={"command": "echo", "args": ["hello"]},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {token}", "X-Confirm-Action": "true", "X-Action-PIN": "9921"},
     )
 
     assert response.status_code == 200

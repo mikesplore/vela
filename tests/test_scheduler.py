@@ -53,7 +53,7 @@ async def test_scheduler_create_list_cancel_and_run(monkeypatch, async_client):
             "run_at": "2026-05-10T12:00:00Z",
             "recurring": None,
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {token}", "X-Confirm-Action": "true", "X-Action-PIN": "9921"},
     )
     assert create_response.status_code == 200
     assert create_response.json()["message"] == "Scheduled job job-1"
@@ -74,7 +74,7 @@ async def test_scheduler_create_list_cancel_and_run(monkeypatch, async_client):
 
     run_response = await async_client.post(
         "/scheduler/run-now/job-1",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {token}", "X-Confirm-Action": "true", "X-Action-PIN": "9921"},
     )
     assert run_response.status_code == 200
     assert "Triggered task job-1 immediately" in run_response.json()["message"]

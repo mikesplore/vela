@@ -69,8 +69,6 @@ PROCESS_DESKTOP_TOOLS = frozenset(
     {
         "open_application",
         "close_application",
-        "active_window",
-        "minimize_window",
         "close_window",
     }
 )

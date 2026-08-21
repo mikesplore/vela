@@ -1,6 +1,7 @@
 import asyncio
+import time
 from typing import Any
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from app.auth import verify_websocket_token
 from app.dependencies import get_current_user
 from app.domain.monitoring import CPUUsage, BatteryInfo, BatteryHealthInfo, ProcessMetrics, UptimeInfo
@@ -9,6 +10,8 @@ from app.services.monitoring import get_snapshot, error_response, get_cpu_usage,
     get_network_io, get_temperatures, get_fan_speeds, get_battery_status, get_battery_health, get_top_processes, get_uptime
 
 router = APIRouter(prefix="/monitor", tags=["monitoring"])
+_stream_connections: dict[str, int] = {}
+_stream_attempts: dict[str, list[float]] = {}
 
 
 @router.get("/snapshot", dependencies=[Depends(get_current_user)])
@@ -112,7 +115,26 @@ async def monitor_processes() -> Any:
 
 
 @router.websocket("/stream")
-async def monitor_stream(websocket: WebSocket, token_data=Depends(verify_websocket_token), interval: int = 5):
+async def monitor_stream(
+    websocket: WebSocket,
+    token_data=Depends(verify_websocket_token),
+    interval: int = Query(5, ge=1, le=300),
+):
+    user_id = str(token_data.sub)
+    active = _stream_connections.get(user_id, 0)
+    from app.utils.config import get_config
+
+    now = time.monotonic()
+    attempts = [stamp for stamp in _stream_attempts.get(user_id, []) if now - stamp < 60]
+    if len(attempts) >= 30:
+        await websocket.close(code=1013, reason="Too many monitoring stream attempts")
+        return
+    attempts.append(now)
+    _stream_attempts[user_id] = attempts
+    if active >= get_config().max_websocket_connections:
+        await websocket.close(code=1013, reason="Too many monitoring streams")
+        return
+    _stream_connections[user_id] = active + 1
     await websocket.accept()
     try:
         while True:
@@ -123,3 +145,9 @@ async def monitor_stream(websocket: WebSocket, token_data=Depends(verify_websock
         return
     except Exception:
         await websocket.close(code=1011)
+    finally:
+        remaining = _stream_connections.get(user_id, 1) - 1
+        if remaining > 0:
+            _stream_connections[user_id] = remaining
+        else:
+            _stream_connections.pop(user_id, None)

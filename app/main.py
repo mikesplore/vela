@@ -25,6 +25,13 @@ API_NAME = "Vela"
 API_VERSION = "1.0.0"
 
 config = get_config()
+if config.host not in {"127.0.0.1", "::1", "localhost"} and not config.allow_remote_bind:
+    raise RuntimeError(
+        "Refusing non-loopback bind. Set VELA_ALLOW_REMOTE_BIND=1 only when a firewall/TLS boundary is configured."
+    )
+if config.host not in {"127.0.0.1", "::1", "localhost"}:
+    logger = logging.getLogger("vela.main")
+    logger.warning("Vela is bound to non-loopback host %s; protect the API with TLS and a firewall", config.host)
 logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INFO))
 logger = logging.getLogger("vela.main")
 
@@ -79,7 +86,7 @@ async def uniform_error_middleware(request: Request, call_next):
                         content=data
                     )
             except Exception as exc:
-                logger.warning(f"Error processing response: {exc}")
+                logger.warning("Error processing error response")
                 # Return error response on processing failure
                 error_response = ErrorResponse.create(
                     response.status_code,
@@ -91,6 +98,17 @@ async def uniform_error_middleware(request: Request, call_next):
                 )
     
     return response
+
+
+async def request_size_limit_middleware(request: Request, call_next):
+    raw_length = request.headers.get("content-length")
+    if raw_length:
+        try:
+            if int(raw_length) > config.max_request_body_bytes:
+                return JSONResponse(status_code=413, content={"detail": "Request body is too large"})
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
+    return await call_next(request)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -183,6 +201,7 @@ app.add_middleware(SlowAPIMiddleware)
 # Add the middleware for uniform error responses
 from starlette.middleware.base import BaseHTTPMiddleware
 app.add_middleware(BaseHTTPMiddleware, dispatch=uniform_error_middleware)
+app.add_middleware(BaseHTTPMiddleware, dispatch=request_size_limit_middleware)
 app.state.limiter = limiter
 
 app.include_router(auth_router)
@@ -223,10 +242,13 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 async def general_exception_handler(request: Request, exc: Exception):
     """Handle all unhandled exceptions."""
-    logger.error(f"Unhandled exception: {exc}")
+    from app.utils.security import opaque_error_id
+
+    error_id = opaque_error_id()
+    logger.exception("Unhandled exception error_id=%s", error_id)
     return JSONResponse(
         status_code=500,
-        content=ErrorResponse.create(500, str(exc) or "Internal server error").model_dump()
+        content=ErrorResponse.create(500, f"Internal server error (error_id={error_id})").model_dump()
     )
 
 

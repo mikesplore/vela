@@ -6,11 +6,16 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.dependencies import get_current_user
 from app.domain.scheduler import SchedulerActionResponse, SchedulerCreateRequest, SchedulerListResponse
 from app.services.scheduler import command_runner, scheduler, serialize_job
+from app.utils.security import require_confirmed_action
 
 router = APIRouter(prefix="/scheduler", tags=["scheduler"])
 
 
-@router.post("/create", response_model=SchedulerActionResponse, dependencies=[Depends(get_current_user)])
+@router.post(
+    "/create",
+    response_model=SchedulerActionResponse,
+    dependencies=[Depends(get_current_user), Depends(require_confirmed_action)],
+)
 async def create_job(request: SchedulerCreateRequest) -> Any:
     """Schedule a command to run at a specific time or on a cron schedule."""
     try:
@@ -52,14 +57,18 @@ async def cancel_job(task_id: str) -> Any:
     return SchedulerActionResponse(success=True, message=f"Cancelled task {task_id}")
 
 
-@router.post("/run-now/{task_id}", response_model=SchedulerActionResponse, dependencies=[Depends(get_current_user)])
+@router.post(
+    "/run-now/{task_id}",
+    response_model=SchedulerActionResponse,
+    dependencies=[Depends(get_current_user), Depends(require_confirmed_action)],
+)
 async def run_job_now(task_id: str) -> Any:
     """Trigger a scheduled task to run immediately."""
     job = scheduler.get_job(task_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     try:
-        job.func(**job.kwargs)
+        job.func(command=job.kwargs.get("command", ""), args=job.kwargs.get("args", []))
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
     return SchedulerActionResponse(success=True, message=f"Triggered task {task_id} immediately")

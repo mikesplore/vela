@@ -278,12 +278,12 @@ async def _handle_forward_request(
     try:
         headers["Authorization"] = f"Bearer {await async_get_local_auth_token()}"
     except Exception as auth_exc:
-        logger.warning("Local auth failed while processing request: %s", auth_exc)
+        logger.warning("Local auth failed while processing relay request")
         await _send_forward_response(
             websocket,
             request_id=request_id,
             status_code=500,
-            body=f"Local auth failed: {auth_exc}",
+            body="Local auth failed",
         )
         return
 
@@ -300,20 +300,20 @@ async def _handle_forward_request(
             client=client,
         )
     except httpx.TimeoutException:
-        logger.warning("Local request timed out after %ss: %s", config.local_service_timeout, local_url)
+        logger.warning("Local request timed out after %ss", config.local_service_timeout)
         await _send_forward_response(
             websocket,
             request_id=request_id,
             status_code=504,
             body=f"Local service did not respond within {config.local_service_timeout}s",
         )
-    except httpx.ConnectError as exc:
-        logger.warning("Connection error to local service: %s", exc)
+    except httpx.ConnectError:
+        logger.warning("Connection error to local service")
         await _send_forward_response(
             websocket,
             request_id=request_id,
             status_code=502,
-            body=f"Bad Gateway: Could not connect to local service: {exc}",
+            body="Bad Gateway: Could not connect to local service",
         )
 
 
@@ -323,7 +323,12 @@ async def tunnel(token):
 
     vps_url, agent_id, _ = agent_settings()
     uri = websocket_tunnel_url(vps_url, agent_id, token)
-    print(f"Connecting to {uri}...")
+    from app.utils.security import token_fingerprint
+
+    print(
+        f"Connecting to relay host={vps_url} agent_id={agent_id} "
+        f"token_fingerprint={token_fingerprint(token)}..."
+    )
     try:
         async with httpx.AsyncClient(
                 timeout=_local_timeout(),
@@ -372,7 +377,7 @@ async def tunnel(token):
                             websocket,
                             request_id=request_id,
                             status_code=500,
-                            body=str(exc),
+                            body="Relay request failed",
                         )
                     except Exception:
                         pass

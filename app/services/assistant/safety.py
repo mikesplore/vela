@@ -69,8 +69,6 @@ LOW_RISK_TOOLS = {
     "get_display_brightness",
     "set_display_brightness",
     "get_resolution",
-    "set_resolution",
-    "rotate_display",
     "lock_screen_display",
     "set_night_light",
     "list_files",
@@ -117,7 +115,6 @@ MEDIUM_RISK_TOOLS = {
     "unpair_bluetooth_device",
     "type_keyboard",
     "press_keyboard_keys",
-    "move_mouse",
     "click_mouse",
     "double_click_mouse",
     "scroll_mouse",
@@ -198,14 +195,6 @@ def _tool_summary(tool_name: str, tool_input: dict[str, Any]) -> str:
         return "type into the active window"
     if tool_name == "press_keyboard_keys":
         return "press keyboard shortcuts"
-    if tool_name == "move_mouse":
-        return "move the mouse cursor"
-    if tool_name == "click_mouse":
-        return "click the mouse"
-    if tool_name == "double_click_mouse":
-        return "double-click the mouse"
-    if tool_name == "scroll_mouse":
-        return "scroll the mouse wheel"
     if tool_name == "open_application":
         return f'open application {tool_input.get("name", "the requested app")}'
     if tool_name == "close_application":

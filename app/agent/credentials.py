@@ -39,12 +39,9 @@ def reload_agent_env(dotenv_path: Path | None = None) -> None:
         or os.getenv("PASSWORD", "").strip()
         or config.local_service_password
     )
-    config.local_service_auth_token = os.getenv("LOCAL_SERVICE_AUTH_TOKEN") or None
-    config.local_service_auth_token_expires = os.getenv("LOCAL_SERVICE_AUTH_TOKEN_EXPIRES") or None
-    if config.local_service_auth_token == "":
-        config.local_service_auth_token = None
-    if config.local_service_auth_token_expires == "":
-        config.local_service_auth_token_expires = None
+    # Local JWTs are deliberately memory-only; persisted legacy values are ignored.
+    config.local_service_auth_token = None
+    config.local_service_auth_token_expires = None
 
 
 def reset_agent_credential() -> None:

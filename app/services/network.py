@@ -1,4 +1,5 @@
 import json
+import ipaddress
 import logging
 import os
 import re
@@ -8,7 +9,7 @@ import time
 import urllib.request
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlparse
 
 import psutil
 
@@ -498,31 +499,61 @@ def check_port(port: int) -> "PortCheckResponse":
 
 
 def health_check(url: str, timeout: float = 5.0) -> "HealthCheckResponse":
-    import time
-
     import httpx
 
     from app.domain.network import HealthCheckResponse
 
     started = time.perf_counter()
+    current_url = url
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-            response = client.get(url)
+        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+            for _ in range(5):
+                _validate_health_target(current_url)
+                with client.stream("GET", current_url, headers={"Accept": "*/*"}) as response:
+                    status_code = response.status_code
+                    location = response.headers.get("location")
+                    if status_code in {301, 302, 303, 307, 308} and location:
+                        current_url = urljoin(current_url, location)
+                        continue
+                    # Do not buffer an attacker-controlled response body.
+                    consumed = 0
+                    for chunk in response.iter_bytes(16 * 1024):
+                        consumed += len(chunk)
+                        if consumed > get_config().max_health_response_bytes:
+                            break
+                    break
+            else:
+                raise ValueError("too many redirects")
         elapsed_ms = (time.perf_counter() - started) * 1000
         return HealthCheckResponse(
             url=url,
             reachable=True,
-            status_code=response.status_code,
+            status_code=status_code,
             elapsed_ms=round(elapsed_ms, 2),
         )
-    except Exception as exc:
+    except Exception:
         elapsed_ms = (time.perf_counter() - started) * 1000
         return HealthCheckResponse(
             url=url,
             reachable=False,
             elapsed_ms=round(elapsed_ms, 2),
-            error=str(exc),
+            error="health check failed",
         )
+
+
+def _validate_health_target(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("only HTTP(S) URLs are allowed")
+    if parsed.username or parsed.password:
+        raise ValueError("URL credentials are not allowed")
+    addresses = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+    if not addresses:
+        raise ValueError("host did not resolve")
+    for address in {item[4][0] for item in addresses}:
+        ip = ipaddress.ip_address(address)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+            raise ValueError("private or local destinations are not allowed")
 
 
 def get_firewall_status() -> "FirewallStatusResponse":

@@ -1,6 +1,8 @@
 import os
 import shutil
 import subprocess
+import stat
+import tempfile
 import zipfile
 from typing import Optional
 from pathlib import Path
@@ -18,6 +20,35 @@ from app.services.filesystem import validate_path, file_entry, is_allowed, resol
 
 config = get_config()
 router = APIRouter(prefix="/fs", tags=["filesystem"])
+
+
+def _reject_symlinked_parents(path: Path) -> None:
+    """Reject symlink components before a mutating operation."""
+    current = path.expanduser()
+    if not current.is_absolute():
+        current = Path.cwd() / current
+    current = Path(os.path.abspath(str(current)))
+    for component in current.parts:
+        if component == current.anchor:
+            candidate = Path(component)
+        else:
+            candidate = candidate / component
+        current_component = candidate
+        if current_component.is_symlink():
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Symlinked paths are not permitted")
+
+
+def _safe_upload_destination(target: Path, filename: str | None) -> Path:
+    if target.exists() and target.is_dir():
+        safe_name = Path(filename or "upload.bin").name
+        if safe_name in {"", ".", ".."}:
+            raise HTTPException(status_code=400, detail="Invalid upload filename")
+        target = target / safe_name
+    target = target.resolve(strict=False)
+    if not is_allowed(target) or not is_allowed(target.parent):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Destination is outside allowed base directories")
+    _reject_symlinked_parents(target.parent)
+    return target
 
 
 
@@ -157,19 +188,32 @@ async def download_file(path: str = Query(...)) -> FileResponse:
 async def upload_file(path: str = Form(...), file: UploadFile = File(...)) -> Any:
     """Upload a file to the given destination path."""
     target = validate_path(path)
-    if target.exists() and target.is_dir():
-        target_path = target / file.filename
-    else:
-        target_path = target
-    if not is_allowed(target_path.parent):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Destination is outside allowed base directories")
+    _reject_symlinked_parents(Path(path).expanduser())
+    target_path = _safe_upload_destination(target, file.filename)
     target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path: Path | None = None
+    total = 0
     try:
-        with target_path.open("wb") as out_file:
-            content = await file.read()
-            out_file.write(content)
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=target_path.parent, prefix=f".{target_path.name}.", suffix=".upload", delete=False
+        ) as out_file:
+            temp_path = Path(out_file.name)
+            while chunk := await file.read(1024 * 1024):
+                total += len(chunk)
+                if total > config.max_upload_bytes:
+                    raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Upload is too large")
+                out_file.write(chunk)
+        os.replace(temp_path, target_path)
+        temp_path = None
     except OSError as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+    finally:
+        await file.close()
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
     return FileActionResponse(success=True, message=f"Uploaded file to {target_path}")
 
 
@@ -177,6 +221,7 @@ async def upload_file(path: str = Form(...), file: UploadFile = File(...)) -> An
 async def delete_path(request: PathRequest) -> Any:
     """Permanently delete a file, symlink, or directory safely."""
     target = validate_path(request.path, must_exist=True)
+    _reject_symlinked_parents(Path(request.path).expanduser())
     
     try:
         # Check if it's a directory, but ensure it's NOT a symlink
@@ -206,6 +251,7 @@ async def delete_path(request: PathRequest) -> Any:
 async def make_directory(request: PathRequest) -> Any:
     """Create a new directory."""
     target = validate_path(request.path)
+    _reject_symlinked_parents(Path(request.path).expanduser())
     if target.exists():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Directory already exists")
     try:
@@ -220,6 +266,8 @@ async def rename_path(request: RenameRequest) -> Any:
     """Rename or move a file or directory."""
     source = validate_path(request.from_path, must_exist=True)
     destination = validate_path(request.to_path)
+    _reject_symlinked_parents(Path(request.from_path).expanduser())
+    _reject_symlinked_parents(Path(request.to_path).expanduser())
     if destination.exists():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Destination already exists")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -256,16 +304,25 @@ async def search_files(query: str = Query(...), path: str = Query(".")) -> Any:
 
     try:
         for target in roots:
-            process = subprocess.run(
-                ["find", str(target), "-iname", f"*{query}*"],
-                capture_output=True,
+            process = subprocess.Popen(
+                ["find", str(target), "-iname", f"*{query}*", "-print"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=30,
             )
-            if process.returncode != 0 and not process.stdout:
-                raise OSError(process.stderr.strip() if process.stderr else "Search failed")
+            lines: list[str] = []
+            assert process.stdout is not None
+            for line in process.stdout:
+                lines.append(line.rstrip("\n"))
+                if len(lines) > config.max_search_results:
+                    process.kill()
+                    process.wait(timeout=5)
+                    raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Too many search results")
+            _, stderr = process.communicate(timeout=30)
+            if process.returncode != 0 and not lines:
+                raise OSError(stderr.strip() if stderr else "Search failed")
 
-            for line in process.stdout.strip().split("\n"):
+            for line in lines:
                 if not line:
                     continue
                 found_path = Path(line)
@@ -336,19 +393,33 @@ class ZipRequest(BaseModel):
 async def zip_paths(request: ZipRequest) -> Any:
     """Create a zip archive from files and directories."""
     output = validate_path(request.output)
+    _reject_symlinked_parents(Path(request.output).expanduser())
     if output.suffix.lower() != ".zip":
         output = output.with_suffix(".zip")
     output.parent.mkdir(parents=True, exist_ok=True)
     try:
         with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            entry_count = 0
+            expanded_bytes = 0
             for path_str in request.paths:
                 source = validate_path(path_str, must_exist=True)
+                _reject_symlinked_parents(Path(path_str).expanduser())
                 if source.is_file():
+                    entry_count += 1
+                    expanded_bytes += source.stat().st_size
+                    if entry_count > config.max_archive_entries or expanded_bytes > config.max_archive_expanded_bytes:
+                        raise HTTPException(status_code=413, detail="Archive limits exceeded")
                     archive.write(source, arcname=source.name)
                 else:
                     for root, _, files in os.walk(source):
                         for file_name in files:
                             source_path = Path(root) / file_name
+                            if source_path.is_symlink():
+                                continue
+                            entry_count += 1
+                            expanded_bytes += source_path.stat().st_size
+                            if entry_count > config.max_archive_entries or expanded_bytes > config.max_archive_expanded_bytes:
+                                raise HTTPException(status_code=413, detail="Archive limits exceeded")
                             archive.write(source_path, arcname=source_path.relative_to(source.parent))
     except OSError as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
@@ -365,12 +436,37 @@ async def unzip_path(request: UnzipRequest) -> Any:
     """Extract a zip archive to a destination directory."""
     source = validate_path(request.path, must_exist=True)
     destination = validate_path(request.destination)
+    _reject_symlinked_parents(Path(request.destination).expanduser())
     if source.suffix.lower() != ".zip":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Source file must be a .zip archive")
     destination.mkdir(parents=True, exist_ok=True)
     try:
         with zipfile.ZipFile(source, "r") as archive:
-            archive.extractall(destination)
+            members = archive.infolist()
+            if len(members) > config.max_archive_entries:
+                raise HTTPException(status_code=413, detail="Archive contains too many entries")
+            root = destination.resolve()
+            total_size = sum(max(0, member.file_size) for member in members)
+            if total_size > config.max_archive_expanded_bytes:
+                raise HTTPException(status_code=413, detail="Archive expanded size exceeds the limit")
+            for member in members:
+                name = member.filename
+                if not name or name.startswith(("/", "\\")):
+                    raise HTTPException(status_code=400, detail="Archive contains an unsafe path")
+                mode = (member.external_attr >> 16) & 0o170000
+                if mode == stat.S_IFLNK:
+                    raise HTTPException(status_code=400, detail="Archive contains a symlink entry")
+                candidate = (root / name).resolve(strict=False)
+                try:
+                    candidate.relative_to(root)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail="Archive contains a path traversal entry") from exc
+                if member.is_dir():
+                    candidate.mkdir(parents=True, exist_ok=True)
+                    continue
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member, "r") as src, candidate.open("xb") as dst:
+                    shutil.copyfileobj(src, dst, length=1024 * 1024)
     except (OSError, zipfile.BadZipFile) as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
     return FileActionResponse(success=True, message=f"Extracted archive to {destination}")

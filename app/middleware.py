@@ -34,9 +34,12 @@ def _extract_user_id(request: Request) -> str | None:
 
 
 def _client_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    cfg = get_config()
+    peer = request.client.host if request.client else None
+    if peer in set(cfg.trusted_proxy_ips):
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
     if request.client:
         return request.client.host
     return None

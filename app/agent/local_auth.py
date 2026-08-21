@@ -114,21 +114,6 @@ def get_local_auth_token(retries: int = 3, delay: float = 2.0) -> str:
     if _local_token and now + timedelta(seconds=30) < _local_token_expires:
         return _local_token
 
-    # 2. Try environment/dotenv token
-    if config.local_service_auth_token and config.local_service_auth_token_expires:
-        try:
-            expires = parse_local_expiry(config.local_service_auth_token_expires)
-            if now + timedelta(seconds=30) < expires:
-                _local_token = config.local_service_auth_token
-                _local_token_expires = expires
-                return _local_token
-        except Exception as e:
-            print(f"Error parsing config.local_service_auth_token_expires: {e}")
-
-    # 3. Fallback for manually set token without expiry (if any)
-    if config.local_service_auth_token and not config.local_service_auth_token_expires:
-         return config.local_service_auth_token
-
     if not config.local_service_username or not config.local_service_password:
         created = _auto_create_local_auth_account()
         if not created:
@@ -150,7 +135,9 @@ def get_local_auth_token(retries: int = 3, delay: float = 2.0) -> str:
 
     last_exc = None
     for attempt in range(retries):
-        print(f"Obtaining local auth token from {token_url} (attempt {attempt + 1}/{retries})")
+        from app.utils.security import redact_text
+
+        print(f"Obtaining local auth token (attempt {attempt + 1}/{retries})")
         for username, password, label in credential_candidates:
             resp = None
             try:
@@ -177,19 +164,14 @@ def get_local_auth_token(retries: int = 3, delay: float = 2.0) -> str:
                     config.local_service_username = username
                     config.local_service_password = password
 
-                # Persist token to .env
-                try:
-                    set_key(config.dotenv_path, "LOCAL_SERVICE_AUTH_TOKEN", _local_token)
-                    set_key(config.dotenv_path, "LOCAL_SERVICE_AUTH_TOKEN_EXPIRES", expiry_str)
-                    print(f"Persisted local auth token to {config.dotenv_path}")
-                except Exception as env_exc:
-                    print(f"Failed to persist token to .env: {env_exc}")
-
                 print(f"Obtained local auth token expiring at {_local_token_expires.isoformat()}")
                 return _local_token
             except Exception as exc:
                 last_exc = exc
-                print(f"Local auth token request failed ({label}, attempt {attempt + 1}/{retries}): {exc}")
+                print(
+                    f"Local auth token request failed ({label}, attempt {attempt + 1}/{retries}): "
+                    f"{redact_text(exc)}"
+                )
                 if resp is not None:
                     print(f"Local auth failure response ({label}): status={resp.status_code}")
                     if resp.status_code == 429:

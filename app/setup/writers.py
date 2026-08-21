@@ -39,6 +39,7 @@ def write_config_yaml(
     config_path = target_dir / "config.yaml"
     config = {
         "host": server_host,
+        "allow_remote_bind": False,
         "port": server_port,
         "secret_key": secrets.token_urlsafe(32),
         "token_expire_minutes": 1440,
@@ -46,6 +47,13 @@ def write_config_yaml(
         "allowed_base_dirs": allowed_dirs,
         "rate_limit_default": "100/minute",
         "route_rate_limits": {"/auth/token": "10/minute", "/ping": "60/minute"},
+        "max_upload_bytes": 50 * 1024 * 1024,
+        "max_request_body_bytes": 64 * 1024 * 1024,
+        "max_archive_entries": 10_000,
+        "max_archive_expanded_bytes": 512 * 1024 * 1024,
+        "max_search_results": 2_000,
+        "max_health_response_bytes": 64 * 1024,
+        "max_websocket_connections": 10,
         "feature_flags": {
             "display": True,
             "audio": True,

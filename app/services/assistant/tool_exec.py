@@ -238,6 +238,11 @@ async def _execute_tool(
         headers["Content-Type"] = "application/json"
     if confirmed and tool_name in INPUT_CONFIRM_TOOLS:
         headers["X-Confirm-Input"] = "true"
+    if confirmed and tool_name in {"schedule_job", "run_job_now"}:
+        headers["X-Confirm-Action"] = "true"
+        configured_pin = (get_config().assistant_action_pin or "").strip()
+        if configured_pin:
+            headers["X-Action-PIN"] = configured_pin
     if auth_header:
         headers["Authorization"] = auth_header
 

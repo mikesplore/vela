@@ -118,7 +118,7 @@ async def test_launch_process(monkeypatch, async_client):
     response = await async_client.post(
         "/processes/launch",
         json={"command": "echo", "args": ["hello"]},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {token}", "X-Confirm-Action": "true", "X-Action-PIN": "9921"},
     )
 
     assert response.status_code == 200

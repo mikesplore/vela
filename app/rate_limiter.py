@@ -8,11 +8,12 @@ config = get_config()
 
 
 def get_client_ip(request: Request) -> str:
-    # If the request is forwarded by the agent, use the original IP
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        # Get the first IP in the list
-        return forwarded.split(",")[0].strip()
+    cfg = get_config()
+    peer = request.client.host if request.client else "unknown"
+    if peer in set(cfg.trusted_proxy_ips):
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
     return get_remote_address(request)
 
 

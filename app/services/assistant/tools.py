@@ -310,18 +310,6 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "path": "/display/resolution",
         "description": "Get the current display resolution and refresh rate.",
     },
-    "set_resolution": {
-        "method": "POST",
-        "path": "/display/resolution",
-        "description": "Set the display resolution and refresh rate.",
-        "input": {"width": "integer", "height": "integer", "refresh": "integer"},
-    },
-    "rotate_display": {
-        "method": "POST",
-        "path": "/display/rotate",
-        "description": "Rotate the display orientation.",
-        "input": {"orientation": "normal|left|right|inverted"},
-    },
     "lock_screen_display": {
         "method": "POST",
         "path": "/display/lock",
@@ -405,30 +393,6 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "input": {"path": "string"},
     },
     # ── Input control ─────────────────────────────────────────────────────────
-    "move_mouse": {
-        "method": "POST",
-        "path": "/input/mouse/move",
-        "description": "Move the mouse cursor to given coordinates.",
-        "input": {"x": "integer", "y": "integer"},
-    },
-    "click_mouse": {
-        "method": "POST",
-        "path": "/input/mouse/click",
-        "description": "Click the mouse at given coordinates.",
-        "input": {"x": "integer", "y": "integer", "button": "left|right|middle"},
-    },
-    "double_click_mouse": {
-        "method": "POST",
-        "path": "/input/mouse/double-click",
-        "description": "Double-click the mouse at given coordinates.",
-        "input": {"x": "integer", "y": "integer"},
-    },
-    "scroll_mouse": {
-        "method": "POST",
-        "path": "/input/mouse/scroll",
-        "description": "Scroll the mouse wheel up or down.",
-        "input": {"direction": "up|down", "amount": "integer"},
-    },
     "type_keyboard": {
         "method": "POST",
         "path": "/input/keyboard/type",
@@ -507,17 +471,6 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "path": "/processes/app/close",
         "description": "Close a desktop/GUI application. Accepts the same friendly names and .desktop resolution as open_application (e.g. 'Chrome', 'firefox'). Matches running processes by exec binary and process name.",
         "input": {"name": "string"},
-    },
-    "active_window": {
-        "method": "GET",
-        "path": "/processes/active-window",
-        "description": "Get the currently focused window title and app path.",
-    },
-    "minimize_window": {
-        "method": "POST",
-        "path": "/processes/window/minimize",
-        "description": "Minimize a window by window ID.",
-        "input": {"window_id": "string"},
     },
     "close_window": {
         "method": "POST",
@@ -875,10 +828,6 @@ from app.services.assistant.gatekeeper_tools import (
 TOOL_DEFINITIONS.update(GATEKEEPER_TOOL_DEFINITIONS)
 
 INPUT_CONFIRM_TOOLS = {
-    "move_mouse",
-    "click_mouse",
-    "double_click_mouse",
-    "scroll_mouse",
     "type_keyboard",
     "press_keyboard_keys",
 }
@@ -941,8 +890,6 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_display_brightness": "Reading brightness",
     "set_display_brightness": "Setting brightness",
     "get_resolution": "Reading resolution",
-    "set_resolution": "Setting resolution",
-    "rotate_display": "Rotating display",
     "lock_screen_display": "Locking screen",
     "set_night_light": "Adjusting night light",
     "list_files": "Listing files",
@@ -956,10 +903,6 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "zip_paths": "Creating archive",
     "unzip_path": "Extracting archive",
     "open_path": "Opening file or directory",
-    "move_mouse": "Moving mouse",
-    "click_mouse": "Clicking mouse",
-    "double_click_mouse": "Double-clicking mouse",
-    "scroll_mouse": "Scrolling",
     "type_keyboard": "Typing text",
     "press_keyboard_keys": "Pressing keys",
     "list_processes": "Listing processes",
@@ -972,8 +915,6 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "run_job_now": "Running scheduled task now",
     "open_application": "Opening application",
     "close_application": "Closing application",
-    "active_window": "Reading active window",
-    "minimize_window": "Minimizing window",
     "close_window": "Closing window",
     "get_power_profile": "Reading power profile",
     "set_power_profile": "Setting power profile",
@@ -1209,7 +1150,7 @@ DOMAIN_TOOLS: dict[str, list[str]] = {
         "open_file", "get_config", "list_tree",
     ],
     "input_control": [
-        "move_mouse", "left_click", "right_click", "scroll_mouse", "type_text", "press_keys",
+        "type_text", "press_keys",
     ],
     "process_control": [
         "list_processes", "is_process_running", "kill_process", "list_applications",
