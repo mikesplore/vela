@@ -17,4 +17,5 @@ __all__ = [
     "get_local_auth_token",
     "reset_agent_credential",
     "refresh_ws_token",
+    "AgentCredentialError",
 ]

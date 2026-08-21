@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 import psutil
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.dependencies import get_current_user
@@ -31,6 +31,7 @@ from app.services.processes import (
     spawn_detached,
 )
 from app.utils.run_command import run_command
+from app.utils.list_limits import DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT
 from app.utils.security import require_confirmed_action
 from app.utils.security import opaque_error_id
 
@@ -40,7 +41,9 @@ router = APIRouter(prefix="/processes", tags=["processes"])
 
 
 @router.get("", response_model=ProcessList, dependencies=[Depends(get_current_user)])
-async def list_processes() -> Any:
+async def list_processes(
+    limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
+) -> Any:
     """List running processes with CPU and memory usage."""
     processes: List[ProcessInfo] = []
     for proc in psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent", "cmdline", "status"]):
@@ -64,13 +67,17 @@ async def list_processes() -> Any:
                 )
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-    return ProcessList(processes=sorted(processes, key=lambda item: item.cpu_percent, reverse=True))
+    ordered = sorted(processes, key=lambda item: item.cpu_percent, reverse=True)
+    return ProcessList(processes=ordered[:limit])
 
 
 @router.get("/apps", response_model=InstalledApplicationList, dependencies=[Depends(get_current_user)])
-async def list_applications(filter: str | None = None) -> Any:
+async def list_applications(
+    filter: str | None = None,
+    limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
+) -> Any:
     """List installed desktop applications from .desktop entries."""
-    return list_installed_applications_svc(filter_text=filter)
+    return list_installed_applications_svc(filter_text=filter, limit=limit)
 
 
 @router.get("/running/{name}", response_model=ProcessRunningResponse, dependencies=[Depends(get_current_user)])

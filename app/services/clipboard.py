@@ -17,6 +17,12 @@ def _backend() -> str:
     """Choose a CLI backend from the current, refreshed desktop environment."""
     ensure_desktop_env()
 
+    # Prefer the direct X11 selection commands.  This matches the native
+    # clipboard protocol and does not start or focus any desktop application.
+    if os.environ.get("DISPLAY", "").strip() and shutil.which("xclip"):
+        return "xclip"
+    if os.environ.get("DISPLAY", "").strip() and shutil.which("xsel"):
+        return "xsel"
     if (
         os.environ.get("WAYLAND_DISPLAY", "").strip()
         and os.environ.get("XDG_RUNTIME_DIR", "").strip()
@@ -24,10 +30,6 @@ def _backend() -> str:
         and shutil.which("wl-paste")
     ):
         return "wayland"
-    if os.environ.get("DISPLAY", "").strip() and shutil.which("xclip"):
-        return "xclip"
-    if os.environ.get("DISPLAY", "").strip() and shutil.which("xsel"):
-        return "xsel"
 
     raise HTTPException(
         status_code=500,

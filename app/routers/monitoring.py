@@ -8,6 +8,7 @@ from app.domain.monitoring import CPUUsage, BatteryInfo, BatteryHealthInfo, Proc
 from app.domain.system_info import RAMInfo
 from app.services.monitoring import get_snapshot, error_response, get_cpu_usage, get_ram_status, get_gpu_usage, get_disk_io, \
     get_network_io, get_temperatures, get_fan_speeds, get_battery_status, get_battery_health, get_top_processes, get_uptime
+from app.utils.list_limits import DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT
 
 router = APIRouter(prefix="/monitor", tags=["monitoring"])
 _stream_connections: dict[str, int] = {}
@@ -107,9 +108,11 @@ async def monitor_battery_health() -> Any:
 
 
 @router.get("/processes", response_model=ProcessMetrics, dependencies=[Depends(get_current_user)])
-async def monitor_processes() -> Any:
+async def monitor_processes(
+    limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
+) -> Any:
     try:
-        return get_top_processes()
+        return get_top_processes(limit=limit)
     except Exception as exc:
         return error_response(str(exc))
 

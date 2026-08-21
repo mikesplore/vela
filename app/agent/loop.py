@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import random
 
 from app.agent.local_auth import wait_for_local_service
-from app.agent.pairing import refresh_ws_token
+from app.agent.pairing import AgentCredentialError, refresh_ws_token
 from app.agent.tunnel import tunnel
 from app.services import relay_status
 from app.utils.config import get_config
@@ -42,6 +43,11 @@ async def start_agent_loop() -> None:
             # Tunnel exited cleanly — reset backoff
             backoff = 5
         except Exception as exc:
-            print(f"Agent loop error: {exc}. Reconnecting in {backoff}s...")
-            await asyncio.sleep(backoff)
+            if isinstance(exc, AgentCredentialError):
+                relay_status.mark_disconnected(exc)
+                print(f"Agent credentials were rejected by the relay: {exc}. Repair pairing is required.")
+                return
+            delay = backoff + random.uniform(0, min(5.0, backoff * 0.2))
+            print(f"Agent loop error: {exc}. Reconnecting in {delay:.1f}s...")
+            await asyncio.sleep(delay)
             backoff = min(backoff * 2, max_backoff)

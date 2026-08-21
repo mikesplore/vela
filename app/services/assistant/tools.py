@@ -83,7 +83,8 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "list_wifi_networks": {
         "method": "GET",
         "path": "/network/wifi/list",
-        "description": "Scan and list all nearby WiFi networks with SSID and signal strength. Use when the user wants to see what networks are available nearby, not just their current connection.",
+        "description": "Scan and list nearby WiFi networks with SSID and signal strength. Results are limited to 20 by default; use limit (1-100) when the user explicitly needs more. Use when the user wants to see what networks are available nearby, not just their current connection.",
+        "input": {"limit": "integer 1-100?"},
     },
     "connect_wifi": {
         "method": "POST",
@@ -105,7 +106,8 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "list_bluetooth_devices": {
         "method": "GET",
         "path": "/network/bluetooth/devices",
-        "description": "List connected Bluetooth devices and paired devices available to connect.",
+        "description": "List connected Bluetooth devices and paired devices available to connect. Each list is limited to 20 items by default; use limit (1-100) when more are explicitly needed.",
+        "input": {"limit": "integer 1-100?"},
     },
     "pair_bluetooth_device": {
         "method": "POST",
@@ -180,7 +182,8 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "get_top_processes": {
         "method": "GET",
         "path": "/monitor/processes",
-        "description": "Top resource-consuming processes ranked by CPU and memory usage. Use when the user asks what is slowing down or eating up their system. Do NOT use to find a specific process by name — use list_processes for that.",
+        "description": "Top resource-consuming processes ranked by CPU and memory usage, limited to 20 in each ranking by default. Use limit (1-100) when the user explicitly needs more. Use when the user asks what is slowing down or eating up their system. Do NOT use to find a specific process by name — use list_processes for that.",
+        "input": {"limit": "integer 1-100?"},
     },
     # ── Audio / volume ────────────────────────────────────────────────────────
     "get_volume": {
@@ -325,8 +328,8 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "list_files": {
         "method": "GET",
         "path": "/fs/list",
-        "description": "List files and directories at a path.",
-        "input": {"path": "string"},
+        "description": "List files and directories at a path. Results are limited to 20 entries by default; use limit (1-100) when the user explicitly needs more.",
+        "input": {"path": "string", "limit": "integer 1-100?"},
     },
     "download_file": {
         "method": "GET",
@@ -409,7 +412,8 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "list_processes": {
         "method": "GET",
         "path": "/processes",
-        "description": "Full list of all running processes with PIDs. Use when the user wants to find a specific process by name or get a PID to kill. Do NOT use to see what is consuming the most resources — use get_top_processes for that.",
+        "description": "List running processes with PIDs. Results are limited to 20 by default and sorted by CPU usage; use limit (1-100) when the user explicitly needs more. Use when the user wants to find a specific process or get a PID to kill. Do NOT use to see what is consuming the most resources — use get_top_processes for that.",
+        "input": {"limit": "integer 1-100?"},
     },
     "is_process_running": {
         "method": "GET",
@@ -420,8 +424,8 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "list_installed_applications": {
         "method": "GET",
         "path": "/processes/apps",
-        "description": "List installed desktop applications from this machine (.desktop entries): display name, desktop id, exec binary. Use when the user asks what apps are installed, what browser/IDE they have, or before opening an ambiguous app name.",
-        "input": {"filter": "string?"},
+        "description": "List installed desktop applications from this machine (.desktop entries): display name, desktop id, exec binary. Results are limited to 20 by default; use filter first and limit (1-100) when needed. Use when the user asks what apps are installed, what browser/IDE they have, or before opening an ambiguous app name.",
+        "input": {"filter": "string?", "limit": "integer 1-100?"},
     },
     "kill_process": {
         "method": "DELETE",
@@ -445,7 +449,8 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "list_jobs": {
         "method": "GET",
         "path": "/scheduler/list",
-        "description": "List all scheduled tasks.",
+        "description": "List scheduled tasks, limited to 20 by default. Use limit (1-100) when the user explicitly needs more.",
+        "input": {"limit": "integer 1-100?"},
     },
     "cancel_job": {
         "method": "DELETE",
@@ -551,12 +556,14 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "read_notifications": {
         "method": "GET",
         "path": "/notifications/read",
-        "description": "Read only the notifications that were sent by this agent in the current session. Do NOT use for system-wide notification history — use list_notifications for that.",
+        "description": "Read notifications sent by this agent in the current session, limited to 20 by default. Use limit (1-100) when more are explicitly needed. Do NOT use for system-wide notification history — use list_notifications for that.",
+        "input": {"limit": "integer 1-100?"},
     },
     "list_notifications": {
         "method": "GET",
         "path": "/notifications/list",
-        "description": "List all desktop notification history system-wide (all apps). Use when the user asks to see recent notifications or missed alerts.",
+        "description": "List recent desktop notification history system-wide, limited to 20 by default. Use limit (1-100) when the user explicitly needs more.",
+        "input": {"limit": "integer 1-100?"},
     },
     # ── Maintenance ───────────────────────────────────────────────────────────
     "clear_cache": {
@@ -573,7 +580,8 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "check_updates": {
         "method": "GET",
         "path": "/maintenance/updates",
-        "description": "Check for available system updates.",
+        "description": "Check for available system/package updates. Results are limited to 20 packages by default; use limit (1-100) when the user explicitly needs more.",
+        "input": {"limit": "integer 1-100?"},
     },
     "run_update": {
         "method": "POST",
@@ -590,8 +598,8 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "list_services": {
         "method": "GET",
         "path": "/maintenance/services",
-        "description": "List systemd services and their status. Use filter to narrow results and scope=system|user|all for system vs user units (Vela runs as user services). Do NOT use to answer whether one specific service is running — use get_service_status instead.",
-        "input": {"filter": "string?", "scope": "system|user|all"},
+        "description": "List systemd services and their status, limited to 20 by default. Use filter first and limit (1-100) when needed; scope=system|user|all selects system vs user units. Do NOT use to answer whether one specific service is running — use get_service_status instead.",
+        "input": {"filter": "string?", "scope": "system|user|all", "limit": "integer 1-100?"},
     },
     "get_service_status": {
         "method": "GET",
@@ -602,14 +610,14 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "list_failed_services": {
         "method": "GET",
         "path": "/maintenance/services/failed",
-        "description": "List failed systemd units from the current boot.",
-        "input": {"scope": "system|user|all"},
+        "description": "List failed systemd units from the current boot, limited to 20 by default. Use limit (1-100) when more are explicitly needed.",
+        "input": {"scope": "system|user|all", "limit": "integer 1-100?"},
     },
     "list_timers": {
         "method": "GET",
         "path": "/maintenance/timers",
-        "description": "List systemd timers and when they next run.",
-        "input": {"filter": "string?", "scope": "system|user|all"},
+        "description": "List systemd timers and when they next run, limited to 20 by default. Use filter first and limit (1-100) when needed.",
+        "input": {"filter": "string?", "scope": "system|user|all", "limit": "integer 1-100?"},
     },
     "check_package_installed": {
         "method": "GET",
@@ -653,8 +661,8 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "list_docker_containers": {
         "method": "GET",
         "path": "/docker/containers",
-        "description": "List Docker containers. Use when the user asks what containers are running or to find a container by name/image.",
-        "input": {"all": "boolean", "filter": "string?"},
+        "description": "List Docker containers, limited to 20 by default. Use filter first and limit (1-100) when needed; use when the user asks what containers are running or to find one by name/image.",
+        "input": {"all": "boolean", "filter": "string?", "limit": "integer 1-100?"},
     },
     "get_container_status": {
         "method": "GET",

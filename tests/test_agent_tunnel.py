@@ -1,4 +1,5 @@
 import base64
+import asyncio
 
 import httpx
 
@@ -9,6 +10,7 @@ from app.agent.tunnel import (
     _encode_ws_chunk,
     _is_streaming_request,
     _is_streaming_response,
+    _relay_local_response,
     _should_relay_streamed,
 )
 
@@ -75,3 +77,32 @@ def test_should_relay_streamed_for_large_or_unknown_bodies():
     unknown = _fake_response(headers={"content-type": "application/json"})
     assert _should_relay_streamed(False, large) is True
     assert _should_relay_streamed(False, unknown) is True
+
+
+def test_relay_local_response_accepts_connection_metadata_and_send_lock():
+    class FakeWebSocket:
+        def __init__(self):
+            self.messages = []
+
+        async def send(self, message):
+            self.messages.append(message)
+
+    async def scenario():
+        websocket = FakeWebSocket()
+        response = httpx.Response(
+            200,
+            headers={"content-length": "2"},
+            content=b"ok",
+            request=httpx.Request("GET", "http://test"),
+        )
+        await _relay_local_response(
+            websocket,
+            "request-1",
+            response,
+            expect_stream=False,
+            connection_id="connection-1",
+            send_lock=asyncio.Lock(),
+        )
+        assert '"connection_id": "connection-1"' in websocket.messages[0]
+
+    asyncio.run(scenario())

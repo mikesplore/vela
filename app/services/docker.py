@@ -50,6 +50,7 @@ def get_docker_info() -> DockerInfoResponse:
 def list_containers(
     all_containers: bool = True,
     filter_text: Optional[str] = None,
+    limit: int | None = None,
 ) -> Tuple[DockerContainerListResponse, Optional[str]]:
     if not docker_installed():
         return DockerContainerListResponse(containers=[]), "docker CLI not found"
@@ -92,7 +93,9 @@ def list_containers(
             or needle in container.image.lower()
             or needle in container.status.lower()
         ]
-    return DockerContainerListResponse(containers=containers), None
+    return DockerContainerListResponse(
+        containers=containers if limit is None else containers[:limit]
+    ), None
 
 
 def get_container_status(name_or_id: str) -> Tuple[Optional[DockerContainerDetail], Optional[str]]:

@@ -1,11 +1,12 @@
 import time
 from typing import Any, Dict
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from app.dependencies import get_current_user
 from app.domain.notifications import notifications, next_notification_id
 from app.domain.notifications import NotificationRecord, NotificationRequest, NotificationList
 from app.services.notifications import send_notification as s_notification, list_system_notifications
 from app.services.notifications import clear_notifications as c_notifications
+from app.utils.list_limits import DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -41,12 +42,16 @@ async def clear_notifications() -> Any:
 
 
 @router.get("/read", response_model=NotificationList, dependencies=[Depends(get_current_user)])
-async def read_notifications() -> Any:
+async def read_notifications(
+    limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
+) -> Any:
     """Read notifications that were sent through this agent."""
-    return NotificationList(notifications= notifications)
+    return NotificationList(notifications=notifications[-limit:])
 
 
 @router.get("/list", response_model=NotificationList, dependencies=[Depends(get_current_user)])
-async def list_notifications() -> Any:
+async def list_notifications(
+    limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
+) -> Any:
     """List desktop notification history or agent-tracked notifications."""
-    return NotificationList(notifications=list_system_notifications())
+    return NotificationList(notifications=list_system_notifications()[:limit])

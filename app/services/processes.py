@@ -199,7 +199,10 @@ def _terminate_processes_matching(candidates: list[str]) -> tuple[int, list[int]
     return killed_count, killed_pids
 
 
-def list_installed_applications(filter_text: str | None = None) -> InstalledApplicationList:
+def list_installed_applications(
+    filter_text: str | None = None,
+    limit: int | None = None,
+) -> InstalledApplicationList:
     """Return installed desktop applications from Freedesktop .desktop entries."""
     entries = _load_desktop_entries()
     apps = [_to_installed_application(entry) for entry in entries]
@@ -215,7 +218,8 @@ def list_installed_applications(filter_text: str | None = None) -> InstalledAppl
             or any(needle in _normalize_token(keyword) for keyword in app.keywords)
             or any(needle in _normalize_token(category) for category in app.categories)
         ]
-    return InstalledApplicationList(applications=sorted(apps, key=lambda item: item.name.lower()))
+    ordered = sorted(apps, key=lambda item: item.name.lower())
+    return InstalledApplicationList(applications=ordered if limit is None else ordered[:limit])
 
 
 def resolve_application(query: str) -> DesktopEntry:

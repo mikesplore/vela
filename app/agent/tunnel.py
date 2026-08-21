@@ -2,6 +2,8 @@ import asyncio
 import base64
 import json
 import logging
+import contextlib
+import secrets
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
@@ -18,6 +20,7 @@ _local_token: str | None = None
 _local_token_expires = datetime.min.replace(tzinfo=timezone.utc)
 
 HEARTBEAT_INTERVAL = 30  # seconds
+HEARTBEAT_ACK_TIMEOUT = 90  # reconnect if relay stops acknowledging heartbeats
 STREAM_PATH_SUFFIX = "/assistant/stream"
 CHUNK_SIZE = 4096
 # Responses larger than this are relayed in chunks instead of one JSON frame.
@@ -71,14 +74,22 @@ async def _send_forward_response(
         status_code: int,
         body: str,
         headers: dict | None = None,
+        connection_id: str | None = None,
+        send_lock: asyncio.Lock | None = None,
 ) -> None:
-    await websocket.send(json.dumps({
+    message = {
         "type": "forward_response",
         "request_id": request_id,
+        "connection_id": connection_id,
         "status_code": status_code,
         "headers": headers or {},
         "body": body,
-    }))
+    }
+    if send_lock:
+        async with send_lock:
+            await websocket.send(json.dumps(message))
+    else:
+        await websocket.send(json.dumps(message))
 
 
 async def _send_stream_start(
@@ -87,28 +98,52 @@ async def _send_stream_start(
         request_id: str | None,
         status_code: int,
         headers: dict,
+        connection_id: str | None = None,
+        send_lock: asyncio.Lock | None = None,
 ) -> None:
-    await websocket.send(json.dumps({
+    message = {
         "type": "forward_response_start",
         "request_id": request_id,
+        "connection_id": connection_id,
         "status_code": status_code,
         "headers": headers,
-    }))
+    }
+    if send_lock:
+        async with send_lock:
+            await websocket.send(json.dumps(message))
+    else:
+        await websocket.send(json.dumps(message))
 
 
-async def _send_stream_chunk(websocket, *, request_id: str | None, chunk: bytes) -> None:
-    await websocket.send(json.dumps({
+async def _send_stream_chunk(websocket, *, request_id: str | None, chunk: bytes,
+                             connection_id: str | None = None,
+                             send_lock: asyncio.Lock | None = None) -> None:
+    message = {
         "type": "forward_response_chunk",
         "request_id": request_id,
+        "connection_id": connection_id,
         **_encode_ws_chunk(chunk),
-    }))
+    }
+    if send_lock:
+        async with send_lock:
+            await websocket.send(json.dumps(message))
+    else:
+        await websocket.send(json.dumps(message))
 
 
-async def _send_stream_end(websocket, *, request_id: str | None) -> None:
-    await websocket.send(json.dumps({
+async def _send_stream_end(websocket, *, request_id: str | None,
+                           connection_id: str | None = None,
+                           send_lock: asyncio.Lock | None = None) -> None:
+    message = {
         "type": "forward_response_end",
         "request_id": request_id,
-    }))
+        "connection_id": connection_id,
+    }
+    if send_lock:
+        async with send_lock:
+            await websocket.send(json.dumps(message))
+    else:
+        await websocket.send(json.dumps(message))
 
 
 def _local_timeout() -> httpx.Timeout:
@@ -148,19 +183,29 @@ def _build_request_kwargs(method: str, headers: dict, body) -> dict:
     return request_kwargs
 
 
-async def _relay_streaming_response(websocket, request_id: str | None, response: httpx.Response) -> None:
+async def _relay_streaming_response(websocket, request_id: str | None, response: httpx.Response,
+                                    *, connection_id: str | None = None,
+                                    send_lock: asyncio.Lock | None = None) -> None:
     await _send_stream_start(
         websocket,
         request_id=request_id,
         status_code=response.status_code,
         headers=dict(response.headers),
+        connection_id=connection_id,
+        send_lock=send_lock,
     )
     try:
         async for chunk in response.aiter_bytes(CHUNK_SIZE):
             if chunk:
-                await _send_stream_chunk(websocket, request_id=request_id, chunk=chunk)
+                await _send_stream_chunk(
+                    websocket, request_id=request_id, chunk=chunk,
+                    connection_id=connection_id, send_lock=send_lock,
+                )
     finally:
-        await _send_stream_end(websocket, request_id=request_id)
+        await _send_stream_end(
+            websocket, request_id=request_id,
+            connection_id=connection_id, send_lock=send_lock,
+        )
 
 
 async def _relay_buffered_response(
@@ -168,6 +213,8 @@ async def _relay_buffered_response(
         request_id: str | None,
         response: httpx.Response,
         content: bytes,
+        connection_id: str | None = None,
+        send_lock: asyncio.Lock | None = None,
 ) -> None:
     body = content.decode("utf-8")
     logger.debug(
@@ -182,6 +229,8 @@ async def _relay_buffered_response(
         status_code=response.status_code,
         headers=dict(response.headers),
         body=body,
+        connection_id=connection_id,
+        send_lock=send_lock,
     )
 
 
@@ -191,13 +240,28 @@ async def _relay_local_response(
         response: httpx.Response,
         *,
         expect_stream: bool,
+        connection_id: str | None = None,
+        send_lock: asyncio.Lock | None = None,
 ) -> None:
     if _should_relay_streamed(expect_stream, response):
-        await _relay_streaming_response(websocket, request_id, response)
+        await _relay_streaming_response(
+            websocket,
+            request_id,
+            response,
+            connection_id=connection_id,
+            send_lock=send_lock,
+        )
         return
 
     content = await response.aread()
-    await _relay_buffered_response(websocket, request_id, response, content)
+    await _relay_buffered_response(
+        websocket,
+        request_id,
+        response,
+        content,
+        connection_id=connection_id,
+        send_lock=send_lock,
+    )
 
 
 async def _forward_local_request(
@@ -210,6 +274,8 @@ async def _forward_local_request(
         body,
         expect_stream: bool,
         client: httpx.AsyncClient,
+        connection_id: str | None = None,
+        send_lock: asyncio.Lock | None = None,
 ) -> None:
     request_kwargs = _build_request_kwargs(method, headers, body)
 
@@ -231,6 +297,8 @@ async def _forward_local_request(
                     request_id,
                     retry_response,
                     expect_stream=expect_stream,
+                    connection_id=connection_id,
+                    send_lock=send_lock,
                 )
             return
 
@@ -239,6 +307,8 @@ async def _forward_local_request(
             request_id,
             response,
             expect_stream=expect_stream,
+            connection_id=connection_id,
+            send_lock=send_lock,
         )
 
 
@@ -247,6 +317,8 @@ async def _handle_forward_request(
         req_data: dict,
         *,
         client: httpx.AsyncClient,
+        connection_id: str | None = None,
+        send_lock: asyncio.Lock | None = None,
 ) -> None:
     from app.agent.local_auth import async_get_local_auth_token
 
@@ -284,6 +356,8 @@ async def _handle_forward_request(
             request_id=request_id,
             status_code=500,
             body="Local auth failed",
+            connection_id=connection_id,
+            send_lock=send_lock,
         )
         return
 
@@ -298,6 +372,8 @@ async def _handle_forward_request(
             body=body,
             expect_stream=expect_stream,
             client=client,
+            connection_id=connection_id,
+            send_lock=send_lock,
         )
     except httpx.TimeoutException:
         logger.warning("Local request timed out after %ss", config.local_service_timeout)
@@ -306,6 +382,8 @@ async def _handle_forward_request(
             request_id=request_id,
             status_code=504,
             body=f"Local service did not respond within {config.local_service_timeout}s",
+            connection_id=connection_id,
+            send_lock=send_lock,
         )
     except httpx.ConnectError:
         logger.warning("Connection error to local service")
@@ -314,6 +392,8 @@ async def _handle_forward_request(
             request_id=request_id,
             status_code=502,
             body="Bad Gateway: Could not connect to local service",
+            connection_id=connection_id,
+            send_lock=send_lock,
         )
 
 
@@ -323,6 +403,7 @@ async def tunnel(token):
 
     vps_url, agent_id, _ = agent_settings()
     uri = websocket_tunnel_url(vps_url, agent_id, token)
+    connection_id = secrets.token_urlsafe(16)
     from app.utils.security import token_fingerprint
 
     print(
@@ -341,46 +422,88 @@ async def tunnel(token):
         ) as websocket:
             print("Tunnel established. Waiting for requests...")
             relay_status.mark_connected()
+            send_lock = asyncio.Lock()
+            heartbeat_state = {
+                "last_ack": asyncio.get_running_loop().time(),
+                "sequence": 0,
+                "connection_id": connection_id,
+            }
+            heartbeat_task = asyncio.create_task(
+                _heartbeat_loop(websocket, heartbeat_state, send_lock)
+            )
+            request_tasks: set[asyncio.Task] = set()
+            request_semaphore = asyncio.Semaphore(max(1, config.agent_max_concurrent_requests))
+            try:
+                while True:
+                    try:
+                        message = await asyncio.wait_for(websocket.recv(), timeout=config.relay_read_timeout)
+                        relay_status.mark_message_received()
+                    except asyncio.TimeoutError:
+                        print(f"No message from relay in {config.relay_read_timeout}s — assuming connection is dead")
+                        raise
 
-            asyncio.create_task(_heartbeat_loop(websocket))
-
-            while True:
-                try:
-                    message = await asyncio.wait_for(websocket.recv(), timeout=config.relay_read_timeout)
-                    relay_status.mark_message_received()
-                except asyncio.TimeoutError:
-                    print(f"No message from relay in {config.relay_read_timeout}s — assuming connection is dead")
-                    raise
-
-                try:
-                    req_data = json.loads(message)
-                    msg_type = req_data.get("type")
-
-                    if msg_type == "heartbeat":
-                        continue
-
-                    if msg_type != "forward_request":
-                        print(f"Unexpected message type: {msg_type}")
-                        continue
-
-                    await _handle_forward_request(websocket, req_data, client=local_client)
-                except Exception as exc:
-                    logger.exception("Error processing relay request")
-                    request_id = None
                     try:
                         req_data = json.loads(message)
-                        request_id = req_data.get("request_id") or req_data.get("id")
-                    except Exception:
-                        pass
-                    try:
-                        await _send_forward_response(
-                            websocket,
-                            request_id=request_id,
-                            status_code=500,
-                            body="Relay request failed",
-                        )
-                    except Exception:
-                        pass
+                        msg_type = req_data.get("type")
+
+                        if msg_type == "heartbeat_ack":
+                            if req_data.get("connection_id") in (None, heartbeat_state["connection_id"]):
+                                heartbeat_state["last_ack"] = asyncio.get_running_loop().time()
+                            continue
+                        if msg_type == "connection_ready":
+                            ready_id = req_data.get("connection_id")
+                            if isinstance(ready_id, str) and ready_id:
+                                heartbeat_state["connection_id"] = ready_id
+                            continue
+                        if msg_type == "heartbeat":
+                            continue
+
+                        if msg_type != "forward_request":
+                            print(f"Unexpected message type: {msg_type}")
+                            continue
+
+                        async def process_request(request: dict = req_data) -> None:
+                            async with request_semaphore:
+                                request_connection_id = heartbeat_state["connection_id"]
+                                try:
+                                    await _handle_forward_request(
+                                        websocket, request, client=local_client,
+                                        connection_id=request_connection_id, send_lock=send_lock,
+                                    )
+                                except asyncio.CancelledError:
+                                    raise
+                                except Exception:
+                                    logger.exception("Unhandled error processing forwarded request")
+                                    with contextlib.suppress(Exception):
+                                        await _send_forward_response(
+                                            websocket,
+                                            request_id=request.get("request_id") or request.get("id"),
+                                            status_code=500,
+                                            body="Agent request handling failed",
+                                            connection_id=request_connection_id,
+                                            send_lock=send_lock,
+                                        )
+
+                        task = asyncio.create_task(process_request())
+                        request_tasks.add(task)
+
+                        def finish_request(done_task: asyncio.Task) -> None:
+                            request_tasks.discard(done_task)
+                            # Calling exception() marks failures as retrieved for asyncio.
+                            if not done_task.cancelled():
+                                done_task.exception()
+
+                        task.add_done_callback(finish_request)
+                    except Exception as exc:
+                        logger.exception("Error processing relay request")
+            finally:
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
+                for task in request_tasks:
+                    task.cancel()
+                if request_tasks:
+                    await asyncio.gather(*request_tasks, return_exceptions=True)
 
     except Exception as tunnel_exc:
         relay_status.mark_disconnected(tunnel_exc)
@@ -390,15 +513,27 @@ async def tunnel(token):
         relay_status.mark_disconnected("Tunnel closed")
 
 
-async def _heartbeat_loop(websocket):
+async def _heartbeat_loop(websocket, state: dict, send_lock: asyncio.Lock):
     """Send periodic heartbeats to keep connection alive."""
     try:
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
+            if asyncio.get_running_loop().time() - state["last_ack"] > HEARTBEAT_ACK_TIMEOUT:
+                logger.warning("Relay heartbeat acknowledgements stopped for connection %s", state["connection_id"])
+                with contextlib.suppress(Exception):
+                    await websocket.close(code=1011, reason="relay heartbeat timeout")
+                return
+            state["sequence"] += 1
+            heartbeat_msg = json.dumps({
+                "type": "heartbeat",
+                "connection_id": state["connection_id"],
+                "sequence": state["sequence"],
+                "sent_at": datetime.now(timezone.utc).isoformat(),
+            })
             try:
-                heartbeat_msg = json.dumps({"type": "heartbeat"})
-                await websocket.send(heartbeat_msg)
+                async with send_lock:
+                    await websocket.send(heartbeat_msg)
             except Exception:
-                break
+                return
     except Exception as exc:
         print(f"Heartbeat loop error: {exc}")

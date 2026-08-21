@@ -52,6 +52,31 @@ def test_x11_backend_uses_xclip(monkeypatch):
     assert calls[0][1]["input"] == ""
 
 
+def test_xclip_round_trip_uses_clipboard_selection(monkeypatch):
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setattr(clipboard, "ensure_desktop_env", lambda: None)
+    monkeypatch.setattr(
+        clipboard.shutil,
+        "which",
+        lambda command: "/usr/bin/xclip" if command == "xclip" else None,
+    )
+
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        output = "Hello World\n" if command[-1] == "-o" else ""
+        return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(clipboard.subprocess, "run", fake_run)
+    clipboard.write_clipboard("Hello World")
+    assert clipboard.read_clipboard() == "Hello World\n"
+    assert calls[0][0] == ["xclip", "-selection", "clipboard"]
+    assert calls[0][1]["input"] == "Hello World"
+    assert calls[1][0] == ["xclip", "-selection", "clipboard", "-o"]
+
+
 def test_clipboard_never_uses_gui_fallback(monkeypatch):
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.delenv("DISPLAY", raising=False)

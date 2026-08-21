@@ -17,6 +17,7 @@ from app.utils.config import get_config
 from app.dependencies import get_current_user
 from app.domain.filesystem import FileListResponse, FileEntry, FileActionResponse, PathRequest, RenameRequest
 from app.services.filesystem import validate_path, file_entry, is_allowed, resolve_search_roots
+from app.utils.list_limits import DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT
 
 config = get_config()
 router = APIRouter(prefix="/fs", tags=["filesystem"])
@@ -56,7 +57,8 @@ def _safe_upload_destination(target: Path, filename: str | None) -> Path:
 @router.get("/list", response_model=FileListResponse, dependencies=[Depends(get_current_user)])
 async def list_files(
     path: str = Query("."), 
-    show_hidden: bool = Query(False)  # 👈 1. Accept the boolean toggle parameter here
+    show_hidden: bool = Query(False),
+    limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
 ) -> Any:
     """List directory contents (files and folders) for tree navigation."""
     target = validate_path(path, must_exist=True)
@@ -90,11 +92,12 @@ async def list_files(
     except (OSError, PermissionError) as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Cannot read directory: {exc}")
     
+    total_items = len(items)
     return FileListResponse(
-        files=items,
+        files=items[:limit],
         current_path=str(target),
         parent_path=parent_path,
-        total_items=len(items)
+        total_items=total_items,
     )
 
 

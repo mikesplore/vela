@@ -27,6 +27,7 @@ from app.services.maintenance import (
     service_action,
 )
 from app.utils.run_command import run_command
+from app.utils.list_limits import DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
 
@@ -81,7 +82,9 @@ def _parse_pacman_updates(raw: str) -> List[UpdateEntry]:
 
 
 @router.get("/updates", response_model=UpdateResponse, dependencies=[Depends(get_current_user)])
-async def check_updates() -> Any:
+async def check_updates(
+    limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
+) -> Any:
     """Check for available system updates."""
     manager = detect_package_manager()
     if manager == "apt":
@@ -104,7 +107,7 @@ async def check_updates() -> Any:
         updates = _parse_pacman_updates(stdout)
     else:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unsupported package manager")
-    return UpdateResponse(manager=manager or "unknown", updates=updates)
+    return UpdateResponse(manager=manager or "unknown", updates=updates[:limit])
 
 
 @router.post("/update", response_model=ActionResponse, dependencies=[Depends(get_current_user)])
@@ -145,12 +148,13 @@ async def sync_time() -> Any:
 async def list_services(
     filter: str | None = Query(None, description="Filter by service name or description"),
     scope: str = Query("system", pattern="^(system|user|all)$"),
+    limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
 ) -> Any:
     """List systemd services and their status."""
     services, error = list_systemd_services(filter_text=filter, scope=scope)
     if error:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error)
-    return ServiceListResponse(services=services)
+    return ServiceListResponse(services=services[:limit])
 
 
 @router.get("/service/status", response_model=ServiceStatusResponse, dependencies=[Depends(get_current_user)])
@@ -166,24 +170,28 @@ async def service_status(
 
 
 @router.get("/services/failed", response_model=ServiceListResponse, dependencies=[Depends(get_current_user)])
-async def failed_services(scope: str = Query("system", pattern="^(system|user|all)$")) -> Any:
+async def failed_services(
+    scope: str = Query("system", pattern="^(system|user|all)$"),
+    limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
+) -> Any:
     """List failed systemd units."""
     services, error = list_failed_services(scope=scope)
     if error:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error)
-    return ServiceListResponse(services=services)
+    return ServiceListResponse(services=services[:limit])
 
 
 @router.get("/timers", response_model=TimerListResponse, dependencies=[Depends(get_current_user)])
 async def list_timers(
     filter: str | None = Query(None, description="Filter by timer name or description"),
     scope: str = Query("system", pattern="^(system|user|all)$"),
+    limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
 ) -> Any:
     """List systemd timers."""
     timers, error = list_systemd_timers(filter_text=filter, scope=scope)
     if error:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error)
-    return TimerListResponse(timers=timers)
+    return TimerListResponse(timers=timers[:limit])
 
 
 @router.get("/package-installed", response_model=PackageInstalledResponse, dependencies=[Depends(get_current_user)])

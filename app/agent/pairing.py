@@ -32,6 +32,12 @@ class ActivationTokenInvalidError(RuntimeError):
     pass
 
 
+class AgentCredentialError(RuntimeError):
+    """Stored relay credentials are rejected and require operator repair."""
+
+    pass
+
+
 def _build_device_info() -> dict:
     fingerprint = os.getenv("DEVICE_FINGERPRINT", "").strip()
     if not fingerprint:
@@ -351,4 +357,6 @@ def refresh_ws_token():
         data = resp.json()
         return data.get("ws_token")
 
-    raise Exception(f"Token refresh failed: {resp.text}")
+    if resp.status_code in {401, 403, 404}:
+        raise AgentCredentialError(f"Token refresh rejected by relay: HTTP {resp.status_code}")
+    raise RuntimeError(f"Token refresh failed: HTTP {resp.status_code}")

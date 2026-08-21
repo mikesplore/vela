@@ -1,12 +1,13 @@
 from typing import Any
 
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.dependencies import get_current_user
 from app.domain.scheduler import SchedulerActionResponse, SchedulerCreateRequest, SchedulerListResponse
 from app.services.scheduler import command_runner, scheduler, serialize_job
 from app.utils.security import require_confirmed_action
+from app.utils.list_limits import DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT
 
 router = APIRouter(prefix="/scheduler", tags=["scheduler"])
 
@@ -41,10 +42,12 @@ async def create_job(request: SchedulerCreateRequest) -> Any:
 
 
 @router.get("/list", response_model=SchedulerListResponse, dependencies=[Depends(get_current_user)])
-async def list_jobs() -> Any:
+async def list_jobs(
+    limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
+) -> Any:
     """List all scheduled tasks."""
     jobs = [serialize_job(job) for job in scheduler.get_jobs()]
-    return SchedulerListResponse(jobs=jobs)
+    return SchedulerListResponse(jobs=jobs[:limit])
 
 
 @router.delete("/cancel/{task_id}", response_model=SchedulerActionResponse, dependencies=[Depends(get_current_user)])

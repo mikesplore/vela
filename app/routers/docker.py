@@ -12,6 +12,7 @@ from app.domain.docker import (
     DockerLogsResponse,
 )
 from app.services import docker as docker_service
+from app.utils.list_limits import DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT
 
 router = APIRouter(prefix="/docker", tags=["docker"])
 
@@ -26,9 +27,10 @@ async def docker_info() -> Any:
 async def list_containers(
     all: bool = Query(True, description="Include stopped containers"),
     filter: str | None = Query(None, description="Filter by container name, image, or status"),
+    limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
 ) -> Any:
     """List Docker containers."""
-    response, error = docker_service.list_containers(all_containers=all, filter_text=filter)
+    response, error = docker_service.list_containers(all_containers=all, filter_text=filter, limit=limit)
     if error:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error)
     return response

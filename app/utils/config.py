@@ -139,6 +139,7 @@ class Config(BaseSettings):
                                                             validation_alias="LOCAL_SERVICE_AUTH_TOKEN_EXPIRES")
     local_service_timeout: int = Field(default=300, validation_alias="LOCAL_SERVICE_TIMEOUT")
     relay_read_timeout: int = Field(default=300, validation_alias="RELAY_READ_TIMEOUT")
+    agent_max_concurrent_requests: int = Field(default=8, validation_alias="AGENT_MAX_CONCURRENT_REQUESTS")
 
     # Gatekeeperd admin API (assistant tools — external HTTP)
     gatekeeper_base_url: str = Field(default="", validation_alias="GATEKEEPER_BASE_URL")

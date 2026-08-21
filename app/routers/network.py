@@ -18,6 +18,7 @@ from app.services.network import (
     WifiScanError,
 )
 from app.utils.run_command import run_command
+from app.utils.list_limits import DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT
 
 try:
     import speedtest
@@ -29,9 +30,10 @@ from app.dependencies import get_current_user
 router = APIRouter(prefix="/network", tags=["network"])
 
 
-def _current_wifi_status(*, rescan: bool) -> WifiStatusResponse:
+def _current_wifi_status(*, rescan: bool, limit: int = DEFAULT_LIST_LIMIT) -> WifiStatusResponse:
     try:
-        return build_wifi_status(rescan=rescan)
+        response = build_wifi_status(rescan=rescan)
+        return response.model_copy(update={"networks": response.networks[:limit]})
     except WifiScanError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -62,15 +64,19 @@ async def network_location() -> Any:
 # ---------------------------------------------------------------------------
 
 @router.get("/wifi/status", response_model=WifiStatusResponse, dependencies=[Depends(get_current_user)])
-async def wifi_status() -> Any:
+async def wifi_status(
+    limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
+) -> Any:
     """Return current WiFi connection status using cached scan results (no rescan)."""
-    return _current_wifi_status(rescan=False)
+    return _current_wifi_status(rescan=False, limit=limit)
 
 
 @router.get("/wifi/list", response_model=WifiStatusResponse, dependencies=[Depends(get_current_user)])
-async def wifi_list() -> Any:
+async def wifi_list(
+    limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
+) -> Any:
     """List all available WiFi networks (triggers a fresh scan when cache is stale)."""
-    return _current_wifi_status(rescan=True)
+    return _current_wifi_status(rescan=True, limit=limit)
 
 
 @router.post("/wifi/connect", response_model=WifiStatusResponse, dependencies=[Depends(get_current_user)])
@@ -165,7 +171,9 @@ async def bluetooth_toggle(request: ToggleRequest) -> Any:
 
 
 @router.get("/bluetooth/devices", response_model=BluetoothDevicesResponse, dependencies=[Depends(get_current_user)])
-async def bluetooth_devices() -> Any:
+async def bluetooth_devices(
+    limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
+) -> Any:
     """
     List Bluetooth devices.
 
@@ -196,8 +204,8 @@ async def bluetooth_devices() -> Any:
     paired_not_connected = [d for d in all_paired if d.address not in connected_addresses]
 
     return BluetoothDevicesResponse(
-        connected_devices=[d.model_copy(update={"connected": True}) for d in connected_devices],
-        paired_devices=paired_not_connected,
+        connected_devices=[d.model_copy(update={"connected": True}) for d in connected_devices[:limit]],
+        paired_devices=paired_not_connected[:limit],
     )
 
 
