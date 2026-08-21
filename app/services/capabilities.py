@@ -134,7 +134,7 @@ def _missing_commands(commands: list[str]) -> list[str]:
 
 
 def _clipboard_backends() -> list[str]:
-    """Return installed pyperclip backends (any one is enough)."""
+    """Return installed command-line clipboard backends (any one is enough)."""
     backends: list[str] = []
     if shutil.which("wl-copy") and shutil.which("wl-paste"):
         backends.append("wl-clipboard")
@@ -303,7 +303,7 @@ def _probe_extra_modules(modules: dict[str, ModuleCapability]) -> None:
         metadata={"configured": gk_ok, "base_url": (config.gatekeeper_base_url or "").strip() or None},
     )
 
-    # clipboard — pyperclip backend (X11 or Wayland)
+    # clipboard — explicit command-line backend (X11 or Wayland)
     clipboard_enabled = _flag_enabled("clipboard")
     clipboard_backends = _clipboard_backends()
     clipboard_ok = bool(clipboard_backends)

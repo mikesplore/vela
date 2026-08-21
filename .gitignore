@@ -103,3 +103,5 @@ temp/
 *.sqlite
 *config.yaml.env
 pending_actions.sqlite
+*.lock
+requirements.lock

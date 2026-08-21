@@ -16,8 +16,8 @@ async def test_clipboard_read_write_clear(monkeypatch, async_client):
     def fake_paste():
         return clipboard_state["text"]
 
-    monkeypatch.setattr(clipboard_module.pyperclip, "copy", fake_copy)
-    monkeypatch.setattr(clipboard_module.pyperclip, "paste", fake_paste)
+    monkeypatch.setattr(clipboard_module, "write", fake_copy)
+    monkeypatch.setattr(clipboard_module, "read", fake_paste)
 
     write_response = await async_client.post(
         "/clipboard/write",
