@@ -18,4 +18,6 @@ __all__ = [
     "reset_agent_credential",
     "refresh_ws_token",
     "AgentCredentialError",
+    "PairingSlowDownError",
+    "complete_pairing",
 ]

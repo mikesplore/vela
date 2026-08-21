@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import getpass
+import os
 import subprocess
 import webbrowser
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Vela CLI")
+    parser.add_argument("command", nargs="?", choices=["pair"], help="Interactive commands")
     parser.add_argument("--setup", action="store_true", help="Fresh-start setup: wipe creds, pair, restart services")
     parser.add_argument("--start", action="store_true", help="Start vela + vela-agent user services")
     parser.add_argument("--stop", action="store_true", help="Stop vela + vela-agent user services")
@@ -25,11 +28,37 @@ def main() -> None:
     parser.add_argument(
         "--mcp",
         action="store_true",
-        help="Print the MCP connection link for this agent (agent_id + relay_secret)",
+        help="Create and print a scoped MCP connection for this agent",
+    )
+    parser.add_argument(
+        "--mcp-revoke",
+        metavar="CONNECTION_ID",
+        help="Revoke a previously created MCP connection",
     )
     args = parser.parse_args()
 
     services = ["vela.service", "vela-agent.service"]
+
+    if args.command == "pair":
+        from app.agent.pairing import complete_pairing
+        from app.agent.envutil import _normalise_vps_url
+        from app.utils.config import get_config
+
+        configured_vps = (os.getenv("VPS_URL", "").strip() or get_config().vps_url.strip())
+        vps_url = input(f"VPS URL [{configured_vps or 'https://relay.example.com'}]: ").strip()
+        vps_url = _normalise_vps_url(vps_url or configured_vps)
+        if not vps_url:
+            raise SystemExit("VPS URL is required")
+        pairing_code = input("Pairing code: ").strip()
+        pairing_pin = getpass.getpass("Pairing PIN: ").strip()
+        agent_label = input("Agent label (optional): ").strip() or None
+        try:
+            result = complete_pairing(vps_url, pairing_code, pairing_pin, agent_label)
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
+        print(f"Pairing submitted for agent {result.get('agent_id', 'unknown')}.")
+        print("Return to the terminal running `vela --setup`; it will finish activation automatically.")
+        return
 
     if args.setup:
         from app.setup import run_setup
@@ -99,6 +128,7 @@ def main() -> None:
     if args.mcp:
         from app.utils.env_paths import resolve_active_dotenv_path
         from dotenv import dotenv_values
+        import requests
 
         env_path = resolve_active_dotenv_path()
         values = dotenv_values(env_path) if env_path.exists() else {}
@@ -112,28 +142,69 @@ def main() -> None:
             print("No paired agent found. Run `vela --setup` to pair this machine first.")
             return
 
-        print(f"agent_id:     {agent_id}")
-        print(f"relay_secret: {relay_secret}")
-        if mcp_server_url:
-            # Normalize: accept either "https://mcp.example.com" or
-            # "https://mcp.example.com/mcp" as the server base.
-            base = mcp_server_url.rstrip("/")
-            if base.endswith("/mcp"):
-                base = base[:-len("/mcp")].rstrip("/")
-            # Claude.ai only accepts a URL (no headers), so the secret goes in
-            # the path: /mcp/{agent_id}:{relay_secret}
-            claude_url = f"{base}/mcp/{agent_id}:{relay_secret}"
-            print(f"mcp_link:     {claude_url}")
-            print()
-            print("Paste this into Claude.ai → Connectors → Remote MCP server URL:")
-            print(f"  {claude_url}")
-            print()
-            print("For local clients (Cline/Claude Desktop) that accept headers:")
-            print(f"  url:     {base}/mcp/{agent_id}")
-            print(f"  headers: {{ \"Authorization\": \"Bearer {relay_secret}\" }}")
-        else:
-            print()
-            print("Set MCP_SERVER_URL in the active .env to also print a ready-to-paste link.")
+        if not mcp_server_url:
+            print("Set MCP_SERVER_URL in the active .env to create an MCP connection.")
+            return
+
+        base = mcp_server_url.rstrip("/")
+        if base.endswith("/mcp"):
+            base = base[:-len("/mcp")].rstrip("/")
+        try:
+            response = requests.post(
+                f"{base}/connections",
+                json={"agent_id": agent_id},
+                headers={"X-Relay-Secret": relay_secret},
+                timeout=15,
+            )
+            if response.status_code >= 400:
+                print(f"Could not create MCP connection (HTTP {response.status_code}).")
+                return
+            data = response.json()
+            connection_id = data.get("connection_id")
+            mcp_url = data.get("mcp_url")
+            mcp_credential = data.get("mcp_credential")
+            if not connection_id or not mcp_url or not mcp_credential:
+                print("MCP gateway returned an incomplete connection response.")
+                return
+        except (requests.RequestException, ValueError):
+            print("Could not reach the MCP gateway or parse its response.")
+            return
+
+        print("MCP connection created.")
+        print(f"connection_id: {connection_id}")
+        print(f"MCP URL:       {mcp_url}")
+        print(f"Authentication: Bearer {mcp_credential}")
+        print("Keep this credential private; it is displayed only once.")
+        return
+
+    if args.mcp_revoke:
+        from app.utils.env_paths import resolve_active_dotenv_path
+        from dotenv import dotenv_values
+        import requests
+
+        env_path = resolve_active_dotenv_path()
+        values = dotenv_values(env_path) if env_path.exists() else {}
+        relay_secret = (values.get("RELAY_SECRET") or values.get("AGENT_SECRET") or "").strip()
+        mcp_server_url = (values.get("MCP_SERVER_URL") or "").strip()
+        if not relay_secret or not mcp_server_url:
+            print("RELAY_SECRET and MCP_SERVER_URL are required to revoke an MCP connection.")
+            return
+        base = mcp_server_url.rstrip("/")
+        if base.endswith("/mcp"):
+            base = base[:-len("/mcp")].rstrip("/")
+        try:
+            response = requests.post(
+                f"{base}/connections/{args.mcp_revoke}/revoke",
+                headers={"X-Relay-Secret": relay_secret},
+                timeout=15,
+            )
+        except requests.RequestException:
+            print("Could not reach the MCP gateway.")
+            return
+        if response.status_code >= 400:
+            print(f"Could not revoke MCP connection (HTTP {response.status_code}).")
+            return
+        print(f"MCP connection revoked: {args.mcp_revoke}")
         return
 
     # Default: run the local API server (imports app stack only now).

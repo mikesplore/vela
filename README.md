@@ -150,13 +150,14 @@ vela --logs
 vela --dashboard
 vela --env
 vela --mcp
+vela pair
 vela-agent --start
 vela-agent --stop
 ```
 
-> `vela --setup` is the only onboarding path. It always starts fresh (no credential reuse).
+> `vela --setup` starts a fresh pairing session. Complete it with Android, the browser verification URI, or `vela pair`.
 > `vela --env` opens the `.env` file your services actually load (may differ from the repo copy).
-> `vela --mcp` prints the MCP connection link and relay secret for use with Claude/Cline.
+> `vela --mcp` creates a scoped MCP connection and prints its opaque URL plus a dedicated bearer credential. The relay secret is never printed.
 > After editing credentials, run `vela --restart` so both services reload the new values.
 
 ## Agent Registration
@@ -173,12 +174,22 @@ curl -X POST http://<vps-url>:8000/agents/register/start \
   -d '{"agent_name":"my-agent","device_info":{"device_fingerprint":"host:user"}}'
 ```
 
-VPS returns `agent_id`, `pairing_code`, optional `pairing_pin`, and `pairing_expires_in`.  
-The agent creates the QR payload locally from the VPS URL, pairing code, and optional PIN, then shows it with a manual code/PIN fallback.
+VPS returns `agent_id`, `pairing_code`, `pairing_pin`, `expires_in`, `interval`, `verification_uri`, and `verification_uri_complete`.
+The agent creates the QR payload locally from the VPS URL, pairing code, and PIN. It also prints the browser URL and `vela pair` instructions.
 
-### 2) Android completes pair
+### 2) Any client completes pairing
 
-Android app sends:
+Android may scan the QR code, or a browser user can open the printed `verification_uri_complete` URL and enter the PIN. A terminal user can run:
+
+```bash
+vela pair
+```
+
+The CLI prompts for the VPS URL, pairing code, PIN, and optional label. It does not accept the PIN as a command-line argument, avoiding shell-history and process-list leaks. All clients submit the same endpoint.
+
+The browser and CLI never receive or print the relay secret. The agent obtains it through the activation-token exchange after it observes the paired status.
+
+The underlying Android-compatible request is:
 
 ```bash
 curl -X POST http://<vps-url>:8000/pair/complete \
@@ -186,7 +197,7 @@ curl -X POST http://<vps-url>:8000/pair/complete \
   -d '{"pairing_code":"<code>","pairing_pin":"<pin>","agent_label":"My Phone"}'
 ```
 
-Agent polls `GET /agents/register/status?agent_id=...` until it gets `PAIRED` + `activation_token`, then immediately calls activation. If activation reports an invalid token, the agent fetches status once and retries activation once with the returned token before it requests a new pairing session.
+Agent polls `GET /agents/register/status?agent_id=...` at the server-provided `interval` until it gets `PAIRED` + `activation_token`. If the relay returns `slow_down`, it honors `Retry-After`; expiry is reported as `expired_token`/`EXPIRED` and requires a new setup session.
 
 ### 3) Agent activates
 

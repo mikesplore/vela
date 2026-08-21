@@ -8,6 +8,7 @@ import os
 import platform
 import socket
 import time
+from urllib.parse import urlencode
 
 import requests
 
@@ -38,6 +39,12 @@ class AgentCredentialError(RuntimeError):
     pass
 
 
+class PairingSlowDownError(RuntimeError):
+    def __init__(self, retry_after: int = 5) -> None:
+        self.retry_after = max(1, retry_after)
+        super().__init__("Relay requested slower pairing status polling")
+
+
 def _build_device_info() -> dict:
     fingerprint = os.getenv("DEVICE_FINGERPRINT", "").strip()
     if not fingerprint:
@@ -62,7 +69,7 @@ def _build_pairing_qr_payload(vps_url: str, pairing_code: str, pairing_pin: str 
     return json.dumps(payload, separators=(",", ":"))
 
 
-def _register_start(existing_agent_id: str | None = None) -> tuple[str, str, str | None, int, str | None]:
+def _register_start(existing_agent_id: str | None = None) -> tuple[str, str, str | None, int, str | None, str, str]:
     config = get_config()
     vps_url = _normalise_vps_url(_require_env("VPS_URL"))
     url = f"{vps_url.rstrip('/')}/agents/register/start"
@@ -100,12 +107,24 @@ def _register_start(existing_agent_id: str | None = None) -> tuple[str, str, str
         raise RuntimeError("register/start returned invalid pairing_expires_in")
 
     qr_payload = _build_pairing_qr_payload(vps_url, pairing_code, pairing_pin)
+    verification_uri = data.get("verification_uri") or f"{vps_url.rstrip('/')}/pair"
+    verification_uri_complete = data.get("verification_uri_complete") or (
+        f"{verification_uri}?{urlencode({'code': pairing_code})}"
+    )
     print(f"Pairing QR payload: {qr_payload}")
 
-    return agent_id, pairing_code, pairing_pin, pairing_expires_in, qr_payload
+    return (
+        agent_id,
+        pairing_code,
+        pairing_pin,
+        pairing_expires_in,
+        qr_payload,
+        verification_uri,
+        verification_uri_complete,
+    )
 
 
-def _fetch_pairing_status(agent_id: str) -> tuple[str | None, str | None]:
+def _fetch_pairing_status(agent_id: str) -> tuple[str | None, str | None, int]:
     config = get_config()
     vps_url = _normalise_vps_url(_require_env("VPS_URL"))
     status_url = f"{vps_url.rstrip('/')}/agents/register/status"
@@ -114,10 +133,20 @@ def _fetch_pairing_status(agent_id: str) -> tuple[str | None, str | None]:
         params={"agent_id": agent_id},
         timeout=config.local_service_timeout,
     )
+    if resp.status_code == 429:
+        try:
+            retry_after = int(resp.headers.get("Retry-After", "5"))
+        except ValueError:
+            retry_after = 5
+        raise PairingSlowDownError(retry_after)
     if resp.status_code != 200:
         raise RuntimeError(f"register/status failed: {resp.status_code} {resp.text}")
     data = resp.json()
-    return data.get("status"), data.get("activation_token")
+    try:
+        interval = max(1, int(data.get("interval", PAIRING_STATUS_POLL_INTERVAL)))
+    except (TypeError, ValueError):
+        interval = PAIRING_STATUS_POLL_INTERVAL
+    return data.get("status"), data.get("activation_token"), interval
 
 
 def _wait_for_pairing(agent_id: str, on_status_update=None) -> str:
@@ -128,7 +157,13 @@ def _wait_for_pairing(agent_id: str, on_status_update=None) -> str:
     last_status = None
 
     while time.time() - started_at < timeout_seconds:
-        status, activation_token = _fetch_pairing_status(agent_id)
+        try:
+            status, activation_token, server_interval = _fetch_pairing_status(agent_id)
+            poll_interval = max(poll_interval, server_interval)
+        except PairingSlowDownError as exc:
+            poll_interval = max(poll_interval + 1, exc.retry_after)
+            time.sleep(exc.retry_after)
+            continue
         if status != last_status:
             print(f"Pairing status for '{agent_id}': {status}")
             if on_status_update:
@@ -151,6 +186,31 @@ def _wait_for_pairing(agent_id: str, on_status_update=None) -> str:
     raise TimeoutError(f"Timed out waiting for pairing after {timeout_seconds}s")
 
 
+def complete_pairing(
+    vps_url: str,
+    pairing_code: str,
+    pairing_pin: str,
+    agent_label: str | None = None,
+) -> dict:
+    """Submit a manual pairing ceremony using the same relay API as Android."""
+    config = get_config()
+    url = f"{_normalise_vps_url(vps_url).rstrip('/')}/pair/complete"
+    payload = {
+        "pairing_code": pairing_code.strip(),
+        "pairing_pin": pairing_pin.strip(),
+        "agent_label": agent_label.strip() if agent_label else None,
+    }
+    response = requests.post(url, json=payload, timeout=config.local_service_timeout)
+    try:
+        data = response.json()
+    except ValueError:
+        data = {}
+    if response.status_code != 200:
+        detail = data.get("detail", "pairing_failed") if isinstance(data, dict) else "pairing_failed"
+        raise RuntimeError(f"Pairing failed: {detail}")
+    return data
+
+
 def _activate_registration(agent_id: str, activation_token: str) -> tuple[str, str | None]:
     config = get_config()
     vps_url = _normalise_vps_url(_require_env("VPS_URL"))
@@ -166,9 +226,15 @@ def _activate_registration(agent_id: str, activation_token: str) -> tuple[str, s
     except Exception:
         error_data = {}
     if resp.status_code != 200:
-        if resp.status_code == 400 and error_data.get("message") == "invalid_activation_token":
+        if resp.status_code == 400 and (
+            error_data.get("message") == "invalid_activation_token"
+            or error_data.get("detail") == "invalid_activation_token"
+        ):
             raise ActivationTokenInvalidError("register/activate failed: invalid_activation_token")
-        if resp.status_code == 409 and error_data.get("message") == "secret_already_delivered":
+        if resp.status_code == 409 and (
+            error_data.get("message") == "secret_already_delivered"
+            or error_data.get("detail") == "secret_already_delivered"
+        ):
             raise RuntimeError("register/activate failed: secret_already_delivered")
         raise RuntimeError(f"register/activate failed: {resp.status_code} {resp.text}")
 
@@ -219,12 +285,20 @@ def ensure_agent_registration(
     stable_agent_id = config.agent_id if (config.agent_id or "").startswith("agt_") else None
 
     while True:
-        agent_id, pairing_code, pairing_pin, expires_in, qr_payload = _register_start(existing_agent_id=stable_agent_id)
+        (
+            agent_id,
+            pairing_code,
+            pairing_pin,
+            expires_in,
+            qr_payload,
+            verification_uri,
+            verification_uri_complete,
+        ) = _register_start(existing_agent_id=stable_agent_id)
         stable_agent_id = agent_id
 
         print("")
         print("=== Agent pairing required ===")
-        print("Open the Android app and complete pairing with:")
+        print("Complete pairing with the Android app, browser, or CLI:")
         print(f"  VPS URL: {vps_url}")
         print(f"  Agent ID: {agent_id}")
         print(f"  Pairing Code: {pairing_code}")
@@ -233,6 +307,9 @@ def ensure_agent_registration(
         else:
             print("  Pairing PIN: not required by this VPS build")
         print(f"  Expires In: {expires_in}s")
+        print(f"  Verification URI: {verification_uri}")
+        print(f"  Open directly: {verification_uri_complete}")
+        print("  CLI: run `vela pair` in another terminal")
         print(f"  QR Payload: {qr_payload}")
         print("==============================")
         print("")
@@ -247,6 +324,8 @@ def ensure_agent_registration(
                         "pairing_pin": pairing_pin,
                         "pairing_expires_in": expires_in,
                         "qr_payload": qr_payload,
+                        "verification_uri": verification_uri,
+                        "verification_uri_complete": verification_uri_complete,
                         "status": "AWAITING_PAIR",
                     }
                 )
@@ -292,7 +371,11 @@ def ensure_agent_registration(
                 credential, relay_secret = _activate_registration(agent_id, activation_token)
             except ActivationTokenInvalidError:
                 # Contract: re-check status once; if still paired with token retry once.
-                status, latest_activation_token = _fetch_pairing_status(agent_id)
+                try:
+                    status, latest_activation_token, _ = _fetch_pairing_status(agent_id)
+                except PairingSlowDownError as exc:
+                    time.sleep(exc.retry_after)
+                    status, latest_activation_token, _ = _fetch_pairing_status(agent_id)
                 if status == "PAIRED" and latest_activation_token:
                     try:
                         credential, relay_secret = _activate_registration(agent_id, latest_activation_token)

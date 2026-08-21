@@ -80,6 +80,10 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
   .code-card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--panel);text-align:center;}
   .code-card .node-label{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-faint);margin-bottom:6px;}
   .code-value{font-family:var(--mono);font-size:19px;font-weight:600;letter-spacing:.02em;word-break:break-all;}
+  .pairing-options{border:1px solid var(--line);border-radius:10px;padding:13px 14px;background:var(--panel);font-size:12px;line-height:1.5;margin-top:16px;}
+  .pairing-options strong{display:block;font-size:12.5px;margin-bottom:4px;}
+  .pairing-options a{color:var(--accent);word-break:break-all;font-family:var(--mono);font-size:11px;}
+  .pairing-options code{font-family:var(--mono);font-size:11px;background:var(--accent-soft);padding:2px 5px;border-radius:4px;}
   .expiry-note{display:flex;align-items:flex-start;gap:7px;font-size:11.5px;color:var(--ink-faint);line-height:1.5;}
   .expiry-note svg{width:13px;height:13px;flex-shrink:0;margin-top:1px;}
   .done-wrap{text-align:center;padding:8px 0 4px;} .done-icon{width:46px;height:46px;border-radius:50%;background:#E8F7F0;color:var(--good);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;}
@@ -173,8 +177,8 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
     </div>
   </div>
   <div class="step" id="step4">
-    <h1>Pair your mobile app</h1>
-    <p class="sub">Open the Vela app and use these pairing details.</p>
+    <h1>Pair a client</h1>
+    <p class="sub">Use Android, a browser, or the terminal. All three methods use the same pairing session.</p>
     <span class="status-pill" id="statusPill"><span class="dot"></span><span id="statusPillText">Awaiting pairing</span></span>
     <div class="qr-wrap">
       <div id="qrRender">Waiting QR...</div>
@@ -189,6 +193,12 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
       <div class="code-card"><div class="node-label">Pairing PIN</div><div class="code-value" id="pairPinText">------</div></div>
     </div>
     <div class="expiry-note"><svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 5v3.3l2.2 1.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span id="expiryText">Waiting for pairing session...</span></div>
+    <div class="pairing-options">
+      <strong>Browser</strong>
+      <a id="verificationLink" href="#" target="_blank" rel="noopener noreferrer">Waiting for verification URL...</a>
+      <strong style="margin-top:10px;">Terminal / CLI</strong>
+      <span>Open another terminal and run <code>vela pair</code>, then enter the code and PIN above.</span>
+    </div>
   </div>
   <div class="step" id="step5">
     <div class="done-wrap">
@@ -257,6 +267,10 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
     document.getElementById('agentIdText').textContent = pairing.agent_id || 'pending...';
     document.getElementById('pairCodeText').textContent = pairing.pairing_code || '--------';
     document.getElementById('pairPinText').textContent = pairing.pairing_pin || 'N/A';
+    const verificationLink = document.getElementById('verificationLink');
+    const verificationUrl = pairing.verification_uri_complete || pairing.verification_uri || '';
+    verificationLink.textContent = verificationUrl || 'No browser verification URL provided';
+    verificationLink.href = verificationUrl || '#';
     if (pairing.qr_payload && pairing.qr_payload !== currentQrPayload) {
       renderQr(pairing.qr_payload);
     }
@@ -266,7 +280,7 @@ def render_setup_wizard_page(defaults: dict[str, str]) -> str:
       document.getElementById('statusPill').classList.add('paired');
       goTo(5);
       document.getElementById('doneTitle').textContent = (document.getElementById('label').value || 'Agent') + ' is paired';
-      document.getElementById('doneSub').textContent = 'Your mobile app is now connected to this device. Open Operations with: vela --dashboard';
+      document.getElementById('doneSub').textContent = 'A client is now connected to this device. Open Operations with: vela --dashboard';
     }
   }
 

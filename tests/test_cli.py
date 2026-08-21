@@ -63,14 +63,26 @@ def test_mcp_prints_agent_link(monkeypatch, capsys, tmp_path):
     )
     monkeypatch.setattr(sys, "argv", ["vela", "--mcp"])
     monkeypatch.setattr(env_paths, "SYSTEMD_USER_DIR", systemd_dir)
+    class Response:
+        status_code = 201
+        def json(self):
+            return {
+                "connection_id": "c_test123",
+                "mcp_url": "https://mcp.example.com/mcp/c_test123",
+                "mcp_credential": "mcp_secret_once",
+            }
+    calls = []
+    monkeypatch.setattr("requests.post", lambda *args, **kwargs: calls.append((args, kwargs)) or Response())
 
     cli.main()
 
     out = capsys.readouterr().out
-    assert "agent_id:     agt_123" in out
-    assert "relay_secret: secret_abc" in out
-    assert "https://mcp.example.com/mcp/agt_123:secret_abc" in out
-    assert 'Authorization: Bearer secret_abc' in out
+    assert "MCP connection created." in out
+    assert "https://mcp.example.com/mcp/c_test123" in out
+    assert "Bearer mcp_secret_once" in out
+    assert "secret_abc" not in out
+    assert calls[0][0][0] == "https://mcp.example.com/connections"
+    assert calls[0][1]["headers"] == {"X-Relay-Secret": "secret_abc"}
 
 
 def test_mcp_normalizes_server_url_with_mcp_suffix(monkeypatch, capsys, tmp_path):
@@ -89,11 +101,20 @@ def test_mcp_normalizes_server_url_with_mcp_suffix(monkeypatch, capsys, tmp_path
     )
     monkeypatch.setattr(sys, "argv", ["vela", "--mcp"])
     monkeypatch.setattr(env_paths, "SYSTEMD_USER_DIR", systemd_dir)
+    class Response:
+        status_code = 201
+        def json(self):
+            return {
+                "connection_id": "c_suffix",
+                "mcp_url": "https://mcp.example.com/mcp/c_suffix",
+                "mcp_credential": "credential_suffix",
+            }
+    monkeypatch.setattr("requests.post", lambda *args, **kwargs: Response())
 
     cli.main()
 
     out = capsys.readouterr().out
-    assert "https://mcp.example.com/mcp/agt_789" in out
+    assert "MCP connection created." in out
     assert "/mcp/mcp" not in out
 
 
@@ -117,9 +138,8 @@ def test_mcp_prints_agent_link_without_server_url(monkeypatch, capsys, tmp_path)
     cli.main()
 
     out = capsys.readouterr().out
-    assert "agent_id:     agt_456" in out
-    assert "relay_secret: secret_xyz" in out
     assert "Set MCP_SERVER_URL" in out
+    assert "secret_xyz" not in out
 
 
 def test_mcp_prints_prompt_when_not_paired(monkeypatch, capsys, tmp_path):

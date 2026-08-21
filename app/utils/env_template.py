@@ -19,14 +19,23 @@ ENV_TEMPLATE: list[tuple[str, str]] = [
     ("LOCAL_SERVICE_TIMEOUT", "300"),
     ("RELAY_READ_TIMEOUT", "300"),
     ("VPS_URL", ""),
+    ("PAIRING_AGENT_ID", ""),
+    ("TENANT_HINT", ""),
+    ("DEVICE_FINGERPRINT", ""),
+    ("PAIRING_STATUS_POLL_INTERVAL", "3"),
+    ("PAIRING_STATUS_TIMEOUT", "600"),
+    ("PAIRING_BROWSER_UI", "true"),
     # Public URL of the vela-mcp server (e.g. https://mcp.mikesplore.tech).
     # Used by `vela --mcp` to build the ready-to-paste MCP link.
     ("MCP_SERVER_URL", ""),
+    ("REMOTEAGENT_CONFIG_PATH", ""),
+    ("START_AGENT", "true"),
     ("AGENT_NAME", ""),
     ("AGENT_ID", ""),
     ("AGENT_SECRET", ""),
     ("AGENT_CREDENTIAL", ""),
     ("RELAY_SECRET", ""),
+    ("AGENT_MAX_CONCURRENT_REQUESTS", "8"),
     ("PUBLIC_ADDRESS", ""),
     ("METADATA", ""),
     ("ASSISTANT_ACTION_PIN", ""),
@@ -58,8 +67,13 @@ ENV_TEMPLATE: list[tuple[str, str]] = [
     # Leave empty unless Gatekeeper access is enabled on this agent.
     ("GATEKEEPER_EMAIL", ""),
     ("GATEKEEPER_PASSWORD", ""),
+    ("GATEKEEPER_TOKEN", ""),
+    ("GATEKEEPER_TIMEOUT", "10"),
     ("GATEKEEPER_BASE_URL", ""),
     ("VELA_LOG_LEVEL", "INFO"),
+    ("VELA_BROWSER_ONBOARDING", "true"),
+    ("VELA_BROWSER_ONBOARDING_TIMEOUT", "300"),
+    ("VELA_BROWSER_DEPENDENCY_TIMEOUT", "300"),
 ]
 
 _ENV_LINE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
