@@ -28,6 +28,7 @@ ENV_TEMPLATE: list[tuple[str, str]] = [
     # Public URL of the vela-mcp server (e.g. https://mcp.mikesplore.tech).
     # Used by `vela --mcp` to build the ready-to-paste MCP link.
     ("MCP_SERVER_URL", ""),
+    ("MCP_TOOL_POLICY", "strict"),
     ("REMOTEAGENT_CONFIG_PATH", ""),
     ("START_AGENT", "true"),
     ("AGENT_NAME", ""),

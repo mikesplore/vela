@@ -35,6 +35,11 @@ def main() -> None:
         metavar="CONNECTION_ID",
         help="Revoke a previously created MCP connection",
     )
+    parser.add_argument(
+        "--mcp-policy",
+        choices=("strict", "read_only", "open"),
+        help="Tool policy for the MCP connection (default: MCP_TOOL_POLICY or strict)",
+    )
     args = parser.parse_args()
 
     services = ["vela.service", "vela-agent.service"]
@@ -137,6 +142,7 @@ def main() -> None:
             values.get("RELAY_SECRET") or values.get("AGENT_SECRET") or ""
         ).strip()
         mcp_server_url = (values.get("MCP_SERVER_URL") or "").strip()
+        mcp_tool_policy = (args.mcp_policy or values.get("MCP_TOOL_POLICY") or "strict").strip().lower()
 
         if not agent_id or not relay_secret:
             print("No paired agent found. Run `vela --setup` to pair this machine first.")
@@ -152,7 +158,11 @@ def main() -> None:
         try:
             response = requests.post(
                 f"{base}/connections",
-                json={"agent_id": agent_id},
+                json={
+                    "agent_id": agent_id,
+                    "approval_pin": (values.get("ASSISTANT_ACTION_PIN") or "").strip(),
+                    "tool_policy": mcp_tool_policy,
+                },
                 headers={"X-Relay-Secret": relay_secret},
                 timeout=15,
             )

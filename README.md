@@ -158,6 +158,7 @@ vela-agent --stop
 > `vela --setup` starts a fresh pairing session. Complete it with Android, the browser verification URI, or `vela pair`.
 > `vela --env` opens the `.env` file your services actually load (may differ from the repo copy).
 > `vela --mcp` creates a scoped MCP connection and prints its opaque URL plus a dedicated bearer credential. The relay secret is never printed.
+> Choose the MCP safety policy per connection with `vela --mcp --mcp-policy strict|read_only|open`. The default comes from `MCP_TOOL_POLICY` in the active `.env` and is `strict`.
 > After editing credentials, run `vela --restart` so both services reload the new values.
 
 ## Agent Registration
@@ -300,6 +301,8 @@ See [.env.example](.env.example) for the full list. Key variables:
 | `SPOTIFY_CLIENT_ID` | Spotify Developer client ID |
 | `SPOTIFY_CLIENT_SECRET` | Spotify Developer client secret |
 | `MCP_SERVER_URL` | Public URL of the vela-mcp server (e.g. `https://mcp.mikesplore.tech`). Used by `vela --mcp` to build the ready-to-paste MCP link |
+| `MCP_TOOL_POLICY` | Default safety policy for new MCP connections: `strict` (approval gates), `read_only` (only read-only tools), or `open` (no MCP approval gates) |
+| `ASSISTANT_ACTION_PIN` | Optional PIN required for high-risk MCP approvals and high-risk assistant actions |
 
 ## API Endpoints
 

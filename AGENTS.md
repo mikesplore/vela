@@ -121,6 +121,7 @@ Key assistant tools for ops:
 - Read-only ops tools are low-risk; service/container start/stop/restart and `send_push_notification` are medium-risk (confirmation)
 - High-risk tools (`delete_path`, `upload_file`, `kill_process`, `kill_process_by_name`) require PIN when `assistant_action_pin` is set; otherwise they fall back to yes/no confirmation
 - **Gate flow:** planner emits the tool call → server registers a pending action → client gets `gate` SSE (stream) or `pending_action_id` + `confirmation` (chat). User approves with yes (medium) or PIN (high). The LLM must never ask for PIN/confirmation in chat — only the app gate UI/prompt does. "Kill/stop container" → `stop_container` (confirmation), not `kill_process` (PIN).
+- **MCP safety flow:** `vela --mcp` creates a separate MCP connection and sends its selected `MCP_TOOL_POLICY` (`strict`, `read_only`, or `open`) to vela-mcp. In `strict` mode, medium/high-risk MCP calls return a short-lived approval URL and request ID; the action is claimed and completed once after approval. `read_only` hides non-read-only tools, while `open` disables MCP approval gates. MCP approval links do not require the MCP credential or connection ID.
 
 Wire new capabilities: add tool in `tools.py` → add to `TOOL_DISPLAY_NAMES` → add read-only tools to `LOW_RISK_TOOLS` in `safety.py` (or medium/high as appropriate) → extend `_is_observation_tool` in `workflow.py` if check-first behavior applies.
 
@@ -136,7 +137,7 @@ Wire new capabilities: add tool in `tools.py` → add to `TOOL_DISPLAY_NAMES` �
 
 ## Config knobs
 
-Primary: `app/utils/config.py` + `.env`. Common keys: API port, auth users, Fireworks key, relay/agent IDs, filesystem allowlist, alert/email settings (`VPS_URL` + `RELAY_SECRET` for push via velavps). Network perf: `network_public_ip_cache_seconds` (default 120), `network_wifi_list_cache_seconds` (default 45), `desktop_env_check_interval_seconds` (default 30).
+Primary: `app/utils/config.py` + `.env`. Common keys: API port, auth users, Fireworks key, relay/agent IDs, filesystem allowlist, alert/email settings (`VPS_URL` + `RELAY_SECRET` for push via velavps). MCP setup uses `MCP_SERVER_URL`, `MCP_TOOL_POLICY` (`strict` by default), and optional `ASSISTANT_ACTION_PIN`. Network perf: `network_public_ip_cache_seconds` (default 120), `network_wifi_list_cache_seconds` (default 45), `desktop_env_check_interval_seconds` (default 30).
 
 ## How to extend a feature
 
