@@ -16,7 +16,7 @@ from app.agent.envutil import _normalise_vps_url, _require_env
 from app.ui.pairing_browser import start_pairing_browser_ui
 from app.utils.config import get_config
 
-PAIRING_STATUS_POLL_INTERVAL = 3
+PAIRING_STATUS_POLL_INTERVAL = 5
 PAIRING_STATUS_TIMEOUT = 600
 
 
@@ -30,6 +30,12 @@ class PairingRevokedError(RuntimeError):
 
 class ActivationTokenInvalidError(RuntimeError):
     pass
+
+
+class PairingRateLimitedError(RuntimeError):
+    def __init__(self, retry_after: int):
+        self.retry_after = retry_after
+        super().__init__(f"register/status rate limited; retry after {retry_after}s")
 
 
 def _build_device_info() -> dict:
@@ -108,6 +114,12 @@ def _fetch_pairing_status(agent_id: str) -> tuple[str | None, str | None]:
         params={"agent_id": agent_id},
         timeout=config.local_service_timeout,
     )
+    if resp.status_code == 429:
+        try:
+            retry_after = max(1, int(resp.headers.get("Retry-After", "5")))
+        except ValueError:
+            retry_after = 5
+        raise PairingRateLimitedError(retry_after)
     if resp.status_code != 200:
         raise RuntimeError(f"register/status failed: {resp.status_code} {resp.text}")
     data = resp.json()
@@ -122,7 +134,11 @@ def _wait_for_pairing(agent_id: str, on_status_update=None) -> str:
     last_status = None
 
     while time.time() - started_at < timeout_seconds:
-        status, activation_token = _fetch_pairing_status(agent_id)
+        try:
+            status, activation_token = _fetch_pairing_status(agent_id)
+        except PairingRateLimitedError as exc:
+            time.sleep(min(exc.retry_after, max(0, timeout_seconds - (time.time() - started_at))))
+            continue
         if status != last_status:
             print(f"Pairing status for '{agent_id}': {status}")
             if on_status_update:
